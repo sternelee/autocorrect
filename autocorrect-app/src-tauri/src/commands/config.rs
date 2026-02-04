@@ -1,0 +1,345 @@
+use super::errors::Error;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::env;
+use std::fs;
+use std::path::PathBuf;
+
+/// Convert u8 to SeverityMode
+fn u8_to_severity_mode(value: u8) -> autocorrect::config::SeverityMode {
+    match value {
+        0 => autocorrect::config::SeverityMode::Off,
+        1 => autocorrect::config::SeverityMode::Error,
+        2 => autocorrect::config::SeverityMode::Warning,
+        _ => autocorrect::config::SeverityMode::Error,
+    }
+}
+
+/// Current merged configuration from default + user config
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppConfig {
+    /// All rules with their current severity
+    pub rules: HashMap<String, u8>,
+    /// Text-specific rules
+    pub text_rules: HashMap<String, u8>,
+    /// Spellcheck words
+    pub spellcheck_words: Vec<String>,
+    /// File type mappings
+    pub file_types: HashMap<String, String>,
+    /// Context-specific settings
+    pub context: HashMap<String, u8>,
+    /// Path to user config file
+    pub config_path: String,
+}
+
+/// Information about a single rule
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleInfo {
+    /// Rule name (e.g., "space-word", "fullwidth")
+    pub name: String,
+    /// Current severity: 0=off, 1=error, 2=warning
+    pub severity: u8,
+    /// Human-readable description
+    pub description: String,
+    /// Default severity value
+    pub default_severity: u8,
+}
+
+/// Updates to apply to the configuration
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ConfigUpdates {
+    /// Rule severities to update (only includes changed rules)
+    pub rules: Option<HashMap<String, Option<u8>>>,
+    /// Text rule severities to update
+    pub text_rules: Option<HashMap<String, Option<u8>>>,
+    /// Spellcheck words to set (replaces entire list)
+    pub spellcheck_words: Option<Vec<String>>,
+}
+
+/// Get the current merged configuration (default + user config)
+#[tauri::command]
+pub fn get_config() -> Result<AppConfig, Error> {
+    let config_path = get_user_config_path();
+    let user_config_content = if config_path.exists() {
+        fs::read_to_string(&config_path).unwrap_or_default()
+    } else {
+        String::new()
+    };
+
+    // Get current config from autocorrect crate (default + merged user config)
+    let current_config = autocorrect::config::Config::current();
+
+    // Extract spellcheck words from user config if present
+    let spellcheck_words = if user_config_content.is_empty() {
+        Vec::new()
+    } else {
+        // Parse user config to extract spellcheck words
+        if let Ok(user_config) = autocorrect::config::Config::from_str(&user_config_content) {
+            user_config.spellcheck.words
+        } else {
+            Vec::new()
+        }
+    };
+
+    // Convert rules to serializable format
+    let mut rules = HashMap::new();
+    for (name, mode) in current_config.rules.iter() {
+        rules.insert(name.clone(), *mode as u8);
+    }
+
+    // Convert text_rules
+    let mut text_rules = HashMap::new();
+    for (name, mode) in current_config.text_rules.iter() {
+        text_rules.insert(name.clone(), *mode as u8);
+    }
+
+    // Convert context
+    let mut context = HashMap::new();
+    for (name, mode) in current_config.context.iter() {
+        context.insert(name.clone(), *mode as u8);
+    }
+
+    Ok(AppConfig {
+        rules,
+        text_rules,
+        spellcheck_words,
+        file_types: current_config.file_types.clone(),
+        context,
+        config_path: config_path.to_string_lossy().to_string(),
+    })
+}
+
+/// Get the default configuration as YAML string
+#[tauri::command]
+pub fn get_default_config() -> Result<String, Error> {
+    // Read from the default config embedded in autocorrect crate
+    let default_config_str = include_str!("../../../../autocorrect/.autocorrectrc.default");
+    Ok(default_config_str.to_string())
+}
+
+/// Get all available rules with their current severity and descriptions
+#[tauri::command]
+pub fn get_rules() -> Result<Vec<RuleInfo>, Error> {
+    let current_config = autocorrect::config::Config::current();
+    let default_config_str = include_str!("../../../../autocorrect/.autocorrectrc.default");
+    let default_config = autocorrect::config::Config::from_str(default_config_str)
+        .unwrap_or_else(|_| autocorrect::config::Config::default());
+
+    let mut rules = Vec::new();
+
+    // Get all rule names from the current config (includes all default rules)
+    for name in current_config.rules.keys() {
+        let severity = current_config
+            .rules
+            .get(name)
+            .map(|m| *m as u8)
+            .unwrap_or(1); // Default to error
+
+        let description = get_rule_description(name);
+
+        // Get default severity from the default config
+        let default_severity = default_config
+            .rules
+            .get(name)
+            .map(|m| *m as u8)
+            .unwrap_or(1);
+
+        rules.push(RuleInfo {
+            name: name.clone(),
+            severity,
+            description,
+            default_severity,
+        });
+    }
+
+    // Sort rules by name for consistent display
+    rules.sort_by(|a, b| a.name.cmp(&b.name));
+
+    Ok(rules)
+}
+
+/// Update configuration with specific changes
+#[tauri::command]
+pub fn update_config(updates: ConfigUpdates) -> Result<(), Error> {
+    let config_path = get_user_config_path();
+
+    // Read existing user config or start with minimal structure
+    let user_config_content = if config_path.exists() {
+        fs::read_to_string(&config_path)?
+    } else {
+        String::from("# AutoCorrect Configuration\n")
+    };
+
+    // Parse existing user config
+    let mut user_config = if user_config_content.trim().is_empty() {
+        autocorrect::config::Config::default()
+    } else {
+        autocorrect::config::Config::from_str(&user_config_content)
+            .unwrap_or_else(|_| autocorrect::config::Config::default())
+    };
+
+    // Apply rule updates
+    if let Some(rule_updates) = updates.rules {
+        for (rule_name, severity) in rule_updates {
+            if let Some(sev) = severity {
+                user_config.rules.insert(rule_name, u8_to_severity_mode(sev));
+            } else {
+                // None means remove the override (use default)
+                user_config.rules.remove(&rule_name);
+            }
+        }
+    }
+
+    // Apply text rule updates
+    if let Some(text_rule_updates) = updates.text_rules {
+        for (rule_name, severity) in text_rule_updates {
+            if let Some(sev) = severity {
+                user_config
+                    .text_rules
+                    .insert(rule_name, u8_to_severity_mode(sev));
+            } else {
+                user_config.text_rules.remove(&rule_name);
+            }
+        }
+    }
+
+    // Apply spellcheck words update
+    if let Some(words) = updates.spellcheck_words {
+        user_config.spellcheck.words = words;
+    }
+
+    // Serialize back to YAML
+    // For a cleaner YAML output, we'll manually construct it
+    let yaml = serialize_config_to_yaml(&user_config)?;
+
+    // Write to user config file
+    fs::write(&config_path, yaml)?;
+
+    // Reload config in the autocorrect crate
+    let config_str = fs::read_to_string(&config_path)?;
+    autocorrect::config::load(&config_str)
+        .map_err(|e| Error::Config(format!("Failed to reload config: {}", e)))?;
+
+    Ok(())
+}
+
+/// Get the path to the user's .autocorrectrc file
+fn get_user_config_path() -> PathBuf {
+    let home_dir = env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+
+    PathBuf::from(home_dir).join(".autocorrectrc")
+}
+
+/// Get a human-readable description for a rule
+fn get_rule_description(name: &str) -> String {
+    match name {
+        "space-word" => "Add space between CJK (Chinese, Japanese, Korean) and English words".to_string(),
+        "space-punctuation" => "Add space between some punctuation marks and CJK text".to_string(),
+        "space-bracket" => "Add space between brackets (), [] when near CJK text".to_string(),
+        "space-backticks" => "Add space between backticks `` when near CJK text".to_string(),
+        "space-dash" => "Add space around dash `-` when near CJK text".to_string(),
+        "space-dollar" => "Add space between dollar sign $ when near CJK text".to_string(),
+        "fullwidth" => "Convert punctuation and symbols to fullwidth characters in CJK context".to_string(),
+        "halfwidth-word" => "Convert fullwidth alphanumeric characters to halfwidth".to_string(),
+        "halfwidth-punctuation" => "Convert fullwidth punctuation to halfwidth in English text".to_string(),
+        "no-space-fullwidth" => "Remove unnecessary spaces near fullwidth punctuation".to_string(),
+        "no-space-fullwidth-quote" => "Remove spaces around fullwidth quotes".to_string(),
+        "spellcheck" => "Check spelling against custom dictionary".to_string(),
+        _ => format!("Rule: {}", name),
+    }
+}
+
+/// Get the default severity for a rule from the embedded default config
+fn get_default_rule_severity(rule_name: &str) -> u8 {
+    let default_config_str = include_str!("../../../../autocorrect/.autocorrectrc.default");
+    if let Ok(config) = autocorrect::config::Config::from_str(default_config_str) {
+        config
+            .rules
+            .get(rule_name)
+            .map(|m| *m as u8)
+            .unwrap_or(1)
+    } else {
+        1 // Default to error if we can't parse
+    }
+}
+
+/// Serialize a Config to a clean YAML format
+fn serialize_config_to_yaml(config: &autocorrect::config::Config) -> Result<String, Error> {
+    let mut yaml = String::from("# AutoCorrect Configuration\n# Generated by AutoCorrect App\n\n");
+
+    // Add rules section
+    if !config.rules.is_empty() {
+        yaml.push_str("rules:\n");
+        let mut rule_names: Vec<String> = config.rules.keys().cloned().collect();
+        rule_names.sort();
+
+        for name in rule_names {
+            if let Some(mode) = config.rules.get(&name) {
+                let severity = *mode as u8;
+                // Only include non-default values
+                if severity != get_default_rule_severity(&name) {
+                    yaml.push_str(&format!("  {}: {}\n", name, severity));
+                }
+            }
+        }
+        yaml.push('\n');
+    }
+
+    // Add text rules section
+    if !config.text_rules.is_empty() {
+        yaml.push_str("textRules:\n");
+        let mut rule_names: Vec<String> = config.text_rules.keys().cloned().collect();
+        rule_names.sort();
+
+        for name in rule_names {
+            if let Some(mode) = config.text_rules.get(&name) {
+                yaml.push_str(&format!("  {}: {}\n", name, *mode as u8));
+            }
+        }
+        yaml.push('\n');
+    }
+
+    // Add spellcheck section
+    if !config.spellcheck.words.is_empty() {
+        yaml.push_str("spellcheck:\n");
+        yaml.push_str("  words:\n");
+        for word in &config.spellcheck.words {
+            yaml.push_str(&format!("    - {}\n", word));
+        }
+        yaml.push('\n');
+    }
+
+    // Add file types section
+    if !config.file_types.is_empty() {
+        yaml.push_str("fileTypes:\n");
+        let mut exts: Vec<String> = config.file_types.keys().cloned().collect();
+        exts.sort();
+
+        for ext in exts {
+            if let Some(file_type) = config.file_types.get(&ext) {
+                yaml.push_str(&format!("  {}: {}\n", ext, file_type));
+            }
+        }
+        yaml.push('\n');
+    }
+
+    // Add context section
+    if !config.context.is_empty() {
+        yaml.push_str("context:\n");
+        let mut contexts: Vec<String> = config.context.keys().cloned().collect();
+        contexts.sort();
+
+        for ctx in contexts {
+            if let Some(mode) = config.context.get(&ctx) {
+                yaml.push_str(&format!("  {}: {}\n", ctx, *mode as u8));
+            }
+        }
+    }
+
+    Ok(yaml)
+}

@@ -13,3 +13,4 @@ yarn.lock
 **/*.rs.bk
 this-will.git-ignore.rs
 *.log
+.claude/tsc-cache

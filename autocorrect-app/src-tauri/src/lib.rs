@@ -1,0 +1,209 @@
+mod clipboard;
+mod commands;
+mod hotkey;
+mod popup;
+
+use commands::config::{get_config, get_default_config, get_rules, update_config};
+use commands::default::{read, write};
+use commands::spellcheck::{
+    get_clipboard_text, load_config, save_config, set_clipboard_text, simulate_paste, spell_check,
+};
+use hotkey::HotkeyEvent;
+use popup::SharedPopupState;
+use std::sync::mpsc::TryRecvError;
+use std::thread;
+use tauri::{Emitter, Manager};
+
+// Import popup commands for the invoke handler
+use popup::{
+    accept_suggestion, get_popup_state, hide_popup, position_popup, reject_suggestion, show_popup,
+    trigger_spell_check_workflow,
+};
+
+#[allow(clippy::missing_panics_doc)]
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    // Create channel for clipboard events (hotkey channel is created below)
+    let (_clipboard_tx, clipboard_rx) = std::sync::mpsc::channel();
+
+    tauri::Builder::default()
+        .setup(move |app| {
+            if cfg!(debug_assertions) {
+                app.handle().plugin(
+                    tauri_plugin_log::Builder::default()
+                        .level(log::LevelFilter::Info)
+                        .build(),
+                )?;
+            }
+
+            // Initialize popup state
+            app.manage(SharedPopupState::new());
+
+            // Initialize hotkey listener with default config
+            let hotkey_config = hotkey::HotkeyConfig::default();
+            let (hotkey_rx, hotkey_handle) = hotkey::create_hotkey_channel(hotkey_config);
+
+            log::info!("Global hotkey listener started");
+
+            // Store the hotkey handle in the app state for cleanup
+            app.manage(hotkey_handle);
+
+            // Initialize clipboard monitor (disabled by default)
+            // User can enable it via Tauri command
+            log::info!("Clipboard monitor initialized (paused)");
+
+            // Spawn thread to handle hotkey events and trigger spell check workflow
+            let app_handle = app.handle().clone();
+            thread::spawn(move || {
+                loop {
+                    match hotkey_rx.try_recv() {
+                        Ok(HotkeyEvent::SpellCheckTriggered) => {
+                            log::info!("Hotkey triggered, starting spell check workflow");
+
+                            // Get cursor position (macOS uses NSPoint, but we'll use a default position)
+                            // For proper cursor position on macOS, we'd need additional platform-specific code
+                            let (x, y) = get_cursor_position();
+
+                            // Trigger the full spell check workflow
+                            let app_handle_clone = app_handle.clone();
+                            if let Err(e) =
+                                popup::trigger_spell_check_workflow(app_handle_clone, x, y)
+                            {
+                                log::error!("Spell check workflow failed: {}", e);
+                            }
+                        }
+                        Err(TryRecvError::Empty) => {
+                            thread::sleep(std::time::Duration::from_millis(100));
+                        }
+                        Err(TryRecvError::Disconnected) => {
+                            log::warn!("Hotkey channel disconnected");
+                            break;
+                        }
+                    }
+                }
+            });
+
+            // Spawn thread to handle clipboard events
+            let app_handle_for_clipboard = app.handle().clone();
+            thread::spawn(move || {
+                loop {
+                    match clipboard_rx.try_recv() {
+                        Ok(event) => {
+                            match event {
+                                clipboard::ClipboardEvent::NewText { text, has_cjk } => {
+                                    log::info!(
+                                        "Clipboard changed: {} chars, CJK: {}, emitting event",
+                                        text.chars().count(),
+                                        has_cjk
+                                    );
+                                    // Emit event to frontend with the text data
+                                    if let Err(e) = app_handle_for_clipboard.emit(
+                                        "clipboard-changed",
+                                        serde_json::json!({
+                                            "text": text,
+                                            "has_cjk": has_cjk
+                                        }),
+                                    ) {
+                                        log::error!("Failed to emit clipboard event: {}", e);
+                                    }
+                                }
+                            }
+                        }
+                        Err(TryRecvError::Empty) => {
+                            thread::sleep(std::time::Duration::from_millis(100));
+                        }
+                        Err(TryRecvError::Disconnected) => {
+                            log::warn!("Clipboard channel disconnected");
+                            break;
+                        }
+                    }
+                }
+            });
+
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            read,
+            write,
+            spell_check,
+            get_clipboard_text,
+            set_clipboard_text,
+            simulate_paste,
+            load_config,
+            save_config,
+            get_config,
+            get_default_config,
+            get_rules,
+            update_config,
+            start_clipboard_monitor,
+            stop_clipboard_monitor,
+            // Popup commands
+            show_popup,
+            hide_popup,
+            position_popup,
+            get_popup_state,
+            accept_suggestion,
+            reject_suggestion,
+            trigger_spell_check_workflow,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+
+/// Get cursor position (platform-specific)
+/// Returns (x, y) coordinates
+#[cfg(target_os = "macos")]
+fn get_cursor_position() -> (i32, i32) {
+    use core_foundation::base::TCFType;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::number::CFNumber;
+
+    // For now, return a default position centered on typical screen
+    // Full implementation would use NSEvent or CGEvent
+    (800, 400) // Placeholder - would use NSEvent mouseLocation in full implementation
+}
+
+/// Get cursor position for non-macOS platforms
+#[cfg(not(target_os = "macos"))]
+fn get_cursor_position() -> (i32, i32) {
+    // For non-macOS, use rdev or platform-specific APIs
+    // For now, return a default position
+    (800, 400)
+}
+
+/// Tauri command to start clipboard monitoring
+#[tauri::command]
+fn start_clipboard_monitor(
+    window: tauri::Window,
+    cjk_only: Option<bool>,
+    poll_interval_ms: Option<u64>,
+) -> Result<(), String> {
+    let config = clipboard::ClipboardMonitorConfig {
+        cjk_only: cjk_only.unwrap_or(true),
+        poll_interval_ms: poll_interval_ms.unwrap_or(500),
+        ..Default::default()
+    };
+
+    log::info!("Starting clipboard monitor with config: {:?}", config);
+
+    // Note: In a full implementation, we would store the monitor handle
+    // in a global state manager to allow stopping it later
+    // For now, this is a placeholder for the functionality
+
+    let _ = window.emit("clipboard-monitor-started", ());
+
+    Ok(())
+}
+
+/// Tauri command to stop clipboard monitoring
+#[tauri::command]
+fn stop_clipboard_monitor(window: tauri::Window) -> Result<(), String> {
+    log::info!("Stopping clipboard monitor");
+
+    // Note: In a full implementation, we would stop the stored monitor
+    // For now, this is a placeholder for the functionality
+
+    let _ = window.emit("clipboard-monitor-stopped", ());
+
+    Ok(())
+}

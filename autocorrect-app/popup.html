@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>AutoCorrect Suggestions</title>
+		<style>
+		* {
+			margin: 0;
+			padding: 0;
+			box-sizing: border-box;
+		}
+		body {
+			font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+			background: transparent;
+			overflow: hidden;
+			-webkit-app-region: drag;
+		}
+		#popup {
+			width: 100vw;
+			height: 100vh;
+			background: rgba(255, 255, 255, 0.98);
+			backdrop-filter: blur(20px);
+			border-radius: 12px;
+			box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+			padding: 16px;
+			display: flex;
+			flex-direction: column;
+			gap: 12px;
+		}
+		.header {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+		}
+		.header h3 {
+			font-size: 14px;
+			font-weight: 600;
+			color: #1a1a1a;
+		}
+		.close-btn {
+			width: 28px;
+			height: 28px;
+			border: none;
+			background: transparent;
+			border-radius: 50%;
+			cursor: pointer;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			color: #dc2626;
+			font-size: 18px;
+			line-height: 1;
+			-webkit-app-region: no-drag;
+		}
+		.close-btn:hover {
+			background: rgba(220, 38, 38, 0.1);
+		}
+		.content {
+			display: flex;
+			flex-direction: column;
+			gap: 8px;
+		}
+		.original {
+			font-size: 13px;
+			color: #6b7280;
+		}
+		.original .text {
+			text-decoration: line-through;
+			color: #dc2626;
+		}
+		.suggestion {
+			font-size: 15px;
+			font-weight: 500;
+			color: #16a34a;
+		}
+		.actions {
+			display: flex;
+			gap: 8px;
+			margin-top: 4px;
+		}
+		.btn {
+			flex: 1;
+			padding: 8px 16px;
+			border: none;
+			border-radius: 8px;
+			font-size: 13px;
+			font-weight: 500;
+			cursor: pointer;
+			-webkit-app-region: no-drag;
+			transition: all 0.15s ease;
+		}
+		.btn:disabled {
+			opacity: 0.5;
+			cursor: not-allowed;
+		}
+		.btn-accept {
+			background: #16a34a;
+			color: white;
+		}
+		.btn-accept:hover:not(:disabled) {
+			background: #15803d;
+		}
+		.btn-reject {
+			background: #e5e7eb;
+			color: #374151;
+		}
+		.btn-reject:hover:not(:disabled) {
+			background: #d1d5db;
+		}
+		.edit-mode {
+			display: none;
+		}
+		.edit-mode.active {
+			display: block;
+		}
+		.edit-textarea {
+			width: 100%;
+			min-height: 60px;
+			padding: 8px;
+			border: 1px solid #d1d5db;
+			border-radius: 6px;
+			font-size: 13px;
+			font-family: inherit;
+			resize: vertical;
+			-webkit-app-region: no-drag;
+		}
+		.edit-textarea:focus {
+			outline: none;
+			border-color: #16a34a;
+		}
+		.edit-actions {
+			display: flex;
+			gap: 8px;
+		}
+		.btn-edit {
+			background: #f3f4f6;
+			color: #374151;
+		}
+		.btn-edit:hover:not(:disabled) {
+			background: #e5e7eb;
+		}
+		.hint {
+			text-align: center;
+			font-size: 10px;
+			color: #9ca3af;
+			padding-top: 8px;
+			border-top: 1px solid #f3f4f6;
+		}
+		.hidden {
+			display: none !important;
+		}
+	</style>
+	</head>
+	<body>
+		<div id="popup">
+			<div class="header">
+				<h3>✨ Suggestion</h3>
+				<button class="close-btn" id="closeBtn" title="Close (Esc)">×</button>
+			</div>
+			<div class="content">
+				<div class="original" id="original">
+					<span class="label">Original:</span>
+					<span class="text" id="originalText">-</span>
+				</div>
+				<div class="suggestion" id="suggestion">
+					<span class="label">Suggested:</span>
+					<span class="text" id="suggestionText">-</span>
+				</div>
+			</div>
+			<div class="edit-mode" id="editMode">
+				<textarea class="edit-textarea" id="editTextarea" placeholder="Custom correction..."></textarea>
+			</div>
+			<div class="actions" id="actions">
+				<button class="btn btn-reject" id="rejectBtn">✕ Reject</button>
+				<button class="btn btn-edit" id="editBtn" title="Edit the suggestion">✎ Edit</button>
+				<button class="btn btn-accept" id="acceptBtn">✓ Accept</button>
+			</div>
+			<div class="edit-actions hidden" id="editActions">
+				<button class="btn btn-reject" id="cancelEditBtn">✕ Cancel</button>
+				<button class="btn btn-accept" id="acceptEditBtn">✓ Use Custom</button>
+			</div>
+			<div class="hint">Enter=Accept, Esc=Reject</div>
+		</div>
+
+		<script type="module" src="/src/popup.ts"></script>
+	</body>
+</html>
