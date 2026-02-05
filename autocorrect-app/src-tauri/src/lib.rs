@@ -1,6 +1,7 @@
 mod clipboard;
 mod commands;
 mod hotkey;
+mod macos_text;
 mod popup;
 mod text_selection;
 
@@ -64,16 +65,32 @@ pub fn run() {
                         Ok(HotkeyEvent::SpellCheckTriggered) => {
                             log::info!("Hotkey triggered, starting spell check workflow");
 
-                            // Get cursor position (macOS uses NSPoint, but we'll use a default position)
-                            // For proper cursor position on macOS, we'd need additional platform-specific code
-                            let (x, y) = get_cursor_position();
+                            // Catch any panics to prevent app crashes
+                            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                // Get cursor position
+                                let (x, y) = get_cursor_position();
+                                log::info!("Got cursor position: ({}, {})", x, y);
 
-                            // Trigger the full spell check workflow
-                            let app_handle_clone = app_handle.clone();
-                            if let Err(e) =
+                                // Trigger the full spell check workflow
+                                let app_handle_clone = app_handle.clone();
                                 popup::trigger_spell_check_workflow(app_handle_clone, x, y)
-                            {
-                                log::error!("Spell check workflow failed: {}", e);
+                            }));
+
+                            match result {
+                                Ok(Ok(())) => {}
+                                Ok(Err(e)) => {
+                                    log::error!("Spell check workflow failed: {}", e);
+                                }
+                                Err(panic_info) => {
+                                    let panic_msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                                        s.clone()
+                                    } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+                                        s.to_string()
+                                    } else {
+                                        "Unknown panic".to_string()
+                                    };
+                                    log::error!("Spell check workflow panicked: {}", panic_msg);
+                                }
                             }
                         }
                         Err(TryRecvError::Empty) => {
@@ -141,6 +158,9 @@ pub fn run() {
             start_clipboard_monitor,
             stop_clipboard_monitor,
             get_cursor_pos_cmd,
+            // Accessibility permission commands
+            check_accessibility_permission,
+            request_accessibility_permission,
             // Hotkey config commands
             get_hotkey_config,
             update_hotkey_config,
@@ -200,4 +220,34 @@ fn stop_clipboard_monitor(window: tauri::Window) -> Result<(), String> {
     let _ = window.emit("clipboard-monitor-stopped", ());
 
     Ok(())
+}
+
+/// Tauri command to check Accessibility permission status
+#[tauri::command]
+fn check_accessibility_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use macos_text::check_accessibility_permission;
+        check_accessibility_permission()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        true // Always true on other platforms
+    }
+}
+
+/// Tauri command to request Accessibility permissions (shows system prompt)
+#[tauri::command]
+fn request_accessibility_permission() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        use macos_text::request_accessibility_permission;
+        request_accessibility_permission()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        true // Always true on other platforms
+    }
 }

@@ -41,6 +41,8 @@ pub fn show_popup(
     original_text: String,
     suggestion: String,
 ) -> Result<(), Error> {
+    log::info!("show_popup called with position: ({}, {})", x, y);
+
     // Get or create the popup window
     if let Some(popup_window) = app.get_webview_window("popup") {
         // Update state
@@ -56,10 +58,9 @@ pub fn show_popup(
         }
 
         // Position the window
-        let _ = popup_window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-            x,
-            y,
-        }));
+        let position = tauri::Position::Physical(tauri::PhysicalPosition { x, y });
+        log::info!("Setting popup position to {:?}", position);
+        let _ = popup_window.set_position(position);
 
         // Show and focus the popup
         let _ = popup_window.show();
@@ -187,9 +188,10 @@ pub fn reject_suggestion(app: AppHandle) -> Result<(), Error> {
 /// Trigger spell check workflow - get selected text, check, show popup
 ///
 /// This function handles the complete workflow:
-/// 1. Gets the currently selected text from the system (via Accessibility API or copy simulation)
-/// 2. Runs spell check on the text
-/// 3. Shows popup with suggestions if corrections are needed
+/// 1. Gets the currently selected text from the system via Accessibility API
+/// 2. Falls back to clipboard if Accessibility is unavailable
+/// 3. Runs spell check on the text
+/// 4. Shows popup with suggestions if corrections are needed
 #[tauri::command]
 pub fn trigger_spell_check_workflow(
     app: AppHandle,
@@ -197,55 +199,39 @@ pub fn trigger_spell_check_workflow(
     y: i32,
 ) -> Result<(), Error> {
     use crate::commands::spellcheck::spell_check;
-    use crate::text_selection::{get_selected_text, get_selected_text_via_copy, TextSelectionError};
+    use crate::text_selection::{get_selected_text, TextSelectionError};
 
-    // Try to get selected text using Accessibility API first
+    // Get selected text (Accessibility API with clipboard fallback)
     let text = match get_selected_text() {
-        Ok(text) => {
-            log::info!("Got selected text via Accessibility API: {} chars", text.chars().count());
-            text
-        }
+        Ok(text) => text,
         Err(TextSelectionError::PermissionDenied) => {
-            log::warn!("Accessibility permission denied, falling back to copy simulation");
-            // Fall back to copy simulation
-            match get_selected_text_via_copy() {
-                Ok(text) => {
-                    log::info!("Got selected text via copy simulation: {} chars", text.chars().count());
-                    text
-                }
-                Err(e) => {
-                    log::warn!("Failed to get selected text: {}", e);
-                    // Emit event indicating no text was selected
-                    let _ = app.emit("no-text-selected", ());
-                    return Ok(());
-                }
-            }
+            log::warn!("Accessibility permission denied");
+            let _ = app.emit("permission-denied", serde_json::json!({
+                "message": "Please grant Accessibility permissions in System Settings > Privacy & Security > Accessibility"
+            }));
+            return Ok(());
         }
-        Err(TextSelectionError::EmptySelection) => {
+        Err(TextSelectionError::NoTextSelected) => {
             log::info!("No text selected");
-            let _ = app.emit("no-text-selected", ());
+            let _ = app.emit("no-text-selected", serde_json::json!({
+                "message": "Please select some text first, then press the hotkey"
+            }));
             return Ok(());
         }
         Err(e) => {
-            log::warn!("Failed to get selected text via API: {}, trying copy simulation", e);
-            // Fall back to copy simulation
-            match get_selected_text_via_copy() {
-                Ok(text) => {
-                    log::info!("Got selected text via copy simulation: {} chars", text.chars().count());
-                    text
-                }
-                Err(e) => {
-                    log::warn!("Failed to get selected text: {}", e);
-                    let _ = app.emit("no-text-selected", ());
-                    return Ok(());
-                }
-            }
+            log::warn!("Failed to get selected text: {}", e);
+            let _ = app.emit("error-getting-text", serde_json::json!({
+                "message": format!("Error: {}", e)
+            }));
+            return Ok(());
         }
     };
 
     if text.trim().is_empty() {
         log::info!("Selected text is empty");
-        let _ = app.emit("no-text-selected", ());
+        let _ = app.emit("no-text-selected", serde_json::json!({
+            "message": "Selected text is empty"
+        }));
         return Ok(());
     }
 

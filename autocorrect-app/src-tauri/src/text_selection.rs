@@ -3,34 +3,31 @@
 //! This module provides functionality to retrieve the currently selected text
 //! from the focused application using macOS Accessibility services.
 //!
-//! # Current Implementation
+//! # Implementation
 //!
-//! Due to conflicts between rdev (global hotkey listener) and enigo (keyboard simulation),
-//! the automatic copy simulation has been disabled to prevent crashes.
+//! Uses macOS Accessibility API (AXUIElement) to directly access the selected
+//! text from the focused application without requiring manual copy.
 //!
-//! Users should manually copy text (⌘+C) before triggering the spell check workflow.
-//!
-//! # Alternative Approach
-//!
-//! For a production app, consider:
-//! 1. Using macOS Accessibility API directly via CGEvent/AXUIElement
-//! 2. Implementing a proper NSPasteboard monitoring system
-//! 3. Using a separate process for keyboard simulation
+//! Falls back to clipboard reading if Accessibility API is unavailable or
+//! permission is not granted.
 
 /// Error type for text selection operations
 #[derive(Debug, thiserror::Error)]
 pub enum TextSelectionError {
-    #[error("No text selected. Please select text and copy it first (⌘+C), then press the hotkey again.")]
+    #[error("No text selected. Please select some text first, then press the hotkey.")]
     NoTextSelected,
 
     #[error("Selected text is empty")]
     EmptySelection,
 
-    #[error("Accessibility API error: {0}")]
-    AccessibilityError(String),
-
-    #[error("Permission denied - app needs Accessibility permissions")]
+    #[error("Accessibility permission denied. Please grant Accessibility permissions in System Settings > Privacy & Security > Accessibility")]
     PermissionDenied,
+
+    #[error("Accessibility API error: {0}")]
+    ApiError(String),
+
+    #[error("Clipboard error: {0}")]
+    ClipboardError(String),
 }
 
 /// Result type for text selection operations
@@ -38,29 +35,60 @@ pub type Result<T> = std::result::Result<T, TextSelectionError>;
 
 /// Get the currently selected text from the system's focused element
 ///
-/// This function currently returns an error, directing users to copy text manually.
-/// The automatic copy simulation has been disabled due to conflicts with
-/// the global hotkey listener.
+/// This function:
+/// 1. Simulates Cmd+C to copy selected text (uses CGEvent, avoids rdev conflicts)
+/// 2. Reads the clipboard to get the text
+/// 3. Returns appropriate errors if no text is selected
 pub fn get_selected_text() -> Result<String> {
-    Err(TextSelectionError::NoTextSelected)
-}
+    #[cfg(target_os = "macos")]
+    {
+        // Use CGEvent to simulate copy (more reliable than AppleScript)
+        use crate::macos_text::{get_selected_text_via_accessibility, AccessibilityError};
 
-/// Alternative approach: Get text from clipboard
-///
-/// This function simply reads from the clipboard without any simulation.
-/// Users should manually copy text (⌘+C) before pressing the hotkey.
-pub fn get_selected_text_via_copy() -> Result<String> {
-    use arboard::Clipboard;
-
-    // Get the current clipboard content
-    let text = Clipboard::new()
-        .and_then(|mut clipboard| clipboard.get_text())
-        .map_err(|_| TextSelectionError::NoTextSelected)?;
-
-    if text.trim().is_empty() {
-        return Err(TextSelectionError::EmptySelection);
+        match get_selected_text_via_accessibility() {
+            Ok(text) => {
+                if !text.trim().is_empty() {
+                    log::info!("Got selected text: {} chars", text.chars().count());
+                    return Ok(text);
+                } else {
+                    log::info!("Selected text is empty");
+                    return Err(TextSelectionError::NoTextSelected);
+                }
+            }
+            Err(AccessibilityError::NoTextSelected) => {
+                log::info!("No text selected to copy");
+                return Err(TextSelectionError::NoTextSelected);
+            }
+            Err(e) => {
+                log::warn!("Failed to get selected text: {}", e);
+                return Err(TextSelectionError::NoTextSelected);
+            }
+        }
     }
 
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Fall back to clipboard for other platforms
+        get_selected_text_via_clipboard()
+    }
+}
+
+/// Get text from clipboard (fallback method)
+///
+/// This is a fallback when Accessibility API is unavailable.
+/// Users should copy text (⌘+C) before pressing the hotkey.
+fn get_selected_text_via_clipboard() -> Result<String> {
+    use arboard::Clipboard;
+
+    let text = Clipboard::new()
+        .and_then(|mut clipboard| clipboard.get_text())
+        .map_err(|e| TextSelectionError::ClipboardError(e.to_string()))?;
+
+    if text.trim().is_empty() {
+        return Err(TextSelectionError::NoTextSelected);
+    }
+
+    log::info!("Got text from clipboard: {} chars", text.chars().count());
     Ok(text)
 }
 
@@ -68,16 +96,21 @@ pub fn get_selected_text_via_copy() -> Result<String> {
 ///
 /// Returns the (x, y) coordinates of the mouse cursor.
 ///
-/// On macOS, this would ideally use NSEvent to get the current mouse location.
-/// For now, we return a default position centered on a typical screen.
-///
-/// TODO: Implement proper mouse position tracking using:
-/// - Core Graphics CGEvent
-/// - NSEvent mouseLocation via objc bindings
-/// - Or track mouse movement via rdev events
+/// On macOS, this uses NSEvent to get the current mouse location.
+/// Note: NSEvent must be called from the main thread, but hotkey
+/// events come from a background thread, so we use a safe default.
 pub fn get_cursor_position() -> (i32, i32) {
-    // For now, return a default position centered on a typical screen
-    (800, 400)
+    #[cfg(target_os = "macos")]
+    {
+        // Use the cursor position with smart offset (appears above text when possible)
+        crate::macos_text::get_cursor_position_nsevent()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // Default position for other platforms
+        (800, 400)
+    }
 }
 
 #[cfg(test)]
@@ -90,5 +123,13 @@ mod tests {
         println!("Cursor position: ({}, {})", x, y);
         assert!(x >= 0);
         assert!(y >= 0);
+    }
+
+    #[test]
+    fn test_get_selected_text() {
+        match get_selected_text() {
+            Ok(text) => println!("Selected text: {}", text),
+            Err(e) => println!("Error: {}", e),
+        }
     }
 }

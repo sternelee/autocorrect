@@ -4,7 +4,7 @@
 //! It runs in a separate thread and communicates with the main thread via channels.
 
 use rdev::{Event, EventType, Key};
-use serde::{Deserialize, Serialize, Deserializer};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Mutex;
 use std::thread;
@@ -269,9 +269,20 @@ pub fn create_hotkey_channel(config: HotkeyConfig) -> (Receiver<HotkeyEvent>, Ho
     let handle = thread::spawn(move || {
         log::info!("Hotkey listener started with config: {:?}", config);
 
+        #[cfg(target_os = "macos")]
+        use crate::macos_text::update_mouse_position;
+
         let callback = move |event: Event| {
             if !running_clone.load(std::sync::atomic::Ordering::Relaxed) {
                 return;
+            }
+
+            // Track mouse position on mouse move events
+            #[cfg(target_os = "macos")]
+            {
+                if let EventType::MouseMove { x, y, .. } = event.event_type {
+                    update_mouse_position(x as i32, y as i32);
+                }
             }
 
             // Lock the mutex to safely modify the modifiers state

@@ -464,6 +464,8 @@ dependencies = [
  "autocorrect 2.16.3",
  "cocoa 0.26.1",
  "core-foundation 0.10.1",
+ "core-foundation-sys",
+ "core-graphics 0.24.0",
  "dirs 5.0.1",
  "enigo",
  "log",
