@@ -4,6 +4,7 @@
 //! It runs in a separate thread and communicates with the main thread via channels.
 
 use rdev::{Event, EventType, Key};
+use serde::{Deserialize, Serialize, Deserializer};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::Mutex;
 use std::thread;
@@ -16,12 +17,12 @@ pub enum HotkeyEvent {
 }
 
 /// State tracking for modifier keys
-#[derive(Clone, Default, Debug)]
-struct Modifiers {
-    shift: bool,
-    ctrl: bool,
-    meta: bool, // Command on macOS, Windows key on Windows
-    alt: bool,
+#[derive(Clone, Default, Debug, Serialize, Deserialize)]
+pub struct Modifiers {
+    pub shift: bool,
+    pub ctrl: bool,
+    pub meta: bool, // Command on macOS, Windows key on Windows
+    pub alt: bool,
 }
 
 impl Modifiers {
@@ -35,12 +36,41 @@ impl Modifiers {
 }
 
 /// Hotkey configuration
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct HotkeyConfig {
     /// The key to listen for (e.g., Key::KeyA)
+    #[serde(skip)]
     pub key: Key,
+    /// Key name for serialization (e.g., "KeyA", "Space", "Return")
+    #[serde(rename = "key")]
+    pub key_name: String,
     /// Required modifier states
     pub modifiers: Modifiers,
+}
+
+// Custom deserialization for HotkeyConfig
+impl<'de> Deserialize<'de> for HotkeyConfig {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::Error;
+
+        #[derive(Deserialize)]
+        struct HotkeyConfigRaw {
+            key: String,
+            modifiers: Modifiers,
+        }
+
+        let raw = HotkeyConfigRaw::deserialize(deserializer)?;
+        let key = Self::key_from_name(&raw.key);
+
+        Ok(Self {
+            key,
+            key_name: raw.key,
+            modifiers: raw.modifiers,
+        })
+    }
 }
 
 impl Default for HotkeyConfig {
@@ -63,8 +93,142 @@ impl Default for HotkeyConfig {
 
         Self {
             key: Key::KeyA,
+            key_name: "KeyA".to_string(),
             modifiers,
         }
+    }
+}
+
+impl HotkeyConfig {
+    /// Create a new HotkeyConfig from key name and modifiers
+    pub fn new(key_name: String, modifiers: Modifiers) -> Self {
+        let key = Self::key_from_name(&key_name);
+        Self {
+            key,
+            key_name,
+            modifiers,
+        }
+    }
+
+    /// Convert rdev Key to string representation
+    pub fn key_to_name(key: Key) -> String {
+        match key {
+            Key::KeyA => "KeyA".to_string(),
+            Key::KeyB => "KeyB".to_string(),
+            Key::KeyC => "KeyC".to_string(),
+            Key::KeyD => "KeyD".to_string(),
+            Key::KeyE => "KeyE".to_string(),
+            Key::KeyF => "KeyF".to_string(),
+            Key::KeyG => "KeyG".to_string(),
+            Key::KeyH => "KeyH".to_string(),
+            Key::KeyI => "KeyI".to_string(),
+            Key::KeyJ => "KeyJ".to_string(),
+            Key::KeyK => "KeyK".to_string(),
+            Key::KeyL => "KeyL".to_string(),
+            Key::KeyM => "KeyM".to_string(),
+            Key::KeyN => "KeyN".to_string(),
+            Key::KeyO => "KeyO".to_string(),
+            Key::KeyP => "KeyP".to_string(),
+            Key::KeyQ => "KeyQ".to_string(),
+            Key::KeyR => "KeyR".to_string(),
+            Key::KeyS => "KeyS".to_string(),
+            Key::KeyT => "KeyT".to_string(),
+            Key::KeyU => "KeyU".to_string(),
+            Key::KeyV => "KeyV".to_string(),
+            Key::KeyW => "KeyW".to_string(),
+            Key::KeyX => "KeyX".to_string(),
+            Key::KeyY => "KeyY".to_string(),
+            Key::KeyZ => "KeyZ".to_string(),
+            Key::Space => "Space".to_string(),
+            Key::Return => "Return".to_string(),
+            Key::Tab => "Tab".to_string(),
+            Key::Backspace => "Backspace".to_string(),
+            Key::Escape => "Escape".to_string(),
+            _ => "Unknown".to_string(),
+        }
+    }
+
+    /// Convert string representation to rdev Key
+    pub fn key_from_name(name: &str) -> Key {
+        match name {
+            "KeyA" => Key::KeyA,
+            "KeyB" => Key::KeyB,
+            "KeyC" => Key::KeyC,
+            "KeyD" => Key::KeyD,
+            "KeyE" => Key::KeyE,
+            "KeyF" => Key::KeyF,
+            "KeyG" => Key::KeyG,
+            "KeyH" => Key::KeyH,
+            "KeyI" => Key::KeyI,
+            "KeyJ" => Key::KeyJ,
+            "KeyK" => Key::KeyK,
+            "KeyL" => Key::KeyL,
+            "KeyM" => Key::KeyM,
+            "KeyN" => Key::KeyN,
+            "KeyO" => Key::KeyO,
+            "KeyP" => Key::KeyP,
+            "KeyQ" => Key::KeyQ,
+            "KeyR" => Key::KeyR,
+            "KeyS" => Key::KeyS,
+            "KeyT" => Key::KeyT,
+            "KeyU" => Key::KeyU,
+            "KeyV" => Key::KeyV,
+            "KeyW" => Key::KeyW,
+            "KeyX" => Key::KeyX,
+            "KeyY" => Key::KeyY,
+            "KeyZ" => Key::KeyZ,
+            "Space" => Key::Space,
+            "Return" => Key::Return,
+            "Tab" => Key::Tab,
+            "Backspace" => Key::Backspace,
+            "Escape" => Key::Escape,
+            _ => Key::KeyA, // Default fallback
+        }
+    }
+
+    /// Get a human-readable display string for this hotkey
+    pub fn to_display_string(&self) -> String {
+        let mut parts = Vec::new();
+
+        #[cfg(target_os = "macos")]
+        {
+            if self.modifiers.meta {
+                parts.push("⌘".to_string());
+            }
+            if self.modifiers.shift {
+                parts.push("⇧".to_string());
+            }
+            if self.modifiers.alt {
+                parts.push("⌥".to_string());
+            }
+            if self.modifiers.ctrl {
+                parts.push("⌃".to_string());
+            }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            if self.modifiers.ctrl {
+                parts.push("Ctrl".to_string());
+            }
+            if self.modifiers.shift {
+                parts.push("Shift".to_string());
+            }
+            if self.modifiers.alt {
+                parts.push("Alt".to_string());
+            }
+            if self.modifiers.meta {
+                parts.push("Meta".to_string());
+            }
+        }
+
+        parts.push(self.key_name.clone());
+        parts.join("+")
+    }
+
+    /// Update the key from key_name (call this after deserializing)
+    pub fn sync_key(&mut self) {
+        self.key = Self::key_from_name(&self.key_name);
     }
 }
 

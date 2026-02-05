@@ -152,27 +152,25 @@ pub fn get_popup_state(state: State<SharedPopupState>) -> Result<serde_json::Val
     }))
 }
 
-/// Accept the suggestion - set clipboard and paste
+/// Accept the suggestion - set clipboard to corrected text
+///
+/// Note: Due to conflicts between rdev (global hotkey listener) and enigo (keyboard simulation),
+/// automatic paste simulation has been disabled. The corrected text will be copied to clipboard
+/// and the user should manually paste (⌘+V).
 #[tauri::command]
 pub fn accept_suggestion(app: AppHandle, text: String) -> Result<(), Error> {
     // Set clipboard to the corrected text
     use crate::commands::spellcheck::set_clipboard_text;
-    set_clipboard_text(text)?;
+    set_clipboard_text(text.clone())?;
 
     // Hide popup
     hide_popup(app.clone())?;
 
-    // Simulate paste after a short delay (spawn a thread for non-blocking delay)
-    let app_clone = app.clone();
-    std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        use crate::commands::spellcheck::simulate_paste;
-        if let Err(e) = simulate_paste() {
-            log::error!("Failed to simulate paste: {}", e);
-        }
-        // Emit accepted event after paste
-        let _ = app_clone.emit("suggestion-accepted", ());
-    });
+    // Emit accepted event with the corrected text
+    let _ = app.emit("suggestion-accepted", serde_json::json!({
+        "text": text,
+        "message": "Corrected text copied to clipboard. Press ⌘+V to paste."
+    }));
 
     Ok(())
 }
@@ -186,20 +184,69 @@ pub fn reject_suggestion(app: AppHandle) -> Result<(), Error> {
     Ok(())
 }
 
-/// Trigger spell check workflow - get clipboard, check, show popup
+/// Trigger spell check workflow - get selected text, check, show popup
+///
+/// This function handles the complete workflow:
+/// 1. Gets the currently selected text from the system (via Accessibility API or copy simulation)
+/// 2. Runs spell check on the text
+/// 3. Shows popup with suggestions if corrections are needed
 #[tauri::command]
 pub fn trigger_spell_check_workflow(
     app: AppHandle,
     x: i32,
     y: i32,
 ) -> Result<(), Error> {
-    use crate::commands::spellcheck::{get_clipboard_text, spell_check};
+    use crate::commands::spellcheck::spell_check;
+    use crate::text_selection::{get_selected_text, get_selected_text_via_copy, TextSelectionError};
 
-    // Get clipboard text
-    let text = get_clipboard_text()?;
+    // Try to get selected text using Accessibility API first
+    let text = match get_selected_text() {
+        Ok(text) => {
+            log::info!("Got selected text via Accessibility API: {} chars", text.chars().count());
+            text
+        }
+        Err(TextSelectionError::PermissionDenied) => {
+            log::warn!("Accessibility permission denied, falling back to copy simulation");
+            // Fall back to copy simulation
+            match get_selected_text_via_copy() {
+                Ok(text) => {
+                    log::info!("Got selected text via copy simulation: {} chars", text.chars().count());
+                    text
+                }
+                Err(e) => {
+                    log::warn!("Failed to get selected text: {}", e);
+                    // Emit event indicating no text was selected
+                    let _ = app.emit("no-text-selected", ());
+                    return Ok(());
+                }
+            }
+        }
+        Err(TextSelectionError::EmptySelection) => {
+            log::info!("No text selected");
+            let _ = app.emit("no-text-selected", ());
+            return Ok(());
+        }
+        Err(e) => {
+            log::warn!("Failed to get selected text via API: {}, trying copy simulation", e);
+            // Fall back to copy simulation
+            match get_selected_text_via_copy() {
+                Ok(text) => {
+                    log::info!("Got selected text via copy simulation: {} chars", text.chars().count());
+                    text
+                }
+                Err(e) => {
+                    log::warn!("Failed to get selected text: {}", e);
+                    let _ = app.emit("no-text-selected", ());
+                    return Ok(());
+                }
+            }
+        }
+    };
 
     if text.trim().is_empty() {
-        return Ok(()); // Nothing to check
+        log::info!("Selected text is empty");
+        let _ = app.emit("no-text-selected", ());
+        return Ok(());
     }
 
     // Run spell check
@@ -207,6 +254,7 @@ pub fn trigger_spell_check_workflow(
 
     // If there are changes, show popup
     if result.has_changes && !result.corrected.is_empty() {
+        log::info!("Spell check found corrections needed");
         show_popup(
             app,
             x,
@@ -216,7 +264,11 @@ pub fn trigger_spell_check_workflow(
         )?;
     } else {
         // No changes needed, emit a notification
-        let _ = app.emit("no-changes-needed", ());
+        log::info!("Spell check: no changes needed");
+        let _ = app.emit("no-changes-needed", serde_json::json!({
+            "message": "Text is already correct",
+            "original": result.original
+        }));
     }
 
     Ok(())

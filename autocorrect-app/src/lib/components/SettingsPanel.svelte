@@ -5,7 +5,7 @@
 	import { Input } from '$lib/components/ui/input';
 	import { Switch } from '$lib/components/ui/switch';
 	import { Textarea } from '$lib/components/ui/textarea';
-	import { Download, Upload, Save, RotateCcw, AlertCircle } from 'lucide-svelte';
+	import { Download, Upload, Save, RotateCcw, AlertCircle, Keyboard } from 'lucide-svelte';
 
 	// Rule info from backend
 	interface RuleInfo {
@@ -25,6 +25,20 @@
 		configPath: string;
 	}
 
+	// Hotkey configuration
+	interface Modifiers {
+		shift: boolean;
+		ctrl: boolean;
+		meta: boolean;
+		alt: boolean;
+	}
+
+	interface HotkeyConfig {
+		key: string;
+		modifiers: Modifiers;
+		display_string: string;
+	}
+
 	let configPath = '';
 	let isLoading = false;
 	let saveSuccess = false;
@@ -36,9 +50,14 @@
 	// Custom words for spellcheck
 	let customWords = '';
 
-	// Hotkey configuration (kept from original UI)
+	// Hotkey configuration state
 	let hotkeyEnabled = true;
-	let customHotkey = 'Cmd+Shift+S';
+	let hotkeyConfig: HotkeyConfig | null = null;
+	let showKeySelector = false;
+	let isRecording = false;
+	let recordedShortcut: HotkeyConfig | null = null;
+	let recordingError: string | null = null;
+	let recordingTimeout: ReturnType<typeof setTimeout> | null = null;
 
 	// Track unsaved changes
 	let hasUnsavedChanges = false;
@@ -195,6 +214,199 @@
 
 	// Load configuration on mount
 	loadConfiguration();
+	loadHotkeyConfiguration();
+
+	async function loadHotkeyConfiguration() {
+		try {
+			const config = await invoke<HotkeyConfig>('get_hotkey_config');
+			hotkeyConfig = config;
+		} catch (error) {
+			console.error('Failed to load hotkey config:', error);
+		}
+	}
+
+	async function startRecording() {
+		isRecording = true;
+		recordingError = null;
+		recordedShortcut = null;
+
+		// Clear any existing timeout
+		if (recordingTimeout) {
+			clearTimeout(recordingTimeout);
+		}
+
+		// Set a timeout to auto-cancel recording after 10 seconds
+		recordingTimeout = setTimeout(() => {
+			if (isRecording) {
+				isRecording = false;
+				recordingError = 'Recording timed out. Please try again.';
+				// Remove keyboard listener
+				document.removeEventListener('keydown', handleKeyPress);
+			}
+		}, 10000);
+
+		// Add keyboard event listener
+		document.addEventListener('keydown', handleKeyPress);
+	}
+
+	function handleKeyPress(e: KeyboardEvent) {
+		if (!isRecording) {
+			document.removeEventListener('keydown', handleKeyPress);
+			return;
+		}
+
+		// Ignore modifier keys by themselves - we only want the final key
+		// The modifiers are captured from e.shiftKey, e.metaKey, etc.
+		const isModifierKey = e.key === 'Shift' || e.key === 'Control' ||
+		                   e.key === 'Meta' || e.key === 'Alt' ||
+		                   e.code === 'ShiftLeft' || e.code === 'ShiftRight' ||
+		                   e.code === 'ControlLeft' || e.code === 'ControlRight' ||
+		                   e.code === 'MetaLeft' || e.code === 'MetaRight' ||
+		                   e.code === 'AltLeft' || e.code === 'AltRight';
+
+		if (isModifierKey) {
+			// Don't prevent default for modifier keys, just ignore them
+			return;
+		}
+
+		e.preventDefault();
+		e.stopPropagation();
+
+		// Clear timeout
+		if (recordingTimeout) {
+			clearTimeout(recordingTimeout);
+		}
+
+		// Build modifiers from the event
+		const modifiers: Modifiers = {
+			shift: e.shiftKey,
+			ctrl: e.ctrlKey,
+			meta: e.metaKey,
+			alt: e.altKey
+		};
+
+		// Map keyboard event key to our key names
+		let keyName = mapEventKeyToKeyName(e.key, e.code);
+
+		if (!keyName) {
+			recordingError = `Unsupported key: "${e.key}" (code: ${e.code}). Please use A-Z, F1-F12, Space, Enter, Tab, or other standard keys.`;
+			isRecording = false;
+			document.removeEventListener('keydown', handleKeyPress);
+			return;
+		}
+
+		// Create the recorded shortcut
+		recordedShortcut = {
+			key: keyName,
+			modifiers,
+			display_string: formatShortcutDisplay(modifiers, keyName)
+		};
+
+		isRecording = false;
+		document.removeEventListener('keydown', handleKeyPress);
+	}
+
+	function mapEventKeyToKeyName(key: string, code: string): string | null {
+		// Map event key/code to our key names
+		// Prefer code over key for letter keys as it's more consistent
+		if (code === 'Space' || key === ' ') return 'Space';
+		if (code === 'Enter' || key === 'Enter') return 'Return';
+		if (code === 'Tab' || key === 'Tab') return 'Tab';
+		if (code === 'Backspace' || key === 'Backspace') return 'Backspace';
+		if (code === 'Delete' || key === 'Delete') return 'Backspace';
+		if (code === 'Escape' || key === 'Escape') return 'Escape';
+
+		// Function keys - use key as it's more reliable
+		if (key.startsWith('F') && key.length <= 3) {
+			const num = parseInt(key.substring(1));
+			if (num >= 1 && num <= 12) return key;
+		}
+
+		// Letter keys - use code which is consistent (e.g., "KeyK" for 'k' key)
+		if (code.startsWith('Key') && code.length === 4) {
+			return code; // e.g., "KeyK" -> "KeyK"
+		}
+
+		// Fallback: try using key for letters
+		if (/^[a-zA-Z]$/.test(key)) {
+			return 'Key' + key.toUpperCase();
+		}
+
+		// Number keys
+		if (/^[0-9]$/.test(key)) {
+			return 'Num' + key;
+		}
+		if (code.startsWith('Digit')) {
+			return 'Num' + code.substring(5);
+		}
+
+		return null;
+	}
+
+	function formatShortcutDisplay(modifiers: Modifiers, key: string): string {
+		const parts: string[] = [];
+
+		if (modifiers.meta) parts.push('⌘');
+		if (modifiers.shift) parts.push('⇧');
+		if (modifiers.alt) parts.push('⌥');
+		if (modifiers.ctrl) parts.push('⌃');
+
+		// Format the key nicely
+		let keyLabel = key;
+		if (key === 'Space') keyLabel = 'Space';
+		else if (key === 'Return') keyLabel = 'Return';
+		else if (key === 'Tab') keyLabel = 'Tab';
+		else if (key === 'Backspace') keyLabel = '⌫';
+		else if (key === 'Escape') keyLabel = 'Esc';
+		else if (key.startsWith('Key')) keyLabel = key.substring(3);
+		else if (key.startsWith('Num')) keyLabel = key.substring(3);
+		else if (key.startsWith('F')) keyLabel = key;
+
+		parts.push(keyLabel);
+		return parts.join('+');
+	}
+
+	async function saveRecordedShortcut() {
+		if (!recordedShortcut) return;
+
+		try {
+			const newConfig = await invoke<HotkeyConfig>('update_hotkey_config', {
+				request: {
+					key: recordedShortcut.key,
+					modifiers: recordedShortcut.modifiers
+				}
+			});
+			hotkeyConfig = newConfig;
+			showKeySelector = false;
+			recordedShortcut = null;
+		} catch (error) {
+			console.error('Failed to save hotkey config:', error);
+			loadError = 'Failed to save hotkey configuration';
+		}
+	}
+
+	async function resetHotkeyToDefaults() {
+		try {
+			const defaultConfig = await invoke<HotkeyConfig>('reset_hotkey_config');
+			hotkeyConfig = defaultConfig;
+			showKeySelector = false;
+		} catch (error) {
+			console.error('Failed to reset hotkey config:', error);
+			loadError = 'Failed to reset hotkey configuration';
+		}
+	}
+
+	function cancelRecording() {
+		isRecording = false;
+		recordedShortcut = null;
+		recordingError = null;
+		if (recordingTimeout) {
+			clearTimeout(recordingTimeout);
+			recordingTimeout = null;
+		}
+		// Remove keyboard listener
+		document.removeEventListener('keydown', handleKeyPress);
+	}
 </script>
 
 <div class="flex flex-col gap-4 p-6">
@@ -308,29 +520,159 @@
 
 			<!-- Hotkey Configuration -->
 			<div class="space-y-3">
-				<h3 class="text-sm font-semibold">Hotkey</h3>
+				<h3 class="text-sm font-semibold">Global Hotkey</h3>
 				<div class="flex items-center justify-between rounded-lg border p-3">
 					<div class="space-y-0.5">
 						<label class="text-sm font-medium" for="hotkey-enabled">Enable Global Hotkey</label>
 						<p class="text-xs text-muted-foreground">
-							Activate spell check with keyboard shortcut
+							Activate spell check with keyboard shortcut from any application
 						</p>
 					</div>
 					<Switch bind:checked={hotkeyEnabled} id="hotkey-enabled" />
 				</div>
+
 				{#if hotkeyEnabled}
+					<!-- Current Hotkey Display -->
 					<div class="rounded-lg border p-3">
-						<label for="hotkey" class="mb-2 block text-sm font-medium">Custom Hotkey</label>
-						<Input
-							id="hotkey"
-							bind:value={customHotkey}
-							placeholder="Cmd+Shift+S"
-							class="font-mono"
-						/>
-						<p class="mt-1 text-xs text-muted-foreground">
-							Example: Cmd+Shift+S (macOS) or Ctrl+Shift+S (Windows/Linux)
-						</p>
+						<div class="mb-3 flex items-center justify-between">
+							<label class="text-sm font-medium">Current Hotkey</label>
+							{#if hotkeyConfig}
+								<div class="flex items-center gap-2 rounded-md bg-muted px-3 py-1.5 font-mono text-sm">
+									<Keyboard class="h-4 w-4" />
+									<span>{hotkeyConfig.display_string}</span>
+								</div>
+							{:else}
+								<div class="text-sm text-muted-foreground">Loading...</div>
+							{/if}
+						</div>
+
+						<!-- Change Hotkey Button -->
+						{#if !showKeySelector}
+							<div class="flex gap-2">
+								<button
+									onclick={() => showKeySelector = true}
+									class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+								>
+									Change Hotkey
+								</button>
+								<button
+									onclick={resetHotkeyToDefaults}
+									class="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted"
+								>
+									Reset to Default
+								</button>
+							</div>
+						{/if}
 					</div>
+
+					<!-- Shortcut Recording UI -->
+					{#if showKeySelector}
+						<div class="space-y-3 rounded-lg border p-3">
+							<h4 class="text-sm font-medium">Change Hotkey</h4>
+
+							{#if !isRecording && !recordedShortcut}
+								<!-- Recording Instructions -->
+								<div class="rounded-md bg-muted p-4 text-center">
+									<p class="text-sm text-muted-foreground">
+										Press your desired key combination to record it.
+										<br />
+										For example: <span class="font-mono">⌘+⇧+S</span>
+									</p>
+									<button
+										onclick={startRecording}
+										class="mt-3 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+									>
+										<Keyboard class="mr-2 h-4 w-4 inline" />
+										Start Recording
+									</button>
+								</div>
+							{/if}
+
+							{#if isRecording}
+								<!-- Recording State -->
+								<div class="rounded-md border-2 border-primary bg-primary/5 p-6 text-center">
+									<div class="mb-3 flex justify-center">
+										<div class="flex h-8 w-8 animate-pulse items-center justify-center rounded-full bg-primary">
+											<Keyboard class="h-4 w-4 text-primary-foreground" />
+										</div>
+									</div>
+									<p class="text-sm font-medium">Recording...</p>
+									<p class="mt-1 text-xs text-muted-foreground">
+										Press your key combination now. Recording will timeout in 10 seconds.
+									</p>
+									<button
+										onclick={cancelRecording}
+										class="mt-3 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted"
+									>
+										Cancel
+									</button>
+								</div>
+							{/if}
+
+							{#if recordedShortcut}
+								<!-- Recorded Result -->
+								<div class="rounded-md bg-muted p-4 text-center">
+									<p class="text-xs font-medium text-muted-foreground">Recorded:</p>
+									<p class="mt-2 font-mono text-lg">
+										{recordedShortcut.display_string}
+									</p>
+									<div class="mt-4 flex justify-center gap-2">
+										<button
+											onclick={saveRecordedShortcut}
+											class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+										>
+											Save Hotkey
+										</button>
+										<button
+											onclick={() => recordedShortcut = null}
+											class="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted"
+										>
+											Try Again
+										</button>
+									</div>
+								</div>
+							{/if}
+
+							{#if recordingError}
+								<!-- Error State -->
+								<div class="rounded-md border border-red-200 bg-red-50 p-4 text-center dark:border-red-800 dark:bg-red-950">
+									<p class="text-sm font-medium text-red-900 dark:text-red-100">
+										{recordingError}
+									</p>
+									<div class="mt-3 flex justify-center gap-2">
+										<button
+											onclick={() => {
+												recordingError = null;
+												startRecording();
+											}}
+											class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+										>
+											Try Again
+										</button>
+										<button
+											onclick={() => {
+												recordingError = null;
+												showKeySelector = false;
+											}}
+											class="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted"
+										>
+											Cancel
+										</button>
+									</div>
+								</div>
+							{/if}
+
+							<!-- Cancel Button (bottom) -->
+							{#if !isRecording && !recordedShortcut && !recordingError}
+								<button
+									onclick={() => showKeySelector = false}
+									class="w-full rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted"
+								>
+									Cancel
+								</button>
+							{/if}
+						</div>
+					{/if}
 				{/if}
 			</div>
 

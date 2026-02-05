@@ -2,14 +2,17 @@ mod clipboard;
 mod commands;
 mod hotkey;
 mod popup;
+mod text_selection;
 
 use commands::config::{get_config, get_default_config, get_rules, update_config};
 use commands::default::{read, write};
+use commands::hotkey_config::{get_available_keys, get_hotkey_config, reset_hotkey_config, update_hotkey_config};
 use commands::spellcheck::{
-    get_clipboard_text, load_config, save_config, set_clipboard_text, simulate_paste, spell_check,
+    get_clipboard_text, load_config, save_config, set_clipboard_text, spell_check,
 };
 use hotkey::HotkeyEvent;
 use popup::SharedPopupState;
+use text_selection::get_cursor_position;
 use std::sync::mpsc::TryRecvError;
 use std::thread;
 use tauri::{Emitter, Manager};
@@ -39,8 +42,9 @@ pub fn run() {
             // Initialize popup state
             app.manage(SharedPopupState::new());
 
-            // Initialize hotkey listener with default config
-            let hotkey_config = hotkey::HotkeyConfig::default();
+            // Initialize hotkey listener with saved config (or default)
+            let hotkey_config = commands::hotkey_config::load_hotkey_config();
+            log::info!("Loading hotkey config: {}", hotkey_config.to_display_string());
             let (hotkey_rx, hotkey_handle) = hotkey::create_hotkey_channel(hotkey_config);
 
             log::info!("Global hotkey listener started");
@@ -128,7 +132,6 @@ pub fn run() {
             spell_check,
             get_clipboard_text,
             set_clipboard_text,
-            simulate_paste,
             load_config,
             save_config,
             get_config,
@@ -137,6 +140,12 @@ pub fn run() {
             update_config,
             start_clipboard_monitor,
             stop_clipboard_monitor,
+            get_cursor_pos_cmd,
+            // Hotkey config commands
+            get_hotkey_config,
+            update_hotkey_config,
+            reset_hotkey_config,
+            get_available_keys,
             // Popup commands
             show_popup,
             hide_popup,
@@ -150,25 +159,10 @@ pub fn run() {
         .expect("error while running tauri application");
 }
 
-/// Get cursor position (platform-specific)
-/// Returns (x, y) coordinates
-#[cfg(target_os = "macos")]
-fn get_cursor_position() -> (i32, i32) {
-    use core_foundation::base::TCFType;
-    use core_foundation::dictionary::CFDictionary;
-    use core_foundation::number::CFNumber;
-
-    // For now, return a default position centered on typical screen
-    // Full implementation would use NSEvent or CGEvent
-    (800, 400) // Placeholder - would use NSEvent mouseLocation in full implementation
-}
-
-/// Get cursor position for non-macOS platforms
-#[cfg(not(target_os = "macos"))]
-fn get_cursor_position() -> (i32, i32) {
-    // For non-macOS, use rdev or platform-specific APIs
-    // For now, return a default position
-    (800, 400)
+/// Tauri command to get the current cursor position
+#[tauri::command]
+fn get_cursor_pos_cmd() -> Result<(i32, i32), String> {
+    Ok(get_cursor_position())
 }
 
 /// Tauri command to start clipboard monitoring
