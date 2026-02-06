@@ -1,22 +1,30 @@
 mod clipboard;
 mod commands;
+mod cspell;
 mod hotkey;
 mod macos_text;
 mod popup;
 mod text_selection;
+mod typocheck;
 
 use commands::config::{get_config, get_default_config, get_rules, update_config};
+use commands::custom_corrections::{
+    add_custom_correction, delete_custom_correction, get_custom_corrections,
+    get_custom_corrections_path_cmd, update_custom_correction,
+};
 use commands::default::{read, write};
-use commands::hotkey_config::{get_available_keys, get_hotkey_config, reset_hotkey_config, update_hotkey_config};
+use commands::hotkey_config::{
+    get_available_keys, get_hotkey_config, reset_hotkey_config, update_hotkey_config,
+};
 use commands::spellcheck::{
     get_clipboard_text, load_config, save_config, set_clipboard_text, spell_check,
 };
 use hotkey::HotkeyEvent;
 use popup::SharedPopupState;
-use text_selection::get_cursor_position;
 use std::sync::mpsc::TryRecvError;
 use std::thread;
 use tauri::{Emitter, Manager};
+use text_selection::get_cursor_position;
 
 // Import popup commands for the invoke handler
 use popup::{
@@ -45,7 +53,10 @@ pub fn run() {
 
             // Initialize hotkey listener with saved config (or default)
             let hotkey_config = commands::hotkey_config::load_hotkey_config();
-            log::info!("Loading hotkey config: {}", hotkey_config.to_display_string());
+            log::info!(
+                "Loading hotkey config: {}",
+                hotkey_config.to_display_string()
+            );
             let (hotkey_rx, hotkey_handle) = hotkey::create_hotkey_channel(hotkey_config);
 
             log::info!("Global hotkey listener started");
@@ -66,15 +77,16 @@ pub fn run() {
                             log::info!("Hotkey triggered, starting spell check workflow");
 
                             // Catch any panics to prevent app crashes
-                            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                // Get cursor position
-                                let (x, y) = get_cursor_position();
-                                log::info!("Got cursor position: ({}, {})", x, y);
+                            let result =
+                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                                    // Get cursor position
+                                    let (x, y) = get_cursor_position();
+                                    log::info!("Got cursor position: ({}, {})", x, y);
 
-                                // Trigger the full spell check workflow
-                                let app_handle_clone = app_handle.clone();
-                                popup::trigger_spell_check_workflow(app_handle_clone, x, y)
-                            }));
+                                    // Trigger the full spell check workflow
+                                    let app_handle_clone = app_handle.clone();
+                                    popup::trigger_spell_check_workflow(app_handle_clone, x, y)
+                                }));
 
                             match result {
                                 Ok(Ok(())) => {}
@@ -82,13 +94,14 @@ pub fn run() {
                                     log::error!("Spell check workflow failed: {}", e);
                                 }
                                 Err(panic_info) => {
-                                    let panic_msg = if let Some(s) = panic_info.downcast_ref::<String>() {
-                                        s.clone()
-                                    } else if let Some(s) = panic_info.downcast_ref::<&str>() {
-                                        s.to_string()
-                                    } else {
-                                        "Unknown panic".to_string()
-                                    };
+                                    let panic_msg =
+                                        if let Some(s) = panic_info.downcast_ref::<String>() {
+                                            s.clone()
+                                        } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+                                            s.to_string()
+                                        } else {
+                                            "Unknown panic".to_string()
+                                        };
                                     log::error!("Spell check workflow panicked: {}", panic_msg);
                                 }
                             }
@@ -166,6 +179,12 @@ pub fn run() {
             update_hotkey_config,
             reset_hotkey_config,
             get_available_keys,
+            // Custom corrections commands
+            get_custom_corrections,
+            add_custom_correction,
+            update_custom_correction,
+            delete_custom_correction,
+            get_custom_corrections_path_cmd,
             // Popup commands
             show_popup,
             hide_popup,

@@ -1,9 +1,29 @@
 use super::errors::Error;
+use crate::cspell::CSpellDictionaries;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+
+/// Custom app-specific settings stored separately from autocorrect config
+#[derive(Clone, Serialize, Deserialize, Default)]
+struct AppSettings {
+    #[serde(default = "default_typo_checking")]
+    typo_checking_enabled: bool,
+    #[serde(default = "default_cspell_enabled")]
+    cspell_enabled: bool,
+    #[serde(default)]
+    cspell_dictionaries: CSpellDictionaries,
+}
+
+fn default_typo_checking() -> bool {
+    true
+}
+
+fn default_cspell_enabled() -> bool {
+    false // Disabled by default until user enables it
+}
 
 /// Convert u8 to SeverityMode
 fn u8_to_severity_mode(value: u8) -> autocorrect::config::SeverityMode {
@@ -31,6 +51,12 @@ pub struct AppConfig {
     pub context: HashMap<String, u8>,
     /// Path to user config file
     pub config_path: String,
+    /// Enable/disable typo checking
+    pub typo_checking_enabled: bool,
+    /// Enable/disable CSpell checking
+    pub cspell_enabled: bool,
+    /// CSpell dictionary settings
+    pub cspell_dictionaries: CSpellDictionaries,
 }
 
 /// Information about a single rule
@@ -57,6 +83,12 @@ pub struct ConfigUpdates {
     pub text_rules: Option<HashMap<String, Option<u8>>>,
     /// Spellcheck words to set (replaces entire list)
     pub spellcheck_words: Option<Vec<String>>,
+    /// Enable/disable typo checking
+    pub typo_checking_enabled: Option<bool>,
+    /// Enable/disable CSpell checking
+    pub cspell_enabled: Option<bool>,
+    /// CSpell dictionary settings
+    pub cspell_dictionaries: Option<CSpellDictionaries>,
 }
 
 /// Get the current merged configuration (default + user config)
@@ -71,6 +103,9 @@ pub fn get_config() -> Result<AppConfig, Error> {
 
     // Get current config from autocorrect crate (default + merged user config)
     let current_config = autocorrect::config::Config::current();
+
+    // Load app-specific settings
+    let app_settings = load_app_settings();
 
     // Extract spellcheck words from user config if present
     let spellcheck_words = if user_config_content.is_empty() {
@@ -109,6 +144,9 @@ pub fn get_config() -> Result<AppConfig, Error> {
         file_types: current_config.file_types.clone(),
         context,
         config_path: config_path.to_string_lossy().to_string(),
+        typo_checking_enabled: app_settings.typo_checking_enabled,
+        cspell_enabled: app_settings.cspell_enabled,
+        cspell_dictionaries: app_settings.cspell_dictionaries,
     })
 }
 
@@ -185,7 +223,9 @@ pub fn update_config(updates: ConfigUpdates) -> Result<(), Error> {
     if let Some(rule_updates) = updates.rules {
         for (rule_name, severity) in rule_updates {
             if let Some(sev) = severity {
-                user_config.rules.insert(rule_name, u8_to_severity_mode(sev));
+                user_config
+                    .rules
+                    .insert(rule_name, u8_to_severity_mode(sev));
             } else {
                 // None means remove the override (use default)
                 user_config.rules.remove(&rule_name);
@@ -209,6 +249,25 @@ pub fn update_config(updates: ConfigUpdates) -> Result<(), Error> {
     // Apply spellcheck words update
     if let Some(words) = updates.spellcheck_words {
         user_config.spellcheck.words = words;
+    }
+
+    // Handle app-specific settings (typo checking, CSpell)
+    if let Some(typo_enabled) = updates.typo_checking_enabled {
+        let mut app_settings = load_app_settings();
+        app_settings.typo_checking_enabled = typo_enabled;
+        save_app_settings(&app_settings)?;
+    }
+
+    if let Some(cspell_enabled) = updates.cspell_enabled {
+        let mut app_settings = load_app_settings();
+        app_settings.cspell_enabled = cspell_enabled;
+        save_app_settings(&app_settings)?;
+    }
+
+    if let Some(cspell_dicts) = updates.cspell_dictionaries {
+        let mut app_settings = load_app_settings();
+        app_settings.cspell_dictionaries = cspell_dicts;
+        save_app_settings(&app_settings)?;
     }
 
     // Serialize back to YAML
@@ -235,18 +294,55 @@ fn get_user_config_path() -> PathBuf {
     PathBuf::from(home_dir).join(".autocorrectrc")
 }
 
+/// Get the path to the app settings file
+fn get_app_settings_path() -> PathBuf {
+    let home_dir = env::var("HOME")
+        .or_else(|_| env::var("USERPROFILE"))
+        .unwrap_or_else(|_| ".".to_string());
+
+    PathBuf::from(home_dir).join(".autocorrect-app.json")
+}
+
+/// Load app-specific settings
+fn load_app_settings() -> AppSettings {
+    let settings_path = get_app_settings_path();
+    if settings_path.exists() {
+        if let Ok(content) = fs::read_to_string(&settings_path) {
+            if let Ok(settings) = serde_json::from_str(&content) {
+                return settings;
+            }
+        }
+    }
+    AppSettings::default()
+}
+
+/// Save app-specific settings
+fn save_app_settings(settings: &AppSettings) -> Result<(), Error> {
+    let settings_path = get_app_settings_path();
+    let json = serde_json::to_string_pretty(settings)
+        .map_err(|e| Error::Config(format!("Failed to serialize settings: {}", e)))?;
+    fs::write(&settings_path, json)?;
+    Ok(())
+}
+
 /// Get a human-readable description for a rule
 fn get_rule_description(name: &str) -> String {
     match name {
-        "space-word" => "Add space between CJK (Chinese, Japanese, Korean) and English words".to_string(),
+        "space-word" => {
+            "Add space between CJK (Chinese, Japanese, Korean) and English words".to_string()
+        }
         "space-punctuation" => "Add space between some punctuation marks and CJK text".to_string(),
         "space-bracket" => "Add space between brackets (), [] when near CJK text".to_string(),
         "space-backticks" => "Add space between backticks `` when near CJK text".to_string(),
         "space-dash" => "Add space around dash `-` when near CJK text".to_string(),
         "space-dollar" => "Add space between dollar sign $ when near CJK text".to_string(),
-        "fullwidth" => "Convert punctuation and symbols to fullwidth characters in CJK context".to_string(),
+        "fullwidth" => {
+            "Convert punctuation and symbols to fullwidth characters in CJK context".to_string()
+        }
         "halfwidth-word" => "Convert fullwidth alphanumeric characters to halfwidth".to_string(),
-        "halfwidth-punctuation" => "Convert fullwidth punctuation to halfwidth in English text".to_string(),
+        "halfwidth-punctuation" => {
+            "Convert fullwidth punctuation to halfwidth in English text".to_string()
+        }
         "no-space-fullwidth" => "Remove unnecessary spaces near fullwidth punctuation".to_string(),
         "no-space-fullwidth-quote" => "Remove spaces around fullwidth quotes".to_string(),
         "spellcheck" => "Check spelling against custom dictionary".to_string(),
@@ -258,11 +354,7 @@ fn get_rule_description(name: &str) -> String {
 fn get_default_rule_severity(rule_name: &str) -> u8 {
     let default_config_str = include_str!("../../../../autocorrect/.autocorrectrc.default");
     if let Ok(config) = autocorrect::config::Config::from_str(default_config_str) {
-        config
-            .rules
-            .get(rule_name)
-            .map(|m| *m as u8)
-            .unwrap_or(1)
+        config.rules.get(rule_name).map(|m| *m as u8).unwrap_or(1)
     } else {
         1 // Default to error if we can't parse
     }

@@ -1,7 +1,7 @@
-use crate::commands::spellcheck::SpellCheckResult;
 use crate::commands::errors::Error;
-use tauri::{AppHandle, Emitter, Manager, State, Window};
+use crate::commands::spellcheck::{SpellCheckResult, TypoSuggestion};
 use std::sync::{Arc, Mutex};
+use tauri::{AppHandle, Emitter, Manager, State, Window};
 
 /// Popup state shared across the application
 #[derive(Debug, Clone)]
@@ -40,6 +40,7 @@ pub fn show_popup(
     y: i32,
     original_text: String,
     suggestion: String,
+    typos: Option<Vec<TypoSuggestion>>,
 ) -> Result<(), Error> {
     log::info!("show_popup called with position: ({}, {})", x, y);
 
@@ -47,10 +48,12 @@ pub fn show_popup(
     if let Some(popup_window) = app.get_webview_window("popup") {
         // Update state
         if let Some(state) = app.try_state::<SharedPopupState>() {
-            let mut state = state.0.lock().map_err(|_| Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to lock popup state"
-            )))?;
+            let mut state = state.0.lock().map_err(|_| {
+                Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Failed to lock popup state",
+                ))
+            })?;
             state.is_visible = true;
             state.position = (x, y);
             state.original_text = original_text.clone();
@@ -67,13 +70,17 @@ pub fn show_popup(
         let _ = popup_window.set_focus();
         let _ = popup_window.set_always_on_top(true);
 
-        // Emit event to frontend with the data
-        let _ = app.emit("popup-show", &serde_json::json!({
-            "originalText": original_text,
-            "suggestion": suggestion,
-            "x": x,
-            "y": y
-        }));
+        // Emit event to frontend with the data including typos
+        let _ = app.emit(
+            "popup-show",
+            &serde_json::json!({
+                "originalText": original_text,
+                "suggestion": suggestion,
+                "x": x,
+                "y": y,
+                "typos": typos.unwrap_or_default()
+            }),
+        );
 
         Ok(())
     } else {
@@ -90,10 +97,12 @@ pub fn hide_popup(app: AppHandle) -> Result<(), Error> {
     if let Some(popup_window) = app.get_webview_window("popup") {
         // Update state
         if let Some(state) = app.try_state::<SharedPopupState>() {
-            let mut state = state.0.lock().map_err(|_| Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to lock popup state"
-            )))?;
+            let mut state = state.0.lock().map_err(|_| {
+                Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Failed to lock popup state",
+                ))
+            })?;
             state.is_visible = false;
         }
 
@@ -113,17 +122,17 @@ pub fn hide_popup(app: AppHandle) -> Result<(), Error> {
 #[tauri::command]
 pub fn position_popup(app: AppHandle, x: i32, y: i32) -> Result<(), Error> {
     if let Some(popup_window) = app.get_webview_window("popup") {
-        let _ = popup_window.set_position(tauri::Position::Physical(tauri::PhysicalPosition {
-            x,
-            y,
-        }));
+        let _ =
+            popup_window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
 
         // Update state
         if let Some(state) = app.try_state::<SharedPopupState>() {
-            let mut state = state.0.lock().map_err(|_| Error::Io(std::io::Error::new(
-                std::io::ErrorKind::Other,
-                "Failed to lock popup state"
-            )))?;
+            let mut state = state.0.lock().map_err(|_| {
+                Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "Failed to lock popup state",
+                ))
+            })?;
             state.position = (x, y);
         }
 
@@ -139,10 +148,12 @@ pub fn position_popup(app: AppHandle, x: i32, y: i32) -> Result<(), Error> {
 /// Get the current popup state
 #[tauri::command]
 pub fn get_popup_state(state: State<SharedPopupState>) -> Result<serde_json::Value, Error> {
-    let state = state.0.lock().map_err(|_| Error::Io(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        "Failed to lock popup state"
-    )))?;
+    let state = state.0.lock().map_err(|_| {
+        Error::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "Failed to lock popup state",
+        ))
+    })?;
 
     Ok(serde_json::json!({
         "isVisible": state.is_visible,
@@ -168,10 +179,13 @@ pub fn accept_suggestion(app: AppHandle, text: String) -> Result<(), Error> {
     hide_popup(app.clone())?;
 
     // Emit accepted event with the corrected text
-    let _ = app.emit("suggestion-accepted", serde_json::json!({
-        "text": text,
-        "message": "Corrected text copied to clipboard. Press ⌘+V to paste."
-    }));
+    let _ = app.emit(
+        "suggestion-accepted",
+        serde_json::json!({
+            "text": text,
+            "message": "Corrected text copied to clipboard. Press ⌘+V to paste."
+        }),
+    );
 
     Ok(())
 }
@@ -193,11 +207,7 @@ pub fn reject_suggestion(app: AppHandle) -> Result<(), Error> {
 /// 3. Runs spell check on the text
 /// 4. Shows popup with suggestions if corrections are needed
 #[tauri::command]
-pub fn trigger_spell_check_workflow(
-    app: AppHandle,
-    x: i32,
-    y: i32,
-) -> Result<(), Error> {
+pub fn trigger_spell_check_workflow(app: AppHandle, x: i32, y: i32) -> Result<(), Error> {
     use crate::commands::spellcheck::spell_check;
     use crate::text_selection::{get_selected_text, TextSelectionError};
 
@@ -213,33 +223,42 @@ pub fn trigger_spell_check_workflow(
         }
         Err(TextSelectionError::NoTextSelected) => {
             log::info!("No text selected");
-            let _ = app.emit("no-text-selected", serde_json::json!({
-                "message": "Please select some text first, then press the hotkey"
-            }));
+            let _ = app.emit(
+                "no-text-selected",
+                serde_json::json!({
+                    "message": "Please select some text first, then press the hotkey"
+                }),
+            );
             return Ok(());
         }
         Err(e) => {
             log::warn!("Failed to get selected text: {}", e);
-            let _ = app.emit("error-getting-text", serde_json::json!({
-                "message": format!("Error: {}", e)
-            }));
+            let _ = app.emit(
+                "error-getting-text",
+                serde_json::json!({
+                    "message": format!("Error: {}", e)
+                }),
+            );
             return Ok(());
         }
     };
 
     if text.trim().is_empty() {
         log::info!("Selected text is empty");
-        let _ = app.emit("no-text-selected", serde_json::json!({
-            "message": "Selected text is empty"
-        }));
+        let _ = app.emit(
+            "no-text-selected",
+            serde_json::json!({
+                "message": "Selected text is empty"
+            }),
+        );
         return Ok(());
     }
 
     // Run spell check
     let result = spell_check(text)?;
 
-    // If there are changes, show popup
-    if result.has_changes && !result.corrected.is_empty() {
+    // If there are changes or typos, show popup
+    if (result.has_changes || !result.typos.is_empty()) && !result.corrected.is_empty() {
         log::info!("Spell check found corrections needed");
         show_popup(
             app,
@@ -247,14 +266,18 @@ pub fn trigger_spell_check_workflow(
             y,
             result.original,
             result.corrected,
+            Some(result.typos),
         )?;
     } else {
         // No changes needed, emit a notification
         log::info!("Spell check: no changes needed");
-        let _ = app.emit("no-changes-needed", serde_json::json!({
-            "message": "Text is already correct",
-            "original": result.original
-        }));
+        let _ = app.emit(
+            "no-changes-needed",
+            serde_json::json!({
+                "message": "Text is already correct",
+                "original": result.original
+            }),
+        );
     }
 
     Ok(())

@@ -2,23 +2,34 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 
+interface TypoSuggestion {
+	typo: string;
+	suggestions: string[];
+	line: number;
+	col: number;
+}
+
 interface PopupData {
 	originalText: string;
 	suggestion: string;
 	x: number;
 	y: number;
+	typos?: TypoSuggestion[];
 }
 
 let currentOriginalText = '';
 let currentSuggestion = '';
+let currentTypos: TypoSuggestion[] = [];
 let isEditing = false;
 
 // DOM Elements
 const popup = document.getElementById('popup')!;
 const originalTextEl = document.getElementById('originalText')!;
 const suggestionTextEl = document.getElementById('suggestionText')!;
+const typosListEl = document.getElementById('typosList')!;
 const originalEl = document.getElementById('original')!;
 const suggestionEl = document.getElementById('suggestion')!;
+const typosEl = document.getElementById('typos')!;
 const editModeEl = document.getElementById('editMode')!;
 const editTextarea = document.getElementById('editTextarea') as HTMLTextAreaElement;
 const actionsEl = document.getElementById('actions')!;
@@ -36,10 +47,17 @@ const acceptEditBtn = document.getElementById('acceptEditBtn')!;
 listen<PopupData>('popup-show', (event) => {
 	const data = event.payload;
 	console.log('Popup show:', data);
+	console.log('Typos received:', data.typos);
+	console.log('Typos type:', typeof data.typos);
+	console.log('Typos is array?', Array.isArray(data.typos));
 
 	// Update content
 	currentOriginalText = data.originalText;
 	currentSuggestion = data.suggestion;
+	currentTypos = data.typos || [];
+	
+	console.log('currentTypos:', currentTypos);
+	console.log('currentTypos length:', currentTypos.length);
 
 	// Update UI
 	originalTextEl.textContent = data.originalText;
@@ -51,6 +69,10 @@ listen<PopupData>('popup-show', (event) => {
 	} else {
 		originalEl.classList.remove('hidden');
 	}
+
+	// Render typos list
+	console.log('About to render typos list with:', currentTypos);
+	renderTyposList(currentTypos);
 
 	// Reset edit mode
 	isEditing = false;
@@ -111,6 +133,7 @@ function hidePopup() {
 function resetUI() {
 	currentOriginalText = '';
 	currentSuggestion = '';
+	currentTypos = [];
 	isEditing = false;
 	editModeEl.classList.remove('active');
 	actionsEl.classList.remove('hidden');
@@ -118,6 +141,116 @@ function resetUI() {
 	originalTextEl.textContent = '-';
 	suggestionTextEl.textContent = '-';
 	editTextarea.value = '';
+	typosListEl.innerHTML = '';
+	typosEl.classList.add('hidden');
+}
+
+function renderTyposList(typos: TypoSuggestion[]) {
+	console.log('renderTyposList called with:', typos);
+	console.log('typos length:', typos?.length);
+	
+	if (!typos || typos.length === 0) {
+		console.log('No typos, hiding typos section');
+		typosEl.classList.add('hidden');
+		return;
+	}
+
+	console.log('Showing typos section for', typos.length, 'typos');
+	typosEl.classList.remove('hidden');
+	typosListEl.innerHTML = '';
+
+	typos.forEach((typo, index) => {
+		console.log(`Rendering typo ${index}:`, typo);
+		const typoItem = document.createElement('div');
+		typoItem.className = 'typo-item';
+
+		const typoError = document.createElement('div');
+		typoError.className = 'typo-error';
+		typoError.innerHTML = `
+			<span class="typo-word">${escapeHtml(typo.typo)}</span>
+			<span class="typo-location">Line ${typo.line}, Col ${typo.col}</span>
+		`;
+
+		const suggestionsList = document.createElement('div');
+		suggestionsList.className = 'typo-suggestions';
+
+		typo.suggestions.slice(0, 3).forEach((suggestion, index) => {
+			const suggestionBtn = document.createElement('button');
+			suggestionBtn.className = 'typo-suggestion-btn';
+			suggestionBtn.textContent = suggestion;
+			suggestionBtn.title = `Replace "${typo.typo}" with "${suggestion}"`;
+			suggestionBtn.onclick = () => applyTypoSuggestion(typo.typo, suggestion);
+			suggestionsList.appendChild(suggestionBtn);
+		});
+
+		// Add "Add to Custom" button if there are suggestions
+		if (typo.suggestions.length > 0) {
+			const addCustomBtn = document.createElement('button');
+			addCustomBtn.className = 'typo-custom-btn';
+			addCustomBtn.textContent = '+ Add to Custom';
+			addCustomBtn.title = `Add "${typo.typo} → ${typo.suggestions[0]}" to custom corrections`;
+			addCustomBtn.onclick = () => addToCustomCorrections(typo.typo, typo.suggestions[0]);
+			suggestionsList.appendChild(addCustomBtn);
+		}
+
+		typoItem.appendChild(typoError);
+		typoItem.appendChild(suggestionsList);
+		typosListEl.appendChild(typoItem);
+	});
+	
+	console.log('Finished rendering typos, typosListEl children:', typosListEl.children.length);
+}
+
+function applyTypoSuggestion(typo: string, suggestion: string) {
+	// Replace the typo in the current suggestion
+	const regex = new RegExp(`\\b${escapeRegex(typo)}\\b`, 'gi');
+	currentSuggestion = currentSuggestion.replace(regex, suggestion);
+	suggestionTextEl.textContent = currentSuggestion;
+
+	// Remove the typo from the list
+	currentTypos = currentTypos.filter((t) => t.typo !== typo);
+	renderTyposList(currentTypos);
+}
+
+async function addToCustomCorrections(typo: string, correction: string) {
+	try {
+		await invoke('add_custom_correction', { typo, correction });
+		console.log(`Added custom correction: ${typo} → ${correction}`);
+		
+		// Show feedback - we could add a notification system, but for now just remove it from the list
+		// as if it was applied
+		currentTypos = currentTypos.filter((t) => t.typo !== typo);
+		renderTyposList(currentTypos);
+		
+		// Optional: Show a brief success message
+		showNotification(`Added "${typo} → ${correction}" to custom corrections.`);
+	} catch (error) {
+		console.error('Failed to add custom correction:', error);
+		showNotification(`Failed to add custom correction: ${error}`, true);
+	}
+}
+
+function showNotification(message: string, isError = false) {
+	// Create a notification element
+	const notification = document.createElement('div');
+	notification.className = isError ? 'notification notification-error' : 'notification notification-success';
+	notification.textContent = message;
+	document.body.appendChild(notification);
+	
+	// Remove after 3 seconds
+	setTimeout(() => {
+		notification.remove();
+	}, 3000);
+}
+
+function escapeHtml(text: string): string {
+	const div = document.createElement('div');
+	div.textContent = text;
+	return div.innerHTML;
+}
+
+function escapeRegex(text: string): string {
+	return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 function startEdit() {

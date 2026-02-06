@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Popup Data</title>
+</head>
+<body>
+    <h1>Test Popup Data</h1>
+    <button onclick="testPopupShow()">Test popup-show event</button>
+    <pre id="output"></pre>
+
+    <script>
+        function testPopupShow() {
+            const testData = {
+                originalText: "naem function",
+                suggestion: "naem function",
+                x: 100,
+                y: 100,
+                typos: [
+                    {
+                        typo: "naem",
+                        suggestions: ["name"],
+                        line: 1,
+                        col: 1
+                    }
+                ]
+            };
+
+            document.getElementById('output').textContent = JSON.stringify(testData, null, 2);
+            
+            console.log('Test data:', testData);
+            console.log('Typos array:', testData.typos);
+            console.log('Typos length:', testData.typos.length);
+            console.log('Typos is array?', Array.isArray(testData.typos));
+        }
+    </script>
+</body>
+</html>

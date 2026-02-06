@@ -30,9 +30,9 @@ pub struct ClipboardMonitorConfig {
 impl Default for ClipboardMonitorConfig {
     fn default() -> Self {
         Self {
-            poll_interval_ms: 500,  // Check every 500ms
-            cjk_only: true,         // Only trigger on CJK text
-            debounce_ms: 1000,      // Ignore changes within 1s
+            poll_interval_ms: 500, // Check every 500ms
+            cjk_only: true,        // Only trigger on CJK text
+            debounce_ms: 1000,     // Ignore changes within 1s
         }
     }
 }
@@ -112,7 +112,9 @@ pub fn create_clipboard_channel(
                         Ok(text) => {
                             // Skip empty or whitespace-only text
                             if text.trim().is_empty() {
-                                thread::sleep(Duration::from_millis(current_config.poll_interval_ms));
+                                thread::sleep(Duration::from_millis(
+                                    current_config.poll_interval_ms,
+                                ));
                                 continue;
                             }
 
@@ -185,7 +187,8 @@ impl ClipboardHandle {
     /// Stop the clipboard monitor
     pub fn stop(self) {
         log::info!("Stopping clipboard monitor");
-        self.running.store(false, std::sync::atomic::Ordering::Relaxed);
+        self.running
+            .store(false, std::sync::atomic::Ordering::Relaxed);
         let _ = self.control_tx.send(ClipboardControl::Stop);
         if let Some(handle) = self.thread_handle {
             let _ = handle.join();
@@ -203,7 +206,10 @@ impl ClipboardHandle {
     }
 
     /// Update the monitoring configuration
-    pub fn update_config(&self, config: ClipboardMonitorConfig) -> Result<(), mpsc::SendError<ClipboardControl>> {
+    pub fn update_config(
+        &self,
+        config: ClipboardMonitorConfig,
+    ) -> Result<(), mpsc::SendError<ClipboardControl>> {
         self.control_tx.send(ClipboardControl::UpdateConfig(config))
     }
 }
@@ -299,7 +305,7 @@ mod tests {
     #[test]
     fn test_contains_cjk_fullwidth() {
         assert!(contains_cjk("，。！")); // Full-width punctuation
-        assert!(!contains_cjk(",.!"));  // Half-width punctuation
+        assert!(!contains_cjk(",.!")); // Half-width punctuation
     }
 
     #[test]

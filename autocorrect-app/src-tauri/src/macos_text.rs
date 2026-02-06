@@ -5,10 +5,10 @@
 //! - Clipboard for text retrieval
 //! - AppleScript for getting selected text position
 
+use std::process::Command;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::thread;
 use std::time::Duration;
-use std::process::Command;
 
 /// Global mouse position tracked by rdev
 #[cfg(target_os = "macos")]
@@ -52,12 +52,10 @@ fn get_current_mouse_position_cg() -> std::result::Result<(i32, i32), ()> {
     use core_graphics::event::{CGEvent, CGEventTapLocation};
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
-    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState)
-        .map_err(|_| ())?;
+    let source = CGEventSource::new(CGEventSourceStateID::HIDSystemState).map_err(|_| ())?;
 
     // Query the current mouse location
-    let event = CGEvent::new(source)
-        .map_err(|_| ())?;
+    let event = CGEvent::new(source).map_err(|_| ())?;
 
     let point = event.location();
     Ok((point.x as i32, point.y as i32))
@@ -101,8 +99,9 @@ fn simulate_copy() -> Result<()> {
     use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
 
     // Create event source with private state ID
-    let source = CGEventSource::new(CGEventSourceStateID::Private)
-        .map_err(|e| AccessibilityError::KeyboardError(format!("Failed to create event source: {:?}", e)))?;
+    let source = CGEventSource::new(CGEventSourceStateID::Private).map_err(|e| {
+        AccessibilityError::KeyboardError(format!("Failed to create event source: {:?}", e))
+    })?;
 
     // Key codes: Command = 0x37 (55), C = 0x08 (8)
     // Use raw values since KeyCode constants may not be accessible
@@ -110,32 +109,36 @@ fn simulate_copy() -> Result<()> {
     const C_KEYCODE: u16 = 0x08;
 
     // Command key down
-    let cmd_down = CGEvent::new_keyboard_event(source.clone(), CMD_KEYCODE, true)
-        .map_err(|e| AccessibilityError::KeyboardError(format!("Failed to create Cmd down: {:?}", e)))?;
+    let cmd_down = CGEvent::new_keyboard_event(source.clone(), CMD_KEYCODE, true).map_err(|e| {
+        AccessibilityError::KeyboardError(format!("Failed to create Cmd down: {:?}", e))
+    })?;
     cmd_down.set_flags(core_graphics::event::CGEventFlags::CGEventFlagCommand);
     cmd_down.post(CGEventTapLocation::HID);
 
     thread::sleep(Duration::from_millis(15));
 
     // C key down
-    let c_down = CGEvent::new_keyboard_event(source.clone(), C_KEYCODE, true)
-        .map_err(|e| AccessibilityError::KeyboardError(format!("Failed to create C down: {:?}", e)))?;
+    let c_down = CGEvent::new_keyboard_event(source.clone(), C_KEYCODE, true).map_err(|e| {
+        AccessibilityError::KeyboardError(format!("Failed to create C down: {:?}", e))
+    })?;
     c_down.set_flags(core_graphics::event::CGEventFlags::CGEventFlagCommand);
     c_down.post(CGEventTapLocation::HID);
 
     thread::sleep(Duration::from_millis(15));
 
     // C key up
-    let c_up = CGEvent::new_keyboard_event(source.clone(), C_KEYCODE, false)
-        .map_err(|e| AccessibilityError::KeyboardError(format!("Failed to create C up: {:?}", e)))?;
+    let c_up = CGEvent::new_keyboard_event(source.clone(), C_KEYCODE, false).map_err(|e| {
+        AccessibilityError::KeyboardError(format!("Failed to create C up: {:?}", e))
+    })?;
     c_up.set_flags(core_graphics::event::CGEventFlags::CGEventFlagCommand);
     c_up.post(CGEventTapLocation::HID);
 
     thread::sleep(Duration::from_millis(15));
 
     // Command key up
-    let cmd_up = CGEvent::new_keyboard_event(source, CMD_KEYCODE, false)
-        .map_err(|e| AccessibilityError::KeyboardError(format!("Failed to create Cmd up: {:?}", e)))?;
+    let cmd_up = CGEvent::new_keyboard_event(source, CMD_KEYCODE, false).map_err(|e| {
+        AccessibilityError::KeyboardError(format!("Failed to create Cmd up: {:?}", e))
+    })?;
     cmd_up.post(CGEventTapLocation::HID);
 
     Ok(())
@@ -164,7 +167,10 @@ pub fn get_selected_text_via_accessibility() -> Result<String> {
         match Clipboard::new().and_then(|mut cb| cb.get_text()) {
             Ok(text) => {
                 if !text.trim().is_empty() {
-                    log::info!("Got selected text via copy simulation: {} chars", text.chars().count());
+                    log::info!(
+                        "Got selected text via copy simulation: {} chars",
+                        text.chars().count()
+                    );
                     return Ok(text);
                 }
             }
@@ -208,10 +214,7 @@ pub fn get_selected_text_position() -> Option<(i32, i32)> {
     end tell
     "#;
 
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output();
+    let output = Command::new("osascript").arg("-e").arg(script).output();
 
     match output {
         Ok(result) if result.status.success() => {

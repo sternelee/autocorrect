@@ -14,17 +14,21 @@ const CONFIG_FILE: &str = "hotkey-config.json";
 /// Get the configuration directory path
 fn get_config_dir() -> Result<PathBuf, Error> {
     let config_dir = dirs::config_dir()
-        .ok_or_else(|| Error::Io(std::io::Error::new(
-            std::io::ErrorKind::NotFound,
-            "Configuration directory not found",
-        )))?
+        .ok_or_else(|| {
+            Error::Io(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                "Configuration directory not found",
+            ))
+        })?
         .join("autocorrect-app");
 
     // Create directory if it doesn't exist
-    fs::create_dir_all(&config_dir).map_err(|e| Error::Io(std::io::Error::new(
-        std::io::ErrorKind::Other,
-        format!("Failed to create config directory: {}", e),
-    )))?;
+    fs::create_dir_all(&config_dir).map_err(|e| {
+        Error::Io(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            format!("Failed to create config directory: {}", e),
+        ))
+    })?;
 
     Ok(config_dir)
 }
@@ -114,7 +118,9 @@ pub struct UpdateHotkeyConfigRequest {
 
 /// Update the hotkey configuration
 #[tauri::command]
-pub fn update_hotkey_config(request: UpdateHotkeyConfigRequest) -> Result<HotkeyConfigResponse, Error> {
+pub fn update_hotkey_config(
+    request: UpdateHotkeyConfigRequest,
+) -> Result<HotkeyConfigResponse, Error> {
     let config = HotkeyConfig::new(request.key.clone(), request.modifiers);
 
     // Validate the configuration

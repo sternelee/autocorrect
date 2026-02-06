@@ -478,6 +478,9 @@ dependencies = [
  "tauri-plugin-log",
  "thiserror 2.0.12",
  "tokio",
+ "toml 0.8.2",
+ "typos",
+ "typos-cli",
 ]
 
 [[package]]

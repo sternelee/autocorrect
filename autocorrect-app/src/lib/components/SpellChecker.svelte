@@ -17,12 +17,19 @@
 		corrected: string;
 		severity: number;
 	}> = [];
+	let typos: Array<{
+		typo: string;
+		suggestions: string[];
+		line: number;
+		col: number;
+	}> = [];
 
 	async function performSpellCheck() {
 		if (!currentText.trim()) {
 			correctedText = '';
 			hasChanges = false;
 			lineChanges = [];
+			typos = [];
 			return;
 		}
 
@@ -39,15 +46,25 @@
 					corrected: string;
 					severity: number;
 				}>;
+				typos: Array<{
+					typo: string;
+					suggestions: string[];
+					line: number;
+					col: number;
+				}>;
 			}>('spell_check', { text: currentText });
 
 			correctedText = result.corrected;
 			hasChanges = result.has_changes;
 			lineChanges = result.line_changes;
+			typos = result.typos || [];
+			
+			console.log('Spell check result:', { hasChanges, lineChanges: lineChanges.length, typos: typos.length });
 		} catch (error) {
 			console.error('Spell check failed:', error);
 			correctedText = currentText;
 			hasChanges = false;
+			typos = [];
 		} finally {
 			isChecking = false;
 		}
@@ -58,6 +75,26 @@
 			currentText = correctedText;
 			hasChanges = false;
 			lineChanges = [];
+			typos = [];
+		}
+	}
+
+	function applyTypoSuggestion(typo: string, suggestion: string) {
+		// Replace typo with suggestion in currentText (case-insensitive, whole word)
+		const regex = new RegExp(`\\b${typo}\\b`, 'gi');
+		currentText = currentText.replace(regex, suggestion);
+		
+		// Re-run spell check to update results
+		performSpellCheck();
+	}
+
+	async function addToCustomCorrections(typo: string, correction: string) {
+		try {
+			await invoke('add_custom_correction', { typo, correction });
+			// Remove this typo from the list
+			typos = typos.filter(t => t.typo !== typo);
+		} catch (error) {
+			console.error('Failed to add custom correction:', error);
 		}
 	}
 
@@ -161,6 +198,55 @@
 									<span class="text-destructive line-through">{change.original}</span>
 									<span class="text-green-600 dark:text-green-400">{change.corrected}</span>
 								</div>
+							</div>
+						{/each}
+					</div>
+				</div>
+			{/if}
+
+			<!-- Typos Display -->
+			{#if typos.length > 0}
+				<div class="space-y-2">
+					<h3 class="text-sm font-medium">Spelling Issues ({typos.length})</h3>
+					<div class="space-y-2 max-h-[300px] overflow-y-auto">
+						{#each typos as typo (typo.typo + ':' + typo.line + ':' + typo.col)}
+							<div class="flex flex-col gap-2 rounded-md border border-yellow-400 bg-yellow-50 dark:bg-yellow-950/20 p-3 text-sm">
+								<div class="flex items-start justify-between">
+									<div class="flex flex-col gap-1">
+										<span class="font-semibold text-red-600 dark:text-red-400">
+											"{typo.typo}"
+										</span>
+										<span class="text-xs text-muted-foreground">
+											Line {typo.line}, Column {typo.col}
+										</span>
+									</div>
+								</div>
+								
+								{#if typo.suggestions.length > 0}
+									<div class="flex flex-col gap-2">
+										<span class="text-xs font-medium text-muted-foreground">Suggestions:</span>
+										<div class="flex flex-wrap gap-2">
+											{#each typo.suggestions.slice(0, 5) as suggestion}
+												<button
+													onclick={() => applyTypoSuggestion(typo.typo, suggestion)}
+													class="rounded bg-green-600 px-2 py-1 text-xs text-white hover:bg-green-700 dark:bg-green-700 dark:hover:bg-green-600"
+												>
+													{suggestion}
+												</button>
+											{/each}
+										</div>
+										{#if typo.suggestions.length > 0}
+											<button
+												onclick={() => addToCustomCorrections(typo.typo, typo.suggestions[0])}
+												class="self-start rounded bg-blue-600 px-2 py-1 text-xs text-white hover:bg-blue-700 dark:bg-blue-700 dark:hover:bg-blue-600"
+											>
+												Add "{typo.typo}" → "{typo.suggestions[0]}" to Custom Corrections
+											</button>
+										{/if}
+									</div>
+								{:else}
+									<span class="text-xs text-muted-foreground">No suggestions available</span>
+								{/if}
 							</div>
 						{/each}
 					</div>

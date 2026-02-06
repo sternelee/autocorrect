@@ -150,6 +150,119 @@
 		.hidden {
 			display: none !important;
 		}
+		.typos {
+			display: flex;
+			flex-direction: column;
+			gap: 8px;
+			padding: 8px;
+			background: #fef3c7;
+			border-radius: 8px;
+			border: 1px solid #fbbf24;
+		}
+		.typos-header {
+			font-size: 12px;
+			font-weight: 600;
+			color: #92400e;
+			display: flex;
+			align-items: center;
+			gap: 4px;
+		}
+		.typos-list {
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+		}
+		.typo-item {
+			background: white;
+			padding: 8px;
+			border-radius: 6px;
+			display: flex;
+			flex-direction: column;
+			gap: 6px;
+		}
+		.typo-error {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+		}
+		.typo-word {
+			font-weight: 600;
+			color: #dc2626;
+			text-decoration: underline wavy #dc2626;
+		}
+		.typo-location {
+			font-size: 10px;
+			color: #6b7280;
+		}
+		.typo-suggestions {
+			display: flex;
+			gap: 4px;
+			flex-wrap: wrap;
+		}
+		.typo-suggestion-btn {
+			padding: 4px 8px;
+			border: 1px solid #d1d5db;
+			background: #f9fafb;
+			border-radius: 4px;
+			font-size: 11px;
+			color: #374151;
+			cursor: pointer;
+			-webkit-app-region: no-drag;
+			transition: all 0.15s ease;
+		}
+		.typo-suggestion-btn:hover {
+			background: #16a34a;
+			color: white;
+			border-color: #16a34a;
+		}
+		.typo-custom-btn {
+			padding: 4px 8px;
+			border: 1px solid #9333ea;
+			background: #faf5ff;
+			border-radius: 4px;
+			font-size: 11px;
+			color: #9333ea;
+			cursor: pointer;
+			-webkit-app-region: no-drag;
+			transition: all 0.15s ease;
+			font-weight: 500;
+		}
+		.typo-custom-btn:hover {
+			background: #9333ea;
+			color: white;
+		}
+		.notification {
+			position: fixed;
+			top: 8px;
+			left: 50%;
+			transform: translateX(-50%);
+			padding: 8px 16px;
+			border-radius: 6px;
+			font-size: 11px;
+			font-weight: 500;
+			box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+			z-index: 1000;
+			animation: slideDown 0.3s ease;
+			-webkit-app-region: no-drag;
+		}
+		.notification-success {
+			background: #16a34a;
+			color: white;
+		}
+		.notification-error {
+			background: #dc2626;
+			color: white;
+		}
+		@keyframes slideDown {
+			from {
+				opacity: 0;
+				transform: translateX(-50%) translateY(-10px);
+			}
+			to {
+				opacity: 1;
+				transform: translateX(-50%) translateY(0);
+			}
+		}
 	</style>
 	</head>
 	<body>
@@ -167,6 +280,12 @@
 					<span class="label">Suggested:</span>
 					<span class="text" id="suggestionText">-</span>
 				</div>
+			</div>
+			<div class="typos hidden" id="typos">
+				<div class="typos-header">
+					⚠️ Spelling Issues
+				</div>
+				<div class="typos-list" id="typosList"></div>
 			</div>
 			<div class="edit-mode" id="editMode">
 				<textarea class="edit-textarea" id="editTextarea" placeholder="Custom correction..."></textarea>
