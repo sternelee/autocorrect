@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: transparent;
+            pointer-events: none;
+        }
+        .typo-underline {
+            position: absolute;
+            height: 3px;
+            background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='6' height='3' viewBox='0 0 6 3'%3E%3Cpath d='M0 2 Q 1.5 0, 3 2 T 6 2' fill='none' stroke='red' stroke-width='1'/%3E%3C/svg%3E") repeat-x;
+            pointer-events: none;
+            z-index: 9999;
+            animation: fadeIn 0.3s ease-in;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div id="markers-container"></div>
+    <script type="module">
+        import { listen } from 'https://esm.run/@tauri-apps/api/event';
+
+        const container = document.getElementById('markers-container');
+
+        listen('update-markers', (event) => {
+            const markers = event.payload;
+            container.innerHTML = '';
+            
+            markers.forEach(marker => {
+                const el = document.createElement('div');
+                el.className = 'typo-underline';
+                
+                // 这里的 y 坐标需要根据 macOS 坐标系做微调
+                // Accessibility API 的 y 是从屏幕底部向上，还是顶部向下取决于具体调用
+                // 通常需要在这里根据 window.innerHeight 做转换
+                el.style.left = `${marker.x}px`;
+                el.style.top = `${marker.y + marker.height - 2}px`;
+                el.style.width = `${marker.width}px`;
+                
+                container.appendChild(el);
+            });
+        });
+    </script>
+</body>
+</html>
