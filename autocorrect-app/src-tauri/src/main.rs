@@ -2,5 +2,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-  autocorrect_app_lib::run();
+    autocorrect_app_lib::run();
 }

@@ -1,8 +1,8 @@
-use serde::Serialize;
-use tauri::{AppHandle, Manager, WebviewWindow, WebviewWindowBuilder, Emitter};
+use cocoa::base::id;
 use core_graphics::display::CGRect;
 use objc::{msg_send, sel, sel_impl};
-use cocoa::base::id;
+use serde::Serialize;
+use tauri::{AppHandle, Emitter, Manager, WebviewWindow, WebviewWindowBuilder};
 
 #[derive(Debug, Serialize, Clone)]
 pub struct TypoMarker {
@@ -42,7 +42,7 @@ impl OverlayManager {
             .shadow(false)
             .visible(false)
             .build()?;
-            
+
             // 设置点击穿透 (macOS 专用)
             #[cfg(target_os = "macos")]
             {
@@ -51,7 +51,7 @@ impl OverlayManager {
                     let _: () = msg_send![ns_win, setIgnoresMouseEvents: true];
                 }
             }
-            
+
             Ok(win)
         }
     }

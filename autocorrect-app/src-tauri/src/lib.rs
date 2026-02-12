@@ -3,10 +3,10 @@ mod commands;
 mod cspell;
 mod hotkey;
 mod macos_text;
+mod overlay;
 mod popup;
 mod text_selection;
 mod typocheck;
-mod overlay;
 
 use commands::config::{get_config, get_default_config, get_rules, update_config};
 use commands::custom_corrections::{
@@ -21,12 +21,12 @@ use commands::spellcheck::{
     get_clipboard_text, load_config, save_config, set_clipboard_text, spell_check,
 };
 use hotkey::HotkeyEvent;
+use overlay::{OverlayManager, TypoMarker};
 use popup::SharedPopupState;
 use std::sync::mpsc::TryRecvError;
 use std::thread;
 use tauri::{Emitter, Manager};
 use text_selection::get_cursor_position;
-use overlay::{OverlayManager, TypoMarker};
 
 // Import popup commands for the invoke handler
 use popup::{
@@ -73,11 +73,9 @@ pub fn run() {
 
             // 核心：启动系统级下划线同步循环
             let app_handle_for_sync = app.handle().clone();
-            thread::spawn(move || {
-                loop {
-                    sync_system_typos(&app_handle_for_sync);
-                    thread::sleep(std::time::Duration::from_millis(800));
-                }
+            thread::spawn(move || loop {
+                sync_system_typos(&app_handle_for_sync);
+                thread::sleep(std::time::Duration::from_millis(800));
             });
 
             // Spawn thread to handle hotkey events and trigger spell check workflow
@@ -232,8 +230,11 @@ fn sync_system_typos(app: &tauri::AppHandle) {
             let mut markers = Vec::new();
 
             // 3. 为每个错误获取屏幕坐标
-            for typo in typos.iter().take(10) { // 限制数量防止卡顿
-                if let Ok((_, rect)) = macos_text::get_focused_element_data(typo.byte_offset, typo.typo.len()) {
+            for typo in typos.iter().take(10) {
+                // 限制数量防止卡顿
+                if let Ok((_, rect)) =
+                    macos_text::get_focused_element_data(typo.byte_offset, typo.typo.len())
+                {
                     if rect.size.width > 0.0 {
                         markers.push(TypoMarker {
                             id: format!("{}-{}", typo.byte_offset, typo.typo),
