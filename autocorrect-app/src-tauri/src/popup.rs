@@ -1,6 +1,8 @@
 use crate::commands::errors::Error;
 use crate::commands::spellcheck::{SpellCheckResult, TypoSuggestion};
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State, Window};
 
 /// Popup state shared across the application
@@ -10,6 +12,7 @@ pub struct PopupState {
     position: (i32, i32),
     original_text: String,
     suggestion: String,
+    source_app_name: Option<String>,
 }
 
 impl PopupState {
@@ -19,6 +22,7 @@ impl PopupState {
             position: (0, 0),
             original_text: String::new(),
             suggestion: String::new(),
+            source_app_name: None,
         }
     }
 }
@@ -58,6 +62,10 @@ pub fn show_popup(
             state.position = (x, y);
             state.original_text = original_text.clone();
             state.suggestion = suggestion.clone();
+            #[cfg(target_os = "macos")]
+            {
+                state.source_app_name = get_frontmost_app_name_macos();
+            }
         }
 
         // Position the window
@@ -160,25 +168,43 @@ pub fn get_popup_state(state: State<SharedPopupState>) -> Result<serde_json::Val
         "x": state.position.0,
         "y": state.position.1,
         "originalText": state.original_text,
-        "suggestion": state.suggestion
+        "suggestion": state.suggestion,
+        "sourceAppName": state.source_app_name
     }))
 }
 
-/// Accept the suggestion - set clipboard to corrected text
-///
-/// Note: Due to conflicts between rdev (global hotkey listener) and enigo (keyboard simulation),
-/// automatic paste simulation has been disabled. The corrected text will be copied to clipboard
-/// and the user should manually paste (⌘+V).
+/// Accept the suggestion and apply to the currently selected text.
 #[tauri::command]
 pub fn accept_suggestion(app: AppHandle, text: String) -> Result<(), Error> {
-    // Set clipboard to the corrected text
+    #[cfg(target_os = "macos")]
+    {
+        match apply_suggestion_to_selection_macos(app.clone(), &text) {
+            Ok(()) => {
+                let _ = app.emit(
+                    "suggestion-accepted",
+                    serde_json::json!({
+                        "text": text,
+                        "message": "Suggestion applied to selected text."
+                    }),
+                );
+                return Ok(());
+            }
+            Err(e) => {
+                log::warn!(
+                    "Auto-apply suggestion failed, fallback to clipboard-only mode: {}",
+                    e
+                );
+            }
+        }
+    }
+
+    // Fallback: keep clipboard-only behavior.
     use crate::commands::spellcheck::set_clipboard_text;
     set_clipboard_text(text.clone())?;
 
     // Hide popup
     hide_popup(app.clone())?;
 
-    // Emit accepted event with the corrected text
     let _ = app.emit(
         "suggestion-accepted",
         serde_json::json!({
@@ -188,6 +214,93 @@ pub fn accept_suggestion(app: AppHandle, text: String) -> Result<(), Error> {
     );
 
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn apply_suggestion_to_selection_macos(app: AppHandle, text: &str) -> Result<(), Error> {
+    let source_app_name = app
+        .try_state::<SharedPopupState>()
+        .and_then(|state| state.0.lock().ok().and_then(|s| s.source_app_name.clone()));
+
+    let mut clipboard = arboard::Clipboard::new()
+        .map_err(|e| Error::Clipboard(format!("Failed to access clipboard: {e}")))?;
+    let previous_clipboard = clipboard.get_text().ok();
+
+    clipboard
+        .set_text(text.to_string())
+        .map_err(|e| Error::Clipboard(format!("Failed to set clipboard text: {e}")))?;
+
+    // Hide popup first so focus returns to the previously active app/input.
+    hide_popup(app)?;
+    thread::sleep(Duration::from_millis(120));
+
+    if let Some(app_name) = source_app_name {
+        if app_name != "autocorrect-app" && app_name != "AutoCorrect" {
+            activate_app_macos(&app_name)?;
+            thread::sleep(Duration::from_millis(120));
+        }
+    }
+
+    let status = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg("tell application \"System Events\" to keystroke \"v\" using command down")
+        .status()
+        .map_err(|e| Error::InputSimulation(format!("Failed to trigger paste: {e}")))?;
+
+    if !status.success() {
+        restore_clipboard(&mut clipboard, previous_clipboard);
+        return Err(Error::InputSimulation(
+            "Paste simulation command failed".to_string(),
+        ));
+    }
+
+    thread::sleep(Duration::from_millis(80));
+    restore_clipboard(&mut clipboard, previous_clipboard);
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn restore_clipboard(clipboard: &mut arboard::Clipboard, previous_clipboard: Option<String>) {
+    if let Some(old_text) = previous_clipboard {
+        let _ = clipboard.set_text(old_text);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn get_frontmost_app_name_macos() -> Option<String> {
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg("tell application \"System Events\" to get name of first application process whose frontmost is true")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn activate_app_macos(app_name: &str) -> Result<(), Error> {
+    let escaped = app_name.replace('\\', "\\\\").replace('"', "\\\"");
+    let script = format!("tell application \"{}\" to activate", escaped);
+    let status = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .status()
+        .map_err(|e| Error::InputSimulation(format!("Failed to activate source app: {e}")))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(Error::InputSimulation(
+            "Failed to activate source app".to_string(),
+        ))
+    }
 }
 
 /// Reject the suggestion - just hide popup

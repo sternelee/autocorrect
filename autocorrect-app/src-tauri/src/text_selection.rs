@@ -1,6 +1,8 @@
 //! System-wide text selection using macOS Accessibility API
 
 use crate::macos_text::{self, AccessibilityError};
+use std::thread;
+use std::time::Duration;
 
 /// Error type for text selection operations
 #[derive(Debug, thiserror::Error)]
@@ -37,8 +39,72 @@ pub fn get_active_text() -> Result<String> {
 
 /// 获取选中的文字（保持兼容性）
 pub fn get_selected_text() -> Result<String> {
-    // 现在的版本优先尝试直接从 UI 树获取，或者引导用户
-    get_active_text()
+    #[cfg(target_os = "macos")]
+    {
+        match macos_text::get_selected_text() {
+            Ok(text) => {
+                log::info!("Selected text fetched via AXSelectedText");
+                Ok(text)
+            }
+            Err(AccessibilityError::PermissionDenied) => Err(TextSelectionError::PermissionDenied),
+            Err(AccessibilityError::NoTextSelected | AccessibilityError::NoFocusedElement) => {
+                log::info!("AX selected text unavailable, trying clipboard fallback");
+                get_selected_text_via_clipboard_fallback()
+            }
+            Err(e) => Err(TextSelectionError::ApiError(e.to_string())),
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err(TextSelectionError::NoTextFound)
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn get_selected_text_via_clipboard_fallback() -> Result<String> {
+    let mut clipboard = arboard::Clipboard::new()
+        .map_err(|e| TextSelectionError::ApiError(format!("Clipboard init failed: {e}")))?;
+
+    let old_clipboard = clipboard.get_text().ok();
+    let sentinel = format!("__autocorrect_sentinel_{}__", std::process::id());
+
+    // Write a sentinel before simulating copy so we can detect whether selection was copied.
+    clipboard
+        .set_text(sentinel.clone())
+        .map_err(|e| TextSelectionError::ApiError(format!("Clipboard write failed: {e}")))?;
+
+    let status = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg("tell application \"System Events\" to keystroke \"c\" using command down")
+        .status()
+        .map_err(|e| TextSelectionError::ApiError(format!("Copy simulation failed: {e}")))?;
+
+    if !status.success() {
+        restore_clipboard(&mut clipboard, old_clipboard);
+        return Err(TextSelectionError::ApiError(
+            "Copy simulation command failed".to_string(),
+        ));
+    }
+
+    thread::sleep(Duration::from_millis(150));
+
+    let copied = clipboard.get_text().unwrap_or_default();
+    restore_clipboard(&mut clipboard, old_clipboard);
+
+    if copied.trim().is_empty() || copied == sentinel {
+        log::warn!("Clipboard fallback did not capture selected text");
+        return Err(TextSelectionError::NoTextSelected);
+    }
+
+    log::info!("Selected text fetched via clipboard fallback");
+    Ok(copied)
+}
+
+#[cfg(target_os = "macos")]
+fn restore_clipboard(clipboard: &mut arboard::Clipboard, previous: Option<String>) {
+    if let Some(text) = previous {
+        let _ = clipboard.set_text(text);
+    }
 }
 
 pub fn get_cursor_position() -> (i32, i32) {
