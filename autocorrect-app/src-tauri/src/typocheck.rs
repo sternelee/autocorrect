@@ -1,5 +1,5 @@
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{LazyLock, RwLock};
 use typos::Status;
@@ -15,6 +15,37 @@ use typos::Status;
 //
 // To ignore words (prevent false positives), add them to the AutoCorrect
 // custom dictionary in the Settings panel.
+
+// Bundled dictionary from CSpell software-terms and companies
+// This contains common programming/software terms that should not be flagged as typos
+static BUNDLED_DICT: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    let dict_content = include_str!("../dictionaries/cspell-bundled.txt");
+    let mut words = HashSet::new();
+
+    for line in dict_content.lines() {
+        let line = line.trim();
+        // Skip empty lines and comments
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        // Add both lowercase and original case versions
+        words.insert(line);
+    }
+
+    log::info!("Loaded {} words from bundled dictionary", words.len());
+    words
+});
+
+/// Check if a word is in our bundled dictionary (case-insensitive)
+fn is_bundled_word(word: &str) -> bool {
+    // Check exact match first
+    if BUNDLED_DICT.contains(word) {
+        return true;
+    }
+    // Check lowercase version
+    let lower = word.to_lowercase();
+    BUNDLED_DICT.iter().any(|&w| w.eq_ignore_ascii_case(&lower))
+}
 
 fn get_custom_corrections_path() -> Option<PathBuf> {
     let home = std::env::var("HOME")
@@ -86,6 +117,13 @@ pub fn check_typos(text: &str) -> Vec<TypoError> {
         match typo.corrections {
             Status::Corrections(corrections) => {
                 let typo_word = typo.typo.to_string();
+
+                // Skip if the word is in our bundled programming dictionary
+                if is_bundled_word(&typo_word) {
+                    log::debug!("Skipping '{}' - found in bundled dictionary", typo_word);
+                    continue;
+                }
+
                 let suggestions = corrections
                     .iter()
                     .map(|s| s.to_string())

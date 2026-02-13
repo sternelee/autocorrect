@@ -1,6 +1,6 @@
 use super::errors::Error;
 use crate::commands::ai_grammar::correct_text_with_openai;
-use crate::{cspell, typocheck};
+use crate::typocheck;
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -12,10 +12,6 @@ use std::path::PathBuf;
 struct AppSettings {
     #[serde(default = "default_typo_checking")]
     typo_checking_enabled: bool,
-    #[serde(default)]
-    cspell_enabled: bool,
-    #[serde(default)]
-    cspell_dictionaries: cspell::CSpellDictionaries,
     #[serde(default)]
     ai_grammar_enabled: bool,
     #[serde(default)]
@@ -54,8 +50,6 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             typo_checking_enabled: default_typo_checking(),
-            cspell_enabled: false,
-            cspell_dictionaries: cspell::CSpellDictionaries::default(),
             ai_grammar_enabled: false,
             openai_api_key: String::new(),
             openai_model: default_openai_model(),
@@ -145,10 +139,10 @@ fn run_local_spellcheck(
         });
     }
 
-    // Check for typos using typos library and CSpell (based on settings)
+    // Check for typos using typos library (based on settings)
     let mut typos = Vec::new();
 
-    // 1. Check with typos library if enabled
+    // Check with typos library if enabled
     if app_settings.typo_checking_enabled {
         let typo_errors = typocheck::check_typos(text);
         typos.extend(typo_errors.into_iter().map(|typo| TypoSuggestion {
@@ -158,26 +152,6 @@ fn run_local_spellcheck(
             col: typo.col,
         }));
     }
-
-    // 2. Check with CSpell if enabled
-    if app_settings.cspell_enabled {
-        let cspell_errors = cspell::check_with_cspell(text, &app_settings.cspell_dictionaries);
-        typos.extend(cspell_errors.into_iter().map(|typo| TypoSuggestion {
-            typo: typo.typo,
-            suggestions: typo.suggestions,
-            line: typo.line,
-            col: typo.col,
-        }));
-    }
-
-    // Deduplicate typos (in case both checkers found the same issue)
-    typos.sort_by(|a, b| {
-        a.line
-            .cmp(&b.line)
-            .then_with(|| a.col.cmp(&b.col))
-            .then_with(|| a.typo.cmp(&b.typo))
-    });
-    typos.dedup_by(|a, b| a.line == b.line && a.col == b.col && a.typo == b.typo);
 
     (local_corrected, line_changes, typos)
 }

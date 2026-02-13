@@ -20,13 +20,11 @@
 		"tauri:build:debug": "tauri build --debug"
 	},
 	"devDependencies": {
-		"@cspell/cspell-json-reporter": "^9.6.4",
 		"@eslint/compat": "^1.2.9",
 		"@lucide/svelte": "^0.511.0",
 		"@sveltejs/vite-plugin-svelte": "^5.0.3",
 		"@tauri-apps/cli": "^2.5.0",
 		"@tsconfig/svelte": "^5.0.4",
-		"cspell": "^9.6.4",
 		"eslint": "^9.27.0",
 		"eslint-config-prettier": "^10.1.5",
 		"eslint-plugin-svelte": "^3.8.1",

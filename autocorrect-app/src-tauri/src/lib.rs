@@ -1,6 +1,5 @@
 mod clipboard;
 mod commands;
-mod cspell;
 mod hotkey;
 mod macos_text;
 mod overlay;

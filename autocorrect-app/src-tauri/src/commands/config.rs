@@ -1,5 +1,4 @@
 use super::errors::Error;
-use crate::cspell::CSpellDictionaries;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
@@ -11,10 +10,6 @@ use std::path::PathBuf;
 struct AppSettings {
     #[serde(default = "default_typo_checking")]
     typo_checking_enabled: bool,
-    #[serde(default = "default_cspell_enabled")]
-    cspell_enabled: bool,
-    #[serde(default)]
-    cspell_dictionaries: CSpellDictionaries,
     #[serde(default)]
     ai_grammar_enabled: bool,
     #[serde(default)]
@@ -37,8 +32,6 @@ impl Default for AppSettings {
     fn default() -> Self {
         Self {
             typo_checking_enabled: default_typo_checking(),
-            cspell_enabled: default_cspell_enabled(),
-            cspell_dictionaries: CSpellDictionaries::default(),
             ai_grammar_enabled: false,
             openai_api_key: String::new(),
             openai_model: default_openai_model(),
@@ -53,10 +46,6 @@ impl Default for AppSettings {
 
 fn default_typo_checking() -> bool {
     true
-}
-
-fn default_cspell_enabled() -> bool {
-    false // Disabled by default until user enables it
 }
 
 fn default_openai_model() -> String {
@@ -111,10 +100,6 @@ pub struct AppConfig {
     pub config_path: String,
     /// Enable/disable typo checking
     pub typo_checking_enabled: bool,
-    /// Enable/disable CSpell checking
-    pub cspell_enabled: bool,
-    /// CSpell dictionary settings
-    pub cspell_dictionaries: CSpellDictionaries,
     /// Enable/disable AI grammar check
     pub ai_grammar_enabled: bool,
     /// OpenAI API key
@@ -159,10 +144,6 @@ pub struct ConfigUpdates {
     pub spellcheck_words: Option<Vec<String>>,
     /// Enable/disable typo checking
     pub typo_checking_enabled: Option<bool>,
-    /// Enable/disable CSpell checking
-    pub cspell_enabled: Option<bool>,
-    /// CSpell dictionary settings
-    pub cspell_dictionaries: Option<CSpellDictionaries>,
     /// Enable/disable AI grammar check
     pub ai_grammar_enabled: Option<bool>,
     /// OpenAI API key
@@ -235,8 +216,6 @@ pub fn get_config() -> Result<AppConfig, Error> {
         context,
         config_path: config_path.to_string_lossy().to_string(),
         typo_checking_enabled: app_settings.typo_checking_enabled,
-        cspell_enabled: app_settings.cspell_enabled,
-        cspell_dictionaries: app_settings.cspell_dictionaries,
         ai_grammar_enabled: app_settings.ai_grammar_enabled,
         openai_api_key: app_settings.openai_api_key,
         openai_model: app_settings.openai_model,
@@ -349,22 +328,10 @@ pub fn update_config(updates: ConfigUpdates) -> Result<(), Error> {
         user_config.spellcheck.words = words;
     }
 
-    // Handle app-specific settings (typo checking, CSpell)
+    // Handle app-specific settings (typo checking)
     if let Some(typo_enabled) = updates.typo_checking_enabled {
         let mut app_settings = load_app_settings();
         app_settings.typo_checking_enabled = typo_enabled;
-        save_app_settings(&app_settings)?;
-    }
-
-    if let Some(cspell_enabled) = updates.cspell_enabled {
-        let mut app_settings = load_app_settings();
-        app_settings.cspell_enabled = cspell_enabled;
-        save_app_settings(&app_settings)?;
-    }
-
-    if let Some(cspell_dicts) = updates.cspell_dictionaries {
-        let mut app_settings = load_app_settings();
-        app_settings.cspell_dictionaries = cspell_dicts;
         save_app_settings(&app_settings)?;
     }
 

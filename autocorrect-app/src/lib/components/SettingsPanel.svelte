@@ -25,8 +25,6 @@
 		context: Record<string, number>;
 		configPath: string;
 		typoCheckingEnabled?: boolean;
-		cspellEnabled?: boolean;
-		cspellDictionaries?: CSpellDictionaries;
 		aiGrammarEnabled?: boolean;
 		openaiApiKey?: string;
 		openaiModel?: string;
@@ -35,35 +33,6 @@
 		aiApiBaseUrl?: string;
 		aiTranslateTargetLanguage?: string;
 		aiPolishStyle?: string;
-	}
-	
-	// CSpell dictionaries configuration
-	interface CSpellDictionaries {
-		typescript: boolean;
-		python: boolean;
-		rust: boolean;
-		cpp: boolean;
-		java: boolean;
-		go: boolean;
-		csharp: boolean;
-		php: boolean;
-		ruby: boolean;
-		swift: boolean;
-		html: boolean;
-		css: boolean;
-		node: boolean;
-		npm: boolean;
-		react: boolean;
-		vue: boolean;
-		django: boolean;
-		docker: boolean;
-		k8s: boolean;
-		aws: boolean;
-		git: boolean;
-		companies: boolean;
-		software_terms: boolean;
-		filetypes: boolean;
-		public_licenses: boolean;
 	}
 
 	// Hotkey configuration
@@ -93,36 +62,6 @@
 
 	// Typo checking configuration
 	let typoCheckingEnabled = true;
-	
-	// CSpell configuration
-	let cspellEnabled = false;
-	let cspellDictionaries: CSpellDictionaries = {
-		typescript: true,
-		python: false,
-		rust: false,
-		cpp: false,
-		java: false,
-		go: false,
-		csharp: false,
-		php: false,
-		ruby: false,
-		swift: false,
-		html: true,
-		css: true,
-		node: true,
-		npm: true,
-		react: false,
-		vue: false,
-		django: false,
-		docker: false,
-		k8s: false,
-		aws: false,
-		git: true,
-		companies: true,
-		software_terms: true,
-		filetypes: true,
-		public_licenses: true
-	};
 
 	// AI grammar configuration
 	let aiGrammarEnabled = false;
@@ -176,12 +115,6 @@
 
 			// Load typo checking setting (default to true if not present)
 			typoCheckingEnabled = config.typoCheckingEnabled ?? true;
-			
-			// Load CSpell settings
-			cspellEnabled = config.cspellEnabled ?? false;
-			if (config.cspellDictionaries) {
-				cspellDictionaries = config.cspellDictionaries;
-			}
 
 			// Load AI grammar settings
 			aiGrammarEnabled = config.aiGrammarEnabled ?? false;
@@ -230,8 +163,6 @@
 					rules: rulesUpdate,
 					spellcheckWords: wordsArray,
 					typoCheckingEnabled: typoCheckingEnabled,
-					cspellEnabled: cspellEnabled,
-					cspellDictionaries: cspellDictionaries,
 					aiGrammarEnabled: aiGrammarEnabled,
 					openaiApiKey: openaiApiKey,
 					openaiModel: openaiModel,
@@ -648,164 +579,6 @@
 					</div>
 					<Switch bind:checked={typoCheckingEnabled} id="typo-checking-enabled" onchange={() => hasUnsavedChanges = true} />
 				</div>
-				
-				<!-- Enable/Disable CSpell -->
-				<div class="flex items-center justify-between rounded-lg border p-3">
-					<div class="space-y-0.5">
-						<label class="text-sm font-medium" for="cspell-enabled">Enable CSpell Programming Dictionaries</label>
-						<p class="text-xs text-muted-foreground">
-							Use CSpell's 50+ specialized dictionaries for programming languages, frameworks, and tools
-						</p>
-					</div>
-					<Switch bind:checked={cspellEnabled} id="cspell-enabled" onchange={() => hasUnsavedChanges = true} />
-				</div>
-				
-				<!-- CSpell Dictionary Selection (shown when enabled) -->
-				{#if cspellEnabled}
-					<div class="rounded-lg border p-4">
-						<h4 class="mb-3 text-sm font-medium">Select CSpell Dictionaries</h4>
-						<p class="mb-3 text-xs text-muted-foreground">
-							Enable dictionaries for the languages and tools you use. This improves accuracy by recognizing technical terms.
-						</p>
-						
-						<div class="space-y-4">
-							<!-- Programming Languages -->
-							<div>
-								<div class="mb-2 text-xs font-semibold text-muted-foreground">Programming Languages</div>
-								<div class="grid grid-cols-2 gap-2">
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.typescript} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>TypeScript</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.python} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>Python</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.rust} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>Rust</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.cpp} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>C++</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.java} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>Java</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.go} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>Go</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.csharp} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>C#</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.php} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>PHP</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.ruby} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>Ruby</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.swift} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>Swift</span>
-									</label>
-								</div>
-							</div>
-							
-							<!-- Web Technologies -->
-							<div>
-								<div class="mb-2 text-xs font-semibold text-muted-foreground">Web Technologies</div>
-								<div class="grid grid-cols-2 gap-2">
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.html} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>HTML</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.css} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>CSS</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.node} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>Node.js</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.npm} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>NPM</span>
-									</label>
-								</div>
-							</div>
-							
-							<!-- Frameworks -->
-							<div>
-								<div class="mb-2 text-xs font-semibold text-muted-foreground">Frameworks</div>
-								<div class="grid grid-cols-2 gap-2">
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.react} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>React</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.vue} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>Vue</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.django} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>Django</span>
-									</label>
-								</div>
-							</div>
-							
-							<!-- Tools & Platforms -->
-							<div>
-								<div class="mb-2 text-xs font-semibold text-muted-foreground">Tools & Platforms</div>
-								<div class="grid grid-cols-2 gap-2">
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.docker} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>Docker</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.k8s} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>Kubernetes</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.aws} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>AWS</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.git} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>Git</span>
-									</label>
-								</div>
-							</div>
-							
-							<!-- General Dictionaries -->
-							<div>
-								<div class="mb-2 text-xs font-semibold text-muted-foreground">General</div>
-								<div class="grid grid-cols-2 gap-2">
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.companies} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>Companies</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.software_terms} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>Software Terms</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.filetypes} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>File Types</span>
-									</label>
-									<label class="flex items-center space-x-2 text-sm">
-										<input type="checkbox" bind:checked={cspellDictionaries.public_licenses} onchange={() => hasUnsavedChanges = true} class="rounded" />
-										<span>Public Licenses</span>
-									</label>
-								</div>
-							</div>
-						</div>
-					</div>
-				{/if}
 
 				<!-- AI Grammar -->
 				<div class="flex items-center justify-between rounded-lg border p-3">
