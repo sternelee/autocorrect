@@ -102,18 +102,10 @@ fn extract_content(value: &serde_json::Value) -> String {
 fn extract_json_object(content: &str) -> String {
     let trimmed = content.trim();
     if let Some(stripped) = trimmed.strip_prefix("```json") {
-        return stripped
-            .trim()
-            .trim_end_matches("```")
-            .trim()
-            .to_string();
+        return stripped.trim().trim_end_matches("```").trim().to_string();
     }
     if let Some(stripped) = trimmed.strip_prefix("```") {
-        return stripped
-            .trim()
-            .trim_end_matches("```")
-            .trim()
-            .to_string();
+        return stripped.trim().trim_end_matches("```").trim().to_string();
     }
     trimmed.to_string()
 }
@@ -291,15 +283,17 @@ pub async fn ai_text_transform(
     if operation == "grammar" {
         let json_text = extract_json_object(&content);
         let parsed: serde_json::Value = serde_json::from_str(&json_text).map_err(|e| {
-            Error::Api(format!("Grammar response is not valid JSON typos format: {}", e))
+            Error::Api(format!(
+                "Grammar response is not valid JSON typos format: {}",
+                e
+            ))
         })?;
         let typos = parsed
             .get("typos")
             .cloned()
             .unwrap_or_else(|| serde_json::json!([]));
-        let typos: Vec<AiTypo> = serde_json::from_value(typos).map_err(|e| {
-            Error::Api(format!("Invalid typos payload format: {}", e))
-        })?;
+        let typos: Vec<AiTypo> = serde_json::from_value(typos)
+            .map_err(|e| Error::Api(format!("Invalid typos payload format: {}", e)))?;
         return Ok(AiTextTransformResponse {
             output_text: None,
             typos,
