@@ -59,12 +59,18 @@ impl OverlayManager {
     /// 更新屏幕上的错误下划线标记
     pub fn update_markers(&self, markers: Vec<TypoMarker>) {
         if let Some(window) = self.handle.get_webview_window("overlay") {
+            let is_visible = window.is_visible().unwrap_or(false);
             if markers.is_empty() {
-                let _ = window.hide();
-            } else {
-                let _ = window.show();
-                let _ = window.emit("update-markers", markers);
+                if is_visible {
+                    let _ = window.hide();
+                }
+                return;
             }
+
+            if !is_visible {
+                let _ = window.show();
+            }
+            let _ = window.emit("update-markers", markers);
         }
     }
 }

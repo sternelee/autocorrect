@@ -7,7 +7,7 @@ use std::fs;
 use std::path::PathBuf;
 
 /// Custom app-specific settings stored separately from autocorrect config
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 struct AppSettings {
     #[serde(default = "default_typo_checking")]
     typo_checking_enabled: bool,
@@ -15,6 +15,40 @@ struct AppSettings {
     cspell_enabled: bool,
     #[serde(default)]
     cspell_dictionaries: CSpellDictionaries,
+    #[serde(default)]
+    ai_grammar_enabled: bool,
+    #[serde(default)]
+    openai_api_key: String,
+    #[serde(default = "default_openai_model")]
+    openai_model: String,
+    #[serde(default = "default_ai_max_input_chars")]
+    ai_max_input_chars: usize,
+    #[serde(default = "default_ai_timeout_ms")]
+    ai_timeout_ms: u64,
+    #[serde(default = "default_ai_api_base_url")]
+    ai_api_base_url: String,
+    #[serde(default = "default_ai_translate_target_language")]
+    ai_translate_target_language: String,
+    #[serde(default = "default_ai_polish_style")]
+    ai_polish_style: String,
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            typo_checking_enabled: default_typo_checking(),
+            cspell_enabled: default_cspell_enabled(),
+            cspell_dictionaries: CSpellDictionaries::default(),
+            ai_grammar_enabled: false,
+            openai_api_key: String::new(),
+            openai_model: default_openai_model(),
+            ai_max_input_chars: default_ai_max_input_chars(),
+            ai_timeout_ms: default_ai_timeout_ms(),
+            ai_api_base_url: default_ai_api_base_url(),
+            ai_translate_target_language: default_ai_translate_target_language(),
+            ai_polish_style: default_ai_polish_style(),
+        }
+    }
 }
 
 fn default_typo_checking() -> bool {
@@ -23,6 +57,30 @@ fn default_typo_checking() -> bool {
 
 fn default_cspell_enabled() -> bool {
     false // Disabled by default until user enables it
+}
+
+fn default_openai_model() -> String {
+    "gpt-4.1-mini".to_string()
+}
+
+fn default_ai_max_input_chars() -> usize {
+    2000
+}
+
+fn default_ai_timeout_ms() -> u64 {
+    12000
+}
+
+fn default_ai_api_base_url() -> String {
+    "https://openrouter.ai/api/v1/chat/completions".to_string()
+}
+
+fn default_ai_translate_target_language() -> String {
+    "English".to_string()
+}
+
+fn default_ai_polish_style() -> String {
+    "professional".to_string()
 }
 
 /// Convert u8 to SeverityMode
@@ -57,6 +115,22 @@ pub struct AppConfig {
     pub cspell_enabled: bool,
     /// CSpell dictionary settings
     pub cspell_dictionaries: CSpellDictionaries,
+    /// Enable/disable AI grammar check
+    pub ai_grammar_enabled: bool,
+    /// OpenAI API key
+    pub openai_api_key: String,
+    /// OpenAI model name
+    pub openai_model: String,
+    /// Max input chars for AI check
+    pub ai_max_input_chars: usize,
+    /// Timeout in milliseconds for AI check
+    pub ai_timeout_ms: u64,
+    /// AI provider base URL
+    pub ai_api_base_url: String,
+    /// Default translation target language
+    pub ai_translate_target_language: String,
+    /// Default polish style
+    pub ai_polish_style: String,
 }
 
 /// Information about a single rule
@@ -89,6 +163,22 @@ pub struct ConfigUpdates {
     pub cspell_enabled: Option<bool>,
     /// CSpell dictionary settings
     pub cspell_dictionaries: Option<CSpellDictionaries>,
+    /// Enable/disable AI grammar check
+    pub ai_grammar_enabled: Option<bool>,
+    /// OpenAI API key
+    pub openai_api_key: Option<String>,
+    /// OpenAI model name
+    pub openai_model: Option<String>,
+    /// Max input chars for AI check
+    pub ai_max_input_chars: Option<usize>,
+    /// Timeout in milliseconds for AI check
+    pub ai_timeout_ms: Option<u64>,
+    /// AI provider base URL
+    pub ai_api_base_url: Option<String>,
+    /// Default translation target language
+    pub ai_translate_target_language: Option<String>,
+    /// Default polish style
+    pub ai_polish_style: Option<String>,
 }
 
 /// Get the current merged configuration (default + user config)
@@ -147,6 +237,14 @@ pub fn get_config() -> Result<AppConfig, Error> {
         typo_checking_enabled: app_settings.typo_checking_enabled,
         cspell_enabled: app_settings.cspell_enabled,
         cspell_dictionaries: app_settings.cspell_dictionaries,
+        ai_grammar_enabled: app_settings.ai_grammar_enabled,
+        openai_api_key: app_settings.openai_api_key,
+        openai_model: app_settings.openai_model,
+        ai_max_input_chars: app_settings.ai_max_input_chars,
+        ai_timeout_ms: app_settings.ai_timeout_ms,
+        ai_api_base_url: app_settings.ai_api_base_url,
+        ai_translate_target_language: app_settings.ai_translate_target_language,
+        ai_polish_style: app_settings.ai_polish_style,
     })
 }
 
@@ -267,6 +365,54 @@ pub fn update_config(updates: ConfigUpdates) -> Result<(), Error> {
     if let Some(cspell_dicts) = updates.cspell_dictionaries {
         let mut app_settings = load_app_settings();
         app_settings.cspell_dictionaries = cspell_dicts;
+        save_app_settings(&app_settings)?;
+    }
+
+    if let Some(ai_enabled) = updates.ai_grammar_enabled {
+        let mut app_settings = load_app_settings();
+        app_settings.ai_grammar_enabled = ai_enabled;
+        save_app_settings(&app_settings)?;
+    }
+
+    if let Some(openai_api_key) = updates.openai_api_key {
+        let mut app_settings = load_app_settings();
+        app_settings.openai_api_key = openai_api_key;
+        save_app_settings(&app_settings)?;
+    }
+
+    if let Some(openai_model) = updates.openai_model {
+        let mut app_settings = load_app_settings();
+        app_settings.openai_model = openai_model;
+        save_app_settings(&app_settings)?;
+    }
+
+    if let Some(ai_max_input_chars) = updates.ai_max_input_chars {
+        let mut app_settings = load_app_settings();
+        app_settings.ai_max_input_chars = ai_max_input_chars;
+        save_app_settings(&app_settings)?;
+    }
+
+    if let Some(ai_timeout_ms) = updates.ai_timeout_ms {
+        let mut app_settings = load_app_settings();
+        app_settings.ai_timeout_ms = ai_timeout_ms;
+        save_app_settings(&app_settings)?;
+    }
+
+    if let Some(ai_api_base_url) = updates.ai_api_base_url {
+        let mut app_settings = load_app_settings();
+        app_settings.ai_api_base_url = ai_api_base_url;
+        save_app_settings(&app_settings)?;
+    }
+
+    if let Some(ai_translate_target_language) = updates.ai_translate_target_language {
+        let mut app_settings = load_app_settings();
+        app_settings.ai_translate_target_language = ai_translate_target_language;
+        save_app_settings(&app_settings)?;
+    }
+
+    if let Some(ai_polish_style) = updates.ai_polish_style {
+        let mut app_settings = load_app_settings();
+        app_settings.ai_polish_style = ai_polish_style;
         save_app_settings(&app_settings)?;
     }
 

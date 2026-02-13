@@ -1,4 +1,5 @@
 use super::errors::Error;
+use crate::commands::ai_grammar::correct_text_with_openai;
 use crate::{cspell, typocheck};
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use serde::{Deserialize, Serialize};
@@ -7,7 +8,7 @@ use std::fs;
 use std::path::PathBuf;
 
 /// App-specific settings
-#[derive(Clone, Serialize, Deserialize, Default)]
+#[derive(Clone, Serialize, Deserialize)]
 struct AppSettings {
     #[serde(default = "default_typo_checking")]
     typo_checking_enabled: bool,
@@ -15,10 +16,54 @@ struct AppSettings {
     cspell_enabled: bool,
     #[serde(default)]
     cspell_dictionaries: cspell::CSpellDictionaries,
+    #[serde(default)]
+    ai_grammar_enabled: bool,
+    #[serde(default)]
+    openai_api_key: String,
+    #[serde(default = "default_openai_model")]
+    openai_model: String,
+    #[serde(default = "default_ai_max_input_chars")]
+    ai_max_input_chars: usize,
+    #[serde(default = "default_ai_timeout_ms")]
+    ai_timeout_ms: u64,
+    #[serde(default = "default_ai_api_base_url")]
+    ai_api_base_url: String,
 }
 
 fn default_typo_checking() -> bool {
     true
+}
+
+fn default_openai_model() -> String {
+    "gpt-4.1-mini".to_string()
+}
+
+fn default_ai_max_input_chars() -> usize {
+    2000
+}
+
+fn default_ai_timeout_ms() -> u64 {
+    12000
+}
+
+fn default_ai_api_base_url() -> String {
+    "https://openrouter.ai/api/v1/chat/completions".to_string()
+}
+
+impl Default for AppSettings {
+    fn default() -> Self {
+        Self {
+            typo_checking_enabled: default_typo_checking(),
+            cspell_enabled: false,
+            cspell_dictionaries: cspell::CSpellDictionaries::default(),
+            ai_grammar_enabled: false,
+            openai_api_key: String::new(),
+            openai_model: default_openai_model(),
+            ai_max_input_chars: default_ai_max_input_chars(),
+            ai_timeout_ms: default_ai_timeout_ms(),
+            ai_api_base_url: default_ai_api_base_url(),
+        }
+    }
 }
 
 /// Get the path to the app settings file
@@ -75,18 +120,18 @@ pub struct Config {
     pub path: String,
 }
 
-#[tauri::command]
-pub fn spell_check(text: String) -> Result<SpellCheckResult, Error> {
-    let original = text.clone();
+fn run_local_spellcheck(
+    text: &str,
+    app_settings: &AppSettings,
+) -> (String, Vec<LineChange>, Vec<TypoSuggestion>) {
     let file_ext = "text"; // Default to text/plain mode
 
     // Get the corrected text using autocorrect
-    let format_result = autocorrect::format_for(&text, file_ext);
-    let corrected = format_result.out;
-    let has_changes = original != corrected;
+    let format_result = autocorrect::format_for(text, file_ext);
+    let local_corrected = format_result.out;
 
     // Get diff/lint for line-by-line changes
-    let lint_result = autocorrect::lint_for(&text, file_ext);
+    let lint_result = autocorrect::lint_for(text, file_ext);
     let mut line_changes = Vec::new();
 
     // Parse the lint result to extract line changes
@@ -100,24 +145,12 @@ pub fn spell_check(text: String) -> Result<SpellCheckResult, Error> {
         });
     }
 
-    // If we have changes but no line changes detected, add a summary change
-    if has_changes && line_changes.is_empty() {
-        line_changes.push(LineChange {
-            line: 1,
-            col: 1,
-            original: original.clone(),
-            corrected: corrected.clone(),
-            severity: 2, // Warning
-        });
-    }
-
     // Check for typos using typos library and CSpell (based on settings)
-    let app_settings = load_app_settings();
     let mut typos = Vec::new();
 
     // 1. Check with typos library if enabled
     if app_settings.typo_checking_enabled {
-        let typo_errors = typocheck::check_typos(&text);
+        let typo_errors = typocheck::check_typos(text);
         typos.extend(typo_errors.into_iter().map(|typo| TypoSuggestion {
             typo: typo.typo,
             suggestions: typo.suggestions,
@@ -128,7 +161,7 @@ pub fn spell_check(text: String) -> Result<SpellCheckResult, Error> {
 
     // 2. Check with CSpell if enabled
     if app_settings.cspell_enabled {
-        let cspell_errors = cspell::check_with_cspell(&text, &app_settings.cspell_dictionaries);
+        let cspell_errors = cspell::check_with_cspell(text, &app_settings.cspell_dictionaries);
         typos.extend(cspell_errors.into_iter().map(|typo| TypoSuggestion {
             typo: typo.typo,
             suggestions: typo.suggestions,
@@ -146,6 +179,72 @@ pub fn spell_check(text: String) -> Result<SpellCheckResult, Error> {
     });
     typos.dedup_by(|a, b| a.line == b.line && a.col == b.col && a.typo == b.typo);
 
+    (local_corrected, line_changes, typos)
+}
+
+#[tauri::command]
+pub async fn spell_check(text: String, enable_ai: Option<bool>) -> Result<SpellCheckResult, Error> {
+    let original = text.clone();
+    let app_settings = load_app_settings();
+
+    let text_for_local = text.clone();
+    let settings_for_local = app_settings.clone();
+    let (local_corrected, mut line_changes, typos) =
+        tauri::async_runtime::spawn_blocking(move || {
+            run_local_spellcheck(&text_for_local, &settings_for_local)
+        })
+        .await
+        .map_err(|e| Error::Api(format!("Spell check task join error: {}", e)))?;
+
+    // Optional AI grammar enhancement (disabled by default).
+    let mut corrected = local_corrected;
+    let mut ai_applied = false;
+    if enable_ai.unwrap_or(true) && app_settings.ai_grammar_enabled {
+        let api_key = app_settings.openai_api_key.trim();
+        let model = if app_settings.openai_model.trim().is_empty() {
+            "gpt-4.1-mini"
+        } else {
+            app_settings.openai_model.trim()
+        };
+        if !api_key.is_empty() && corrected.chars().count() <= app_settings.ai_max_input_chars {
+            match correct_text_with_openai(
+                app_settings.ai_api_base_url.trim(),
+                api_key,
+                model,
+                &corrected,
+                app_settings.ai_timeout_ms,
+            )
+            .await
+            {
+                Ok(ai_text) => {
+                    if !ai_text.trim().is_empty() && ai_text != corrected {
+                        corrected = ai_text;
+                        ai_applied = true;
+                    }
+                }
+                Err(e) => {
+                    log::warn!("AI grammar check skipped due to API error: {}", e);
+                }
+            }
+        }
+    }
+
+    // Keep change details coherent when AI rewrites content.
+    if ai_applied {
+        line_changes.clear();
+    }
+
+    let has_changes = original != corrected;
+    if has_changes && line_changes.is_empty() {
+        line_changes.push(LineChange {
+            line: 1,
+            col: 1,
+            original: original.clone(),
+            corrected: corrected.clone(),
+            severity: 2,
+        });
+    }
+
     Ok(SpellCheckResult {
         original,
         corrected,
@@ -153,6 +252,10 @@ pub fn spell_check(text: String) -> Result<SpellCheckResult, Error> {
         line_changes,
         typos,
     })
+}
+
+pub fn spell_check_sync(text: String, enable_ai: Option<bool>) -> Result<SpellCheckResult, Error> {
+    tauri::async_runtime::block_on(spell_check(text, enable_ai))
 }
 
 #[tauri::command]

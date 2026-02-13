@@ -27,6 +27,14 @@
 		typoCheckingEnabled?: boolean;
 		cspellEnabled?: boolean;
 		cspellDictionaries?: CSpellDictionaries;
+		aiGrammarEnabled?: boolean;
+		openaiApiKey?: string;
+		openaiModel?: string;
+		aiMaxInputChars?: number;
+		aiTimeoutMs?: number;
+		aiApiBaseUrl?: string;
+		aiTranslateTargetLanguage?: string;
+		aiPolishStyle?: string;
 	}
 	
 	// CSpell dictionaries configuration
@@ -116,6 +124,28 @@
 		public_licenses: true
 	};
 
+	// AI grammar configuration
+	let aiGrammarEnabled = false;
+	let openaiApiKey = '';
+	let openaiModel = 'gpt-4.1-mini';
+	let aiMaxInputChars = 2000;
+	let aiTimeoutMs = 12000;
+	let aiApiBaseUrl = 'https://openrouter.ai/api/v1/chat/completions';
+	let aiTranslateTargetLanguage = 'English';
+	let aiPolishStyle = 'professional';
+	const translateLanguageOptions = [
+		'简体中文',
+		'English',
+		'繁體中文',
+		'日本語',
+		'Русский',
+		'한국어',
+		'Français',
+		'Deutsch',
+		'Español',
+		'Português'
+	];
+
 	// Hotkey configuration state
 	let hotkeyEnabled = true;
 	let hotkeyConfig: HotkeyConfig | null = null;
@@ -152,6 +182,16 @@
 			if (config.cspellDictionaries) {
 				cspellDictionaries = config.cspellDictionaries;
 			}
+
+			// Load AI grammar settings
+			aiGrammarEnabled = config.aiGrammarEnabled ?? false;
+			openaiApiKey = config.openaiApiKey ?? '';
+			openaiModel = config.openaiModel ?? 'gpt-4.1-mini';
+			aiMaxInputChars = config.aiMaxInputChars ?? 2000;
+			aiTimeoutMs = config.aiTimeoutMs ?? 12000;
+			aiApiBaseUrl = config.aiApiBaseUrl ?? 'https://openrouter.ai/api/v1/chat/completions';
+			aiTranslateTargetLanguage = config.aiTranslateTargetLanguage ?? 'English';
+			aiPolishStyle = config.aiPolishStyle ?? 'professional';
 
 			hasUnsavedChanges = false;
 		} catch (error) {
@@ -191,7 +231,15 @@
 					spellcheckWords: wordsArray,
 					typoCheckingEnabled: typoCheckingEnabled,
 					cspellEnabled: cspellEnabled,
-					cspellDictionaries: cspellDictionaries
+					cspellDictionaries: cspellDictionaries,
+					aiGrammarEnabled: aiGrammarEnabled,
+					openaiApiKey: openaiApiKey,
+					openaiModel: openaiModel,
+					aiMaxInputChars: aiMaxInputChars,
+					aiTimeoutMs: aiTimeoutMs,
+					aiApiBaseUrl: aiApiBaseUrl,
+					aiTranslateTargetLanguage: aiTranslateTargetLanguage,
+					aiPolishStyle: aiPolishStyle
 				}
 			});
 
@@ -259,6 +307,14 @@
 				rule.severity = rule.defaultSeverity;
 			}
 			customWords = '';
+			aiGrammarEnabled = false;
+			openaiApiKey = '';
+			openaiModel = 'gpt-4.1-mini';
+			aiMaxInputChars = 2000;
+			aiTimeoutMs = 12000;
+			aiApiBaseUrl = 'https://openrouter.ai/api/v1/chat/completions';
+			aiTranslateTargetLanguage = 'English';
+			aiPolishStyle = 'professional';
 			await saveConfiguration();
 		} catch (error) {
 			console.error('Failed to reset config:', error);
@@ -747,6 +803,99 @@
 									</label>
 								</div>
 							</div>
+						</div>
+					</div>
+				{/if}
+
+				<!-- AI Grammar -->
+				<div class="flex items-center justify-between rounded-lg border p-3">
+					<div class="space-y-0.5">
+						<label class="text-sm font-medium" for="ai-grammar-enabled">Enable AI Grammar Check (OpenAI)</label>
+						<p class="text-xs text-muted-foreground">
+							Use OpenAI to improve grammar and phrasing after local autocorrect rules.
+						</p>
+					</div>
+					<Switch bind:checked={aiGrammarEnabled} id="ai-grammar-enabled" onchange={() => hasUnsavedChanges = true} />
+				</div>
+
+				{#if aiGrammarEnabled}
+					<div class="rounded-lg border p-4 space-y-3">
+						<div class="space-y-1">
+							<label class="text-sm font-medium" for="openai-api-key">OpenAI API Key</label>
+							<Input
+								id="openai-api-key"
+								type="password"
+								bind:value={openaiApiKey}
+								placeholder="sk-..."
+								oninput={() => hasUnsavedChanges = true}
+							/>
+						</div>
+						<div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+							<div class="space-y-1">
+								<label class="text-sm font-medium" for="openai-model">Model</label>
+								<Input
+									id="openai-model"
+									bind:value={openaiModel}
+									placeholder="gpt-4.1-mini"
+									oninput={() => hasUnsavedChanges = true}
+								/>
+							</div>
+							<div class="space-y-1">
+								<label class="text-sm font-medium" for="ai-max-input">Max Input Chars</label>
+								<Input
+									id="ai-max-input"
+									type="number"
+									bind:value={aiMaxInputChars}
+									min="200"
+									max="20000"
+									oninput={() => hasUnsavedChanges = true}
+								/>
+							</div>
+							<div class="space-y-1">
+								<label class="text-sm font-medium" for="ai-timeout-ms">Timeout (ms)</label>
+								<Input
+									id="ai-timeout-ms"
+									type="number"
+									bind:value={aiTimeoutMs}
+									min="1000"
+									max="120000"
+									step="500"
+									oninput={() => hasUnsavedChanges = true}
+								/>
+							</div>
+						</div>
+						<div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+							<div class="space-y-1 md:col-span-2">
+								<label class="text-sm font-medium" for="ai-api-base-url">API Endpoint</label>
+								<Input
+									id="ai-api-base-url"
+									bind:value={aiApiBaseUrl}
+									placeholder="https://openrouter.ai/api/v1/chat/completions"
+									oninput={() => hasUnsavedChanges = true}
+								/>
+							</div>
+							<div class="space-y-1">
+								<label class="text-sm font-medium" for="ai-target-language">Default Translate Target</label>
+								<select
+									id="ai-target-language"
+									bind:value={aiTranslateTargetLanguage}
+									onchange={() => hasUnsavedChanges = true}
+									class="border-input bg-background ring-offset-background focus-visible:border-ring focus-visible:ring-ring/50 flex h-9 w-full min-w-0 rounded-md border px-3 py-1 text-sm outline-none focus-visible:ring-[3px]"
+								>
+									{#each translateLanguageOptions as language}
+										<option value={language}>{language}</option>
+									{/each}
+								</select>
+							</div>
+						</div>
+						<div class="space-y-1">
+							<label class="text-sm font-medium" for="ai-polish-style">Default Polish Style</label>
+							<Input
+								id="ai-polish-style"
+								bind:value={aiPolishStyle}
+								placeholder="professional"
+								oninput={() => hasUnsavedChanges = true}
+							/>
 						</div>
 					</div>
 				{/if}

@@ -321,7 +321,7 @@ pub fn reject_suggestion(app: AppHandle) -> Result<(), Error> {
 /// 4. Shows popup with suggestions if corrections are needed
 #[tauri::command]
 pub fn trigger_spell_check_workflow(app: AppHandle, x: i32, y: i32) -> Result<(), Error> {
-    use crate::commands::spellcheck::spell_check;
+    use crate::commands::spellcheck::spell_check_sync;
     use crate::text_selection::{get_selected_text, TextSelectionError};
 
     // Get selected text (Accessibility API with clipboard fallback)
@@ -368,7 +368,7 @@ pub fn trigger_spell_check_workflow(app: AppHandle, x: i32, y: i32) -> Result<()
     }
 
     // Run spell check
-    let result = spell_check(text)?;
+    let result = spell_check_sync(text, Some(true))?;
 
     // If there are changes or typos, show popup
     if (result.has_changes || !result.typos.is_empty()) && !result.corrected.is_empty() {

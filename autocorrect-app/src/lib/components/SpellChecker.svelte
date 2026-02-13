@@ -2,6 +2,7 @@
 	import { invoke } from '@tauri-apps/api/core';
 	import { Button } from '$lib/components/ui/button';
 	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '$lib/components/ui/card';
+	import { Input } from '$lib/components/ui/input';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Check, RefreshCw, Copy } from 'lucide-svelte';
 
@@ -23,50 +24,41 @@
 		line: number;
 		col: number;
 	}> = [];
+	let aiBusy = false;
+	let aiError: string | null = null;
+	let aiRunningOperation: 'grammar' | 'translate' | 'polish' | null = null;
+	let aiTargetLanguage = 'English';
+	let aiPolishStyle = 'professional';
+	const translateLanguageOptions = [
+		'简体中文',
+		'English',
+		'繁體中文',
+		'日本語',
+		'Русский',
+		'한국어',
+		'Français',
+		'Deutsch',
+		'Español',
+		'Português'
+	];
 
-	async function performSpellCheck() {
-		if (!currentText.trim()) {
-			correctedText = '';
-			hasChanges = false;
-			lineChanges = [];
-			typos = [];
-			return;
-		}
+	interface AppConfig {
+		aiGrammarEnabled?: boolean;
+		openaiApiKey?: string;
+		openaiModel?: string;
+		aiTimeoutMs?: number;
+		aiApiBaseUrl?: string;
+		aiTranslateTargetLanguage?: string;
+		aiPolishStyle?: string;
+	}
 
-		isChecking = true;
+	async function loadAiDefaults() {
 		try {
-			const result = await invoke<{
-				original: string;
-				corrected: string;
-				has_changes: boolean;
-				line_changes: Array<{
-					line: number;
-					col: number;
-					original: string;
-					corrected: string;
-					severity: number;
-				}>;
-				typos: Array<{
-					typo: string;
-					suggestions: string[];
-					line: number;
-					col: number;
-				}>;
-			}>('spell_check', { text: currentText });
-
-			correctedText = result.corrected;
-			hasChanges = result.has_changes;
-			lineChanges = result.line_changes;
-			typos = result.typos || [];
-			
-			console.log('Spell check result:', { hasChanges, lineChanges: lineChanges.length, typos: typos.length });
+			const config = await invoke<AppConfig>('get_config');
+			aiTargetLanguage = config.aiTranslateTargetLanguage ?? 'English';
+			aiPolishStyle = config.aiPolishStyle ?? 'professional';
 		} catch (error) {
-			console.error('Spell check failed:', error);
-			correctedText = currentText;
-			hasChanges = false;
-			typos = [];
-		} finally {
-			isChecking = false;
+			console.warn('Failed to load AI defaults:', error);
 		}
 	}
 
@@ -83,9 +75,9 @@
 		// Replace typo with suggestion in currentText (case-insensitive, whole word)
 		const regex = new RegExp(`\\b${typo}\\b`, 'gi');
 		currentText = currentText.replace(regex, suggestion);
-		
-		// Re-run spell check to update results
-		performSpellCheck();
+
+		// Update local typo list only; do not trigger spell_check again.
+		typos = typos.filter((t) => t.typo !== typo);
 	}
 
 	async function addToCustomCorrections(typo: string, correction: string) {
@@ -106,14 +98,130 @@
 		}
 	}
 
-	// Auto-run spell check when text changes (debounced)
-	let checkTimeout: ReturnType<typeof setTimeout> | undefined;
-	function handleInput() {
-		if (checkTimeout) clearTimeout(checkTimeout);
-		checkTimeout = setTimeout(() => {
-			performSpellCheck();
-		}, 500);
+	let checkSeq = 0;
+	function handleInputKeydown(event: KeyboardEvent) {
+		// Enter: run check; Shift+Enter: insert newline
+		if (event.key === 'Enter' && !event.shiftKey) {
+			event.preventDefault();
+			performSpellCheck(false);
+		}
 	}
+
+	async function performSpellCheck(enableAi = false) {
+		if (!currentText.trim()) {
+			correctedText = '';
+			hasChanges = false;
+			lineChanges = [];
+			typos = [];
+			return;
+		}
+
+		const seq = ++checkSeq;
+		isChecking = true;
+		try {
+			const result = await invoke<{
+				original: string;
+				corrected: string;
+				has_changes: boolean;
+				line_changes: Array<{
+					line: number;
+					col: number;
+					original: string;
+					corrected: string;
+					severity: number;
+				}>;
+				typos: Array<{
+					typo: string;
+					suggestions: string[];
+					line: number;
+					col: number;
+				}>;
+			}>('spell_check', { text: currentText, enableAi });
+
+			// Drop stale async result when user keeps typing.
+			if (seq !== checkSeq) return;
+
+			correctedText = result.corrected;
+			hasChanges = result.has_changes;
+			lineChanges = result.line_changes;
+			typos = result.typos || [];
+
+			console.log('Spell check result:', { hasChanges, lineChanges: lineChanges.length, typos: typos.length });
+		} catch (error) {
+			if (seq !== checkSeq) return;
+			console.error('Spell check failed:', error);
+			correctedText = currentText;
+			hasChanges = false;
+			typos = [];
+		} finally {
+			if (seq === checkSeq) {
+				isChecking = false;
+			}
+		}
+	}
+
+	async function runAiTransform(operation: 'grammar' | 'translate' | 'polish') {
+		if (!currentText.trim() || aiBusy) {
+			return;
+		}
+
+		aiBusy = true;
+		aiError = null;
+		aiRunningOperation = operation;
+		try {
+			const config = await invoke<AppConfig>('get_config');
+			if (!config.aiGrammarEnabled) {
+				throw new Error('Please enable AI Grammar Check in Settings first.');
+			}
+			const apiKey = (config.openaiApiKey || '').trim();
+			if (!apiKey) {
+				throw new Error('OpenAI/OpenRouter API key is empty. Set it in Settings.');
+			}
+
+			const result = await invoke<{
+				outputText?: string;
+				typos?: Array<{
+					typo: string;
+					suggestions: string[];
+					line: number;
+					col: number;
+				}>;
+			}>('ai_text_transform', {
+				request: {
+					text: currentText,
+					operation,
+					apiKey,
+					apiBaseUrl: config.aiApiBaseUrl,
+					model: config.openaiModel,
+					timeoutMs: config.aiTimeoutMs,
+					targetLanguage: aiTargetLanguage,
+					polishStyle: aiPolishStyle
+				}
+			});
+
+			if (operation === 'grammar') {
+				typos = result.typos || [];
+				correctedText = '';
+				hasChanges = false;
+				lineChanges = [];
+			} else {
+				typos = [];
+				correctedText = result.outputText || '';
+				hasChanges = correctedText !== currentText;
+				lineChanges = hasChanges
+					? [{ line: 1, col: 1, original: currentText, corrected: correctedText, severity: 2 }]
+					: [];
+			}
+		} catch (error) {
+			console.error('AI transform failed:', error);
+			aiError = error instanceof Error ? error.message : String(error);
+		} finally {
+			aiBusy = false;
+			aiRunningOperation = null;
+		}
+	}
+
+	loadAiDefaults();
 </script>
 
 <div class="flex flex-col gap-4 p-6">
@@ -129,7 +237,7 @@
 				<Textarea
 					id="original-text"
 					bind:value={currentText}
-					oninput={handleInput}
+					onkeydown={handleInputKeydown}
 					placeholder="Type or paste your text here..."
 					class="min-h-[150px] font-mono text-sm"
 				/>
@@ -138,7 +246,7 @@
 			<!-- Action Buttons -->
 			<div class="flex flex-wrap gap-2">
 				<Button
-					onclick={performSpellCheck}
+					onclick={() => performSpellCheck(false)}
 					disabled={isChecking || !currentText.trim()}
 					variant="default"
 				>
@@ -162,6 +270,37 @@
 					<Copy class="mr-2 h-4 w-4" />
 					Copy Result
 				</Button>
+			</div>
+
+			<div class="rounded-md border p-3 space-y-3">
+				<div class="text-sm font-medium">AI Tools</div>
+				<div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+					<select
+						bind:value={aiTargetLanguage}
+						class="border-input bg-background ring-offset-background focus-visible:border-ring focus-visible:ring-ring/50 flex h-9 w-full min-w-0 rounded-md border px-3 py-1 text-sm outline-none focus-visible:ring-[3px]"
+					>
+						{#each translateLanguageOptions as language}
+							<option value={language}>{language}</option>
+						{/each}
+					</select>
+					<Input bind:value={aiPolishStyle} placeholder="Polish style, e.g. professional / concise / friendly" />
+				</div>
+				<div class="flex flex-wrap gap-2">
+					<Button onclick={() => runAiTransform('grammar')} disabled={aiBusy || !currentText.trim()} variant="outline">
+						{aiRunningOperation === 'grammar' ? 'Running...' : 'AI Grammar'}
+					</Button>
+					<Button onclick={() => runAiTransform('translate')} disabled={aiBusy || !currentText.trim()} variant="outline">
+						{aiRunningOperation === 'translate' ? 'Running...' : 'AI Translate'}
+					</Button>
+					<Button onclick={() => runAiTransform('polish')} disabled={aiBusy || !currentText.trim()} variant="outline">
+						{aiRunningOperation === 'polish' ? 'Running...' : 'AI Polish'}
+					</Button>
+				</div>
+				{#if aiError}
+					<div class="rounded-md border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700">
+						AI Error: {aiError}
+					</div>
+				{/if}
 			</div>
 
 			<!-- Corrected Text Output -->

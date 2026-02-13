@@ -10,6 +10,8 @@ pub enum Error {
     InputSimulation(String),
     #[error("Configuration error: {0}")]
     Config(String),
+    #[error("API error: {0}")]
+    Api(String),
 }
 
 #[derive(serde::Serialize)]
@@ -21,6 +23,7 @@ enum ErrorName {
     Clipboard(String),
     InputSimulation(String),
     Config(String),
+    Api(String),
 }
 
 impl serde::Serialize for Error {
@@ -35,6 +38,7 @@ impl serde::Serialize for Error {
             Self::Clipboard(_) => ErrorName::Clipboard(message),
             Self::InputSimulation(_) => ErrorName::InputSimulation(message),
             Self::Config(_) => ErrorName::Config(message),
+            Self::Api(_) => ErrorName::Api(message),
         };
         name.serialize(serializer)
     }

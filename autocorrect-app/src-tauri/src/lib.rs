@@ -13,6 +13,7 @@ use commands::custom_corrections::{
     add_custom_correction, delete_custom_correction, get_custom_corrections,
     get_custom_corrections_path_cmd, update_custom_correction,
 };
+use commands::ai_grammar::{ai_grammar_check, ai_text_transform};
 use commands::default::{read, write};
 use commands::hotkey_config::{
     get_available_keys, get_hotkey_config, reset_hotkey_config, update_hotkey_config,
@@ -42,6 +43,8 @@ pub fn run() {
 
     tauri::Builder::default()
         .setup(move |app| {
+            app.handle().plugin(tauri_plugin_http::init())?;
+
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -195,6 +198,8 @@ pub fn run() {
             update_custom_correction,
             delete_custom_correction,
             get_custom_corrections_path_cmd,
+            ai_grammar_check,
+            ai_text_transform,
             // Popup commands
             show_popup,
             hide_popup,
@@ -214,6 +219,20 @@ fn sync_system_typos(app: &tauri::AppHandle) {
         Some(m) => m,
         None => return,
     };
+
+    // When AutoCorrect windows are focused, disable system overlay updates to avoid focus flicker.
+    if let Some(main_window) = app.get_webview_window("main") {
+        if main_window.is_focused().unwrap_or(false) {
+            overlay_manager.update_markers(vec![]);
+            return;
+        }
+    }
+    if let Some(popup_window) = app.get_webview_window("popup") {
+        if popup_window.is_focused().unwrap_or(false) {
+            overlay_manager.update_markers(vec![]);
+            return;
+        }
+    }
 
     // 1. 检查焦点文本
     #[cfg(target_os = "macos")]
