@@ -85,13 +85,13 @@ The Rust backend handles system integration, spell checking, and UI coordination
 | `StatusIndicator.svelte` | Enable/disable toggle and correction count |
 | `CustomCorrectionsManager.svelte` | Custom dictionary management |
 
-**UI Library**: Uses shadcn-svelte components (`src/lib/components/ui/`)
+**UI Library**: Tailwind CSS 4 with shadcn-svelte components (`src/lib/components/ui/`)
 
-### Windows (tauri.conf.json)
+### Windows (tauri.conf.json + programmatic)
 
-1. **main** (800x600): Primary application window
-2. **popup** (320x240): Transparent, always-on-top suggestion popup
-3. **overlay**: Fullscreen transparent window for typo markers (click-through)
+1. **main** (800x600): Primary application window (`index.html`)
+2. **popup** (320x240): Transparent, always-on-top suggestion popup (`popup.html`)
+3. **overlay**: Fullscreen transparent window created programmatically for typo markers (click-through, `overlay.html`)
 
 ### Event Flow
 
@@ -115,6 +115,12 @@ apply_suggestion_to_selection_macos() → clipboard + paste simulation
 - **AutoCorrect rules**: `~/.autocorrectrc` (formatting rules)
 - **Hotkey config**: Stored via `hotkey_config.rs` in app data directory
 
+### Frontend-Backend Communication
+
+- **Tauri commands**: Frontend invokes Rust functions via `@tauri-apps/api` (`invoke()`)
+- **Tauri events**: Backend emits events like `popup-show`, `popup-hide`, `overlay-update` for reactive UI
+- **Capabilities**: Permissions defined in `src-tauri/capabilities/default.json`
+
 ## macOS-Specific Notes
 
 - Requires Accessibility permissions (`check_and_request_accessibility()`)
@@ -130,3 +136,5 @@ apply_suggestion_to_selection_macos() → clipboard + paste simulation
 - `rdev`: Global hotkey listening (forked version for macOS stability)
 - `arboard`: Clipboard operations
 - `cocoa`, `objc`, `core-foundation`: macOS Accessibility bindings
+- `tauri-plugin-log`: Logging
+- `tauri-plugin-http`: HTTP requests (for AI grammar API)

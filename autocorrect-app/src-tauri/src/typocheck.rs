@@ -32,6 +32,11 @@ static BUNDLED_DICT: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
         words.insert(line);
     }
 
+    // Add common terms manually if not in the bundled list
+    words.insert("tech");
+    words.insert("tauri");
+    words.insert("pnpm");
+
     log::info!("Loaded {} words from bundled dictionary", words.len());
     words
 });
