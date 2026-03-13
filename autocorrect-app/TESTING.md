@@ -11,10 +11,11 @@ Before testing, ensure you have:
 - Application dependencies installed: `npm install`
 - Development server running: `npm run tauri:dev`
 
-Or use the automated demo script:
-```bash
-./demo.sh
-```
+### macOS Permission Setup (required before testing)
+
+The overlay and hotkey features require macOS permissions. In **development mode** (`tauri:dev`) these are requested from the terminal process. For a **packaged build** follow [README.md — macOS Permissions Setup](./README.md#macos-permissions-setup).
+
+For dev mode, grant Accessibility permission to your terminal app (Ghostty, iTerm2, Terminal.app) in **System Settings → Privacy & Security → Accessibility**.
 
 ## Quick Start
 
@@ -24,7 +25,58 @@ Or use the automated demo script:
 
 ## Test Cases
 
-### 1. Basic Spell Checking
+### 1. Overlay Red Underlines (Hover Mode)
+
+**Objective**: Verify real-time typo markers appear under misspelled words.
+
+**Steps**:
+1. Open **Notes**, **TextEdit**, or **Slack** (not a terminal emulator)
+2. Click into a text input area and type: `teh quick brwon fox`
+3. Wait ~1 second
+4. Verify red underlines appear under `teh` and `brwon`
+
+**Expected Result**:
+- Red underline markers appear directly under each typo
+- Correct words have no underline
+- Markers update within ~1 s of typing
+
+---
+
+### 2. Hover Popup and Keyboard Acceptance
+
+**Objective**: Verify the suggestion popup appears on hover and accepts via keyboard.
+
+**Steps**:
+1. With overlay markers visible (see Test 1), hover the mouse over `teh`
+2. Verify a popup window appears near the cursor with the suggestion `the`
+3. Press `Enter`
+4. Verify `teh` is replaced by `the` in the source app, and the popup closes
+
+**Expected Result**:
+- Popup appears within ~300 ms of hovering
+- Popup receives keyboard focus automatically (title bar active)
+- `Enter` replaces the typo word; source app retains focus
+- `Esc` dismisses the popup without changes
+
+---
+
+### 3. Hover Popup Click Acceptance
+
+**Objective**: Verify clicking the Accept button also replaces the typo.
+
+**Steps**:
+1. Hover over another typo underline (e.g., `brwon`) to show popup
+2. Click the **Accept** button in the popup
+3. Verify `brwon` is replaced by `brown` in the source app
+
+**Expected Result**:
+- Click on Accept replaces the exact typo word
+- Text before and after the typo is unchanged
+- Popup closes after acceptance
+
+---
+
+### 4. Basic Spell Checking
 
 **Objective**: Verify the core spell checking functionality works correctly.
 
@@ -242,24 +294,25 @@ Use this template to track your test results:
 
 | Test Case | Status | Notes |
 |-----------|--------|-------|
+| Overlay Red Underlines | ☐ Pass / ☐ Fail | |
+| Hover Popup (keyboard) | ☐ Pass / ☐ Fail | |
+| Hover Popup (click) | ☐ Pass / ☐ Fail | |
 | Basic Spell Checking | ☐ Pass / ☐ Fail | |
 | Global Hotkey | ☐ Pass / ☐ Fail | |
 | Settings Panel | ☐ Pass / ☐ Fail | |
 | Clipboard Monitoring | ☐ Pass / ☐ Fail | |
 | Status Indicator | ☐ Pass / ☐ Fail | |
-| About Page | ☐ Pass / ☐ Fail | |
 | Multi-language Support | ☐ Pass / ☐ Fail | |
 | Configuration Persistence | ☐ Pass / ☐ Fail | |
 | Performance Test | ☐ Pass / ☐ Fail | |
 | Error Handling | ☐ Pass / ☐ Fail | |
 
-## Known Issues
+## Known Issues / Limitations
 
-As of version 0.1.0:
-
-- Clipboard monitoring detects changes but automatic text replacement is limited
-- Text replacement in external applications depends on platform accessibility APIs
-- Global hotkey may conflict with other applications using the same combination
+- **Terminal emulators** (Ghostty, iTerm2, Terminal.app, VS Code terminal) are intentionally excluded from overlay monitoring
+- **Overlay bounds** rely on the macOS Accessibility API; apps that do not expose `AXBoundsForRange` fall back to estimated positions which may be slightly off
+- Accessibility permission must be re-granted after each `pnpm tauri build` for unsigned builds (see README for the permanent fix via code signing)
+- Global hotkey may conflict with other applications using `Cmd+Shift+A`
 
 ## Reporting Issues
 

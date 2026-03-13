@@ -4,13 +4,13 @@ A system-wide text correction and spell checking desktop application powered by 
 
 ## Features
 
-- **Real-time Spell Checking**: Instant text correction using AutoCorrect's powerful engine
-- **Global Hotkey Support**: Trigger spell checking from anywhere with `Cmd+Shift+A` (macOS) or `Ctrl+Shift+A` (Windows/Linux)
-- **Clipboard Monitoring**: Automatically detect and correct text copied to clipboard
+- **Real-time Overlay Markers**: Grammarly-style red underlines appear under typos as you type in any app
+- **Hover Suggestion Popup**: Hover over a red underline to see a correction popup; press `Enter` to accept or `Esc` to dismiss
+- **In-place Typo Replacement**: Accepting a suggestion replaces the exact typo word in the source application (Slack, Notes, etc.)
+- **Global Hotkey Support**: Trigger spell checking from anywhere with `Cmd+Shift+A` (macOS)
 - **Custom Rules**: Configure and customize correction rules to fit your needs
 - **Multi-language Support**: Full support for English, Chinese, and other CJK languages
 - **Lightweight**: Built with Rust backend and Svelte frontend for minimal resource usage
-- **Cross-platform**: Works on macOS, Windows, and Linux
 
 ## Screenshots
 
@@ -34,9 +34,11 @@ A system-wide text correction and spell checking desktop application powered by 
 
 1. Download the latest release from the [Releases](https://github.com/huacnlee/autocorrect/releases) page
 2. Install the appropriate package for your platform:
-   - **macOS**: Open the `.dmg` file and drag AutoCorrect to Applications
+   - **macOS**: Open the `.dmg` file and drag AutoCorrect to `/Applications`
    - **Windows**: Run the `.msi` installer
    - **Linux**: Install the `.deb` or `.AppImage` package
+
+> **macOS users**: See [macOS Permissions Setup](#macos-permissions-setup) below — this is required for the overlay and hotkey features to work.
 
 ### Build from Source
 
@@ -102,27 +104,64 @@ autocorrect-app/
 └── package.json            # Node dependencies and scripts
 ```
 
+## macOS Permissions Setup
+
+AutoCorrect uses the macOS Accessibility API to read text from other apps, draw overlay markers, and simulate paste for typo replacement. These features require explicit user permission.
+
+### First-time Setup (after installing to `/Applications`)
+
+**Step 1 — Remove the quarantine flag** (critical: skipping this step causes permissions to reset on every launch)
+
+```bash
+sudo xattr -dr com.apple.quarantine /Applications/AutoCorrect.app
+```
+
+**Step 2 — Grant Accessibility permission**
+
+Launch AutoCorrect. It will automatically open **System Settings → Privacy & Security → Accessibility**. Enable the toggle next to AutoCorrect.
+
+**Step 3 — Restart AutoCorrect**
+
+Quit and reopen the app. The red underline overlay will now appear as you type.
+
+**Step 4 — Grant Input Monitoring permission** (for global hotkeys)
+
+The first time you use `Cmd+Shift+A`, macOS will prompt for Input Monitoring. Alternatively, add AutoCorrect manually in **System Settings → Privacy & Security → Input Monitoring**.
+
+### Why permissions reset after every rebuild
+
+macOS ties Accessibility permissions to the app binary. When you rebuild (`pnpm tauri build`), the binary changes and the permission entry becomes invalid. Re-run Steps 1–4 after each build.
+
+For permanent permission persistence across builds, [code-sign the app](https://tauri.app/distribute/sign/) with an Apple Developer certificate — permissions are then stored by code-signing identity, not binary hash.
+
+### Supported Applications
+
+The overlay works in apps that expose text via the macOS Accessibility API:
+
+| Works | Does not work |
+|-------|---------------|
+| Slack, Discord | Terminal emulators (Ghostty, iTerm2, Terminal.app) |
+| Notes, Mail, TextEdit | VS Code (terminal pane) |
+| Chrome, Safari (input fields) | Sandboxed apps without AX support |
+| Most native macOS apps | |
+
+---
+
 ## Usage Guide
 
-### Basic Spell Checking
+### Real-time Overlay (Hover Mode)
 
-1. **Using the App Window**:
-   - Open AutoCorrect from your Applications menu
-   - Type or paste text into the main spell checker area
-   - Click "Check Spelling" to see corrections
-   - Accept or reject individual suggestions
+1. Type text with typos in any supported app (Slack, Notes, TextEdit, etc.)
+2. Red underlines appear under detected typos within ~1 second
+3. Hover the mouse over a red underline — a suggestion popup appears
+4. Press `Enter` to accept and replace the typo, or `Esc` / click elsewhere to dismiss
 
-2. **Using Global Hotkey**:
-   - Select text in any application
-   - Press `Cmd+Shift+A` (macOS) or `Ctrl+Shift+A` (Windows/Linux)
-   - AutoCorrect will show a popup with spelling suggestions
-   - Press `Enter` to accept or `Esc` to dismiss
+### Global Hotkey (Selection Mode)
 
-3. **Using Clipboard Monitoring**:
-   - Enable "Clipboard Monitor" in Settings
-   - Copy text to clipboard (`Cmd+C` or `Ctrl+C`)
-   - AutoCorrect automatically detects and corrects the text
-   - The corrected text replaces your clipboard contents
+1. Select text containing errors in any application
+2. Press `Cmd+Shift+A` (macOS)
+3. A popup shows the corrected version of the entire selection
+4. Press `Enter` to accept (replaces selection) or `Esc` to dismiss
 
 ### Settings Panel
 
@@ -210,17 +249,34 @@ See [Tauri's signing documentation](https://tauri.app/distribute/sign/) for deta
 
 ## Troubleshooting
 
+### Red Underlines Not Appearing
+
+1. **Check Accessibility permission**: Open System Settings → Privacy & Security → Accessibility. AutoCorrect must be listed and enabled.
+2. **Remove quarantine flag**: Run `sudo xattr -dr com.apple.quarantine /Applications/AutoCorrect.app` then restart the app.
+3. **Wrong app**: Overlay does not work in terminal emulators (Ghostty, iTerm2, Terminal.app) — this is intentional.
+4. **Rebuilt the app?**: Re-grant Accessibility permission after every rebuild (see [macOS Permissions Setup](#macos-permissions-setup)).
+
+### Permission Dialog Appears on Every Launch
+
+This means the Accessibility permission is not persisting, almost always caused by the quarantine flag. Run:
+
+```bash
+sudo xattr -dr com.apple.quarantine /Applications/AutoCorrect.app
+```
+
+Then remove AutoCorrect from the Accessibility list and re-add it. For a permanent fix, [code-sign the app](https://tauri.app/distribute/sign/).
+
 ### Hotkey Not Working
 
-- Check that no other application is using the same hotkey
-- Verify AutoCorrect has necessary system permissions (macOS: Accessibility, Windows: Input monitoring)
-- Restart the application after changing settings
+- Ensure AutoCorrect is in System Settings → Privacy & Security → **Input Monitoring**
+- Check that no other app uses `Cmd+Shift+A`
+- Restart the application after granting Input Monitoring permission
 
-### Clipboard Monitor Issues
+### Typo Replacement Inserts Instead of Replacing
 
-- Some applications may block clipboard access
-- Adjust the poll interval in Settings if monitoring is slow
-- Disable "CJK Only" to monitor all clipboard content
+- Ensure the source app (Slack, Notes, etc.) has AX focus when you hover the popup
+- The popup must receive focus (it should automatically) before pressing `Enter`
+- If replacement still fails, try clicking the **Accept** button instead of pressing `Enter`
 
 ### Build Errors
 
