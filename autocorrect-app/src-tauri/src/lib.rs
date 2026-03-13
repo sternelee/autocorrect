@@ -167,6 +167,8 @@ pub fn run() {
             thread::spawn(move || {
                 let mut last_hovered_id = String::new();
                 let mut hover_start: Option<std::time::Instant> = None;
+                // Track previous left-button state to detect leading edge of a click.
+                let mut prev_left_down = false;
                 
                 loop {
                     thread::sleep(std::time::Duration::from_millis(100));
@@ -179,6 +181,34 @@ pub fn run() {
                     let (mouse_x, mouse_y) = text_selection::get_cursor_position();
                     let mouse_x_f = mouse_x as f64;
                     let mouse_y_f = mouse_y as f64;
+
+                    // Dismiss popup on click outside its bounds.
+                    #[cfg(target_os = "macos")]
+                    {
+                        let left_down = is_left_button_down();
+                        if left_down && !prev_left_down {
+                            // New left-button press – check whether it lands outside the popup.
+                            if let Some(popup_state) = app_handle_for_hover.try_state::<crate::popup::SharedPopupState>() {
+                                if let Ok(state) = popup_state.0.lock() {
+                                    if state.is_visible {
+                                        let (px, py) = state.position;
+                                        // Popup logical size matches tauri.conf.json (320 × 240).
+                                        let popup_w = 320.0_f64;
+                                        let popup_h = 240.0_f64;
+                                        let outside = mouse_x_f < px as f64
+                                            || mouse_x_f > px as f64 + popup_w
+                                            || mouse_y_f < py as f64
+                                            || mouse_y_f > py as f64 + popup_h;
+                                        if outside {
+                                            drop(state);
+                                            let _ = crate::popup::hide_popup(app_handle_for_hover.clone());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        prev_left_down = left_down;
+                    }
 
                     let markers = {
                         if let Ok(lock) = overlay_manager.current_markers.lock() {
@@ -822,6 +852,17 @@ fn check_accessibility_permission() -> bool {
     #[cfg(not(target_os = "macos"))]
     {
         true
+    }
+}
+
+/// Returns true if the left mouse button is currently held down.
+/// Uses NSEvent.pressedMouseButtons (bit 0 = left button).
+#[cfg(target_os = "macos")]
+fn is_left_button_down() -> bool {
+    use objc::{msg_send, sel, sel_impl};
+    unsafe {
+        let pressed: usize = msg_send![objc::class!(NSEvent), pressedMouseButtons];
+        pressed & 1 != 0
     }
 }
 

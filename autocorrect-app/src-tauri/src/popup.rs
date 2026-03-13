@@ -8,8 +8,8 @@ use tauri::{AppHandle, Emitter, Manager, State, Window};
 /// Popup state shared across the application
 #[derive(Debug, Clone)]
 pub struct PopupState {
-    is_visible: bool,
-    position: (i32, i32),
+    pub is_visible: bool,
+    pub position: (i32, i32),
     original_text: String,
     suggestion: String,
     source_app_name: Option<String>,

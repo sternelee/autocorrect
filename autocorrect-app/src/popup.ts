@@ -105,15 +105,8 @@ async function acceptSuggestion() {
     return;
   }
 
-  console.log("Accepting suggestion:", textToUse);
-
   try {
-    // Call accept_suggestion command which will:
-    // 1. Set clipboard to the corrected text
-    // 2. Hide popup
-    // 3. Simulate paste after delay
-    // Tauri v2 serialises JS camelCase → Rust snake_case automatically, so
-    // the Rust parameter `char_length` must be sent as `charLength` from JS.
+    // Tauri v2 maps JS camelCase → Rust snake_case, so char_length → charLength.
     await invoke("accept_suggestion", {
       text: textToUse,
       offset: currentOffset,
@@ -126,7 +119,6 @@ async function acceptSuggestion() {
 
 // Reject suggestion
 async function rejectSuggestion() {
-
   try {
     await invoke("reject_suggestion");
     // hidePopup() will be called by the backend
@@ -314,26 +306,6 @@ document.addEventListener("keydown", (e) => {
 editTextarea.addEventListener("input", () => {
   editTextarea.style.height = "auto";
   editTextarea.style.height = Math.max(60, editTextarea.scrollHeight) + "px";
-});
-
-// Click outside to close (with a small delay to allow button clicks)
-let clickTimeout: ReturnType<typeof setTimeout>;
-document.addEventListener("click", (e) => {
-  const target = e.target as HTMLElement;
-  if (!popup.contains(target)) {
-    // Ignore clicks that just opened the popup
-    clearTimeout(clickTimeout);
-    clickTimeout = setTimeout(() => {
-      // Only close if the popup is visible
-      getCurrentWindow()
-        .isVisible()
-        .then((isVisible) => {
-          if (isVisible) {
-            rejectSuggestion();
-          }
-        });
-    }, 100);
-  }
 });
 
 // Initialize
