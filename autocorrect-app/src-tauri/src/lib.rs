@@ -98,12 +98,28 @@ pub fn run() {
         .setup(move |app| {
             app.handle().plugin(tauri_plugin_http::init())?;
 
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
+            // Enable logging in both debug and release builds so issues in the
+            // packaged app can be diagnosed.
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(log::LevelFilter::Info)
+                    .build(),
+            )?;
+
+            // Request macOS Accessibility permission on first launch.
+            // Without this the AX API calls (text reading, range bounds,
+            // select_text_range) all fail silently in the packaged app.
+            #[cfg(target_os = "macos")]
+            {
+                if !macos_text::check_and_request_accessibility() {
+                    log::warn!(
+                        "Accessibility permission not granted. \
+                         Please open System Settings → Privacy & Security → Accessibility \
+                         and enable AutoCorrect."
+                    );
+                } else {
+                    log::info!("Accessibility permission granted.");
+                }
             }
 
             // Initialize popup state

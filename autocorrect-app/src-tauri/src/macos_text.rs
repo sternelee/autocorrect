@@ -44,16 +44,30 @@ extern "C" {
 }
 
 /// 检查并请求辅助功能权限
+///
+/// If not yet trusted, calls `AXIsProcessTrustedWithOptions` with the
+/// prompt flag set so macOS immediately shows the Accessibility permission
+/// dialog pointing at this app.
 pub fn check_and_request_accessibility() -> bool {
     unsafe {
         if AXIsProcessTrusted() {
             return true;
         }
-        // 如果没有权限，可以通过脚本触发系统弹窗
-        let _ = Command::new("osascript")
-            .arg("-e")
-            .arg("tell application \"System Preferences\" to activate")
-            .spawn();
+        // Trigger the system permission dialog for Accessibility.
+        // kAXTrustedCheckOptionPrompt = "AXTrustedCheckOptionPrompt"
+        use core_foundation::base::TCFType;
+        use core_foundation::boolean::CFBoolean;
+        use core_foundation::dictionary::CFDictionary;
+        use core_foundation::string::CFString;
+        let key = CFString::new("AXTrustedCheckOptionPrompt");
+        let val = CFBoolean::true_value();
+        let opts = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), val.as_CFType())]);
+        // AXIsProcessTrustedWithOptions is available on macOS 10.9+
+        #[link(name = "ApplicationServices", kind = "framework")]
+        extern "C" {
+            fn AXIsProcessTrustedWithOptions(options: core_foundation_sys::base::CFTypeRef) -> bool;
+        }
+        AXIsProcessTrustedWithOptions(opts.as_CFTypeRef() as _);
         false
     }
 }

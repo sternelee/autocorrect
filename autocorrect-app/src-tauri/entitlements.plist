@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        AutoCorrect requires direct system access that is incompatible with
+        the App Sandbox: reading text from other apps via the Accessibility
+        API, monitoring global keyboard events, and sending Apple Events for
+        paste simulation.
+    -->
+    <key>com.apple.security.app-sandbox</key>
+    <false/>
+
+    <!--
+        Required for the Hardened Runtime: WKWebView (Tauri frontend) needs
+        a JIT compiler to execute JavaScript.
+    -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+
+    <!--
+        Allow sending Apple Events to other applications.
+        Used by osascript calls that activate the source app and simulate
+        Cmd+V to paste the corrected text.
+    -->
+    <key>com.apple.security.automation.apple-events</key>
+    <true/>
+</dict>
+</plist>

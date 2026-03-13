@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!--
+        Privacy usage descriptions — required by macOS for any app that
+        accesses these protected APIs, even outside the App Store.
+    -->
+    <key>NSAccessibilityUsageDescription</key>
+    <string>AutoCorrect reads the text you are typing in other applications to detect and highlight spelling issues with red underlines.</string>
+
+    <key>NSAppleEventsUsageDescription</key>
+    <string>AutoCorrect sends Apple Events to simulate ⌘V when applying a correction in another application.</string>
+
+    <key>NSInputMonitoringUsageDescription</key>
+    <string>AutoCorrect monitors keyboard and mouse input to detect when you hover over a highlighted typo so it can display the suggestion popup.</string>
+</dict>
+</plist>
