@@ -78,25 +78,22 @@ impl OverlayManager {
             log::info!("Overlay markers updated: {}", marker_count);
         }
 
-        // Log marker positions
         for (i, m) in markers.iter().enumerate() {
             log::debug!(
                 "[DIAG] overlay marker[{}]: id={}, x={:.1}, y={:.1}, w={:.1}, h={:.1}",
-                i,
-                m.id,
-                m.x,
-                m.y,
-                m.width,
-                m.height
+                i, m.id, m.x, m.y, m.width, m.height
             );
         }
 
         #[cfg(target_os = "macos")]
         {
             let state = Arc::clone(&self.state);
+            let (ul_style, ul_color) = crate::commands::config::get_underline_config();
             let _ = self.handle.run_on_main_thread(move || {
                 if let Ok(mut guard) = state.lock() {
-                    if let Err(err) = unsafe { render_native_markers(&mut guard, &markers) } {
+                    if let Err(err) = unsafe {
+                        render_native_markers(&mut guard, &markers, &ul_style, &ul_color)
+                    } {
                         log::warn!("Native overlay render error: {}", err);
                     }
                 }
@@ -210,13 +207,57 @@ unsafe fn ensure_native_overlay(state: &mut NativeOverlayState) -> Result<(), St
     Ok(())
 }
 
+/// Parse "#rrggbb" into (r, g, b, alpha) floats in [0.0, 1.0].
+fn parse_hex_color(hex: &str) -> (f64, f64, f64, f64) {
+    let h = hex.trim_start_matches('#');
+    if h.len() == 6 {
+        if let (Ok(r), Ok(g), Ok(b)) = (
+            u8::from_str_radix(&h[0..2], 16),
+            u8::from_str_radix(&h[2..4], 16),
+            u8::from_str_radix(&h[4..6], 16),
+        ) {
+            return (r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0, 0.95);
+        }
+    }
+    (1.0, 0.23, 0.19, 0.95) // fallback red
+}
+
+// CGPath C API — available on all macOS targets via CoreGraphics.framework.
+#[cfg(target_os = "macos")]
+extern "C" {
+    fn CGPathCreateMutable() -> *mut std::ffi::c_void;
+    fn CGPathMoveToPoint(
+        path: *mut std::ffi::c_void,
+        m: *const std::ffi::c_void,
+        x: f64,
+        y: f64,
+    );
+    fn CGPathAddQuadCurveToPoint(
+        path: *mut std::ffi::c_void,
+        m: *const std::ffi::c_void,
+        cpx: f64,
+        cpy: f64,
+        x: f64,
+        y: f64,
+    );
+    fn CGPathAddLineToPoint(
+        path: *mut std::ffi::c_void,
+        m: *const std::ffi::c_void,
+        x: f64,
+        y: f64,
+    );
+    fn CGPathRelease(path: *mut std::ffi::c_void);
+}
+
 #[cfg(target_os = "macos")]
 unsafe fn render_native_markers(
     state: &mut NativeOverlayState,
     markers: &[TypoMarker],
+    ul_style: &str,
+    ul_color: &str,
 ) -> Result<(), String> {
     use cocoa::appkit::{NSColor, NSView};
-    use cocoa::base::{id, nil, NO, YES};
+    use cocoa::base::{id, nil, YES};
     use cocoa::foundation::{NSPoint, NSRect, NSSize};
     use objc::{class, msg_send, sel, sel_impl};
 
@@ -224,7 +265,6 @@ unsafe fn render_native_markers(
     let window = state.window as id;
     let container = state.container as id;
 
-    // Clear old views
     for marker_view in state.marker_views.drain(..) {
         let _: () = msg_send![marker_view as id, removeFromSuperview];
     }
@@ -236,54 +276,153 @@ unsafe fn render_native_markers(
     let _: () = msg_send![window, orderFrontRegardless];
     state.last_non_empty_at = Some(Instant::now());
 
-    // Helper to add a line
-    // Standard Coordinate System: Top-Left (0,0 is top-left of primary monitor)
-    let mut add_line = |x: f64,
-                        y_top_left: f64,
-                        w: f64,
-                        color: (f64, f64, f64, f64),
-                        _name: &str| {
-        let desktop_top_y = state.frame_origin_y + state.screen_height;
-        let screen_y_bl = desktop_top_y - y_top_left;
-        let local_y = screen_y_bl - state.frame_origin_y;
-        let local_x = x - state.frame_origin_x;
+    let color = parse_hex_color(ul_color);
 
-        let rect = NSRect::new(NSPoint::new(local_x, local_y), NSSize::new(w, 2.0));
-        let view = NSView::alloc(nil).initWithFrame_(rect);
-        let _: () = msg_send![view, setWantsLayer: YES];
-        let layer: id = msg_send![view, layer];
-        let nscolor: id = msg_send![class!(NSColor), colorWithCalibratedRed: color.0 green: color.1 blue: color.2 alpha: color.3];
-        let cg_color: id = msg_send![nscolor, CGColor];
-        let _: () = msg_send![layer, setBackgroundColor: cg_color];
-        let _: () = msg_send![layer, setCornerRadius: 1.0_f64];
-        let _: () = msg_send![container, addSubview: view];
-        state.marker_views.push(view as usize);
+    // Pre-extract state fields to avoid borrow conflicts in closures.
+    let desktop_top_y = state.frame_origin_y + state.screen_height;
+    let origin_x = state.frame_origin_x;
+    let origin_y = state.frame_origin_y;
+
+    // Convert top-left screen coordinates to NSWindow local (bottom-left) coordinates.
+    let to_local = |x: f64, y_tl: f64| -> (f64, f64) {
+        (x - origin_x, desktop_top_y - y_tl - origin_y)
     };
 
-    for (i, marker) in markers.iter().enumerate() {
-        // Both native (AXBoundsForRange) and fallback markers store Y in the
-        // top-left coordinate system (y=0 at top of primary screen, increases
-        // downward — same as Core Graphics / CGDisplay).
-        //
-        // For native markers, marker.y is the TOP of the character bounding
-        // rect; the underline should sit at the BOTTOM edge, so we add height.
-        // For fallback markers, lib.rs already stores final_y at the bottom
-        // of the text line, so we use it directly.
-        let is_fallback = marker.id.contains("fallback");
-        let y_top_left = if is_fallback {
-            marker.y
-        } else {
-            // Bottom of character bounding box (top-left coords, y increases down)
-            marker.y + marker.height
-        };
+    let make_cg_color = |r: f64, g: f64, b: f64, a: f64| -> id {
+        let ns: id = msg_send![class!(NSColor),
+            colorWithCalibratedRed: r green: g blue: b alpha: a];
+        msg_send![ns, CGColor]
+    };
 
-        add_line(
-            marker.x,
-            y_top_left,
-            marker.width,
-            (1.0, 0.1, 0.1, 0.95),
-            &format!("MARKER_{}", i),
-        );
+    for marker in markers.iter() {
+        let is_fallback = marker.id.contains("fallback");
+        let y = if is_fallback { marker.y } else { marker.y + marker.height };
+        let x = marker.x;
+        let w = marker.width;
+
+        match ul_style {
+            "wavy" => {
+                // Draw a smooth bezier wave using CAShapeLayer + CGPath.
+                // The wave is centred on the underline position; the view is
+                // tall enough to contain the full amplitude.
+                let amp = 2.0_f64; // ±2 px vertical swing
+                let period = 8.0_f64; // pixels per full wave cycle
+                let view_h = amp * 2.0 + 2.0; // total view height
+
+                // Position the view so its vertical centre lands on y.
+                let (local_x, base_local_y) = to_local(x, y);
+                let local_y = base_local_y - view_h / 2.0;
+
+                let rect =
+                    NSRect::new(NSPoint::new(local_x, local_y), NSSize::new(w, view_h));
+                let view: id = NSView::alloc(nil).initWithFrame_(rect);
+                let _: () = msg_send![view, setWantsLayer: YES];
+
+                // Build the bezier path in view-local coordinates.
+                // y=0 is bottom of view; mid = view_h/2 is the wave baseline.
+                let mid = view_h / 2.0;
+                let path = CGPathCreateMutable();
+                CGPathMoveToPoint(path, std::ptr::null(), 0.0, mid);
+                let mut px = 0.0_f64;
+                while px + period <= w {
+                    // Up-hump: control point above baseline
+                    CGPathAddQuadCurveToPoint(
+                        path,
+                        std::ptr::null(),
+                        px + period * 0.25,
+                        mid + amp,
+                        px + period * 0.5,
+                        mid,
+                    );
+                    // Down-hump: control point below baseline
+                    CGPathAddQuadCurveToPoint(
+                        path,
+                        std::ptr::null(),
+                        px + period * 0.75,
+                        mid - amp,
+                        px + period,
+                        mid,
+                    );
+                    px += period;
+                }
+                // Close out any remaining width with a straight line.
+                if px < w {
+                    CGPathAddLineToPoint(path, std::ptr::null(), w, mid);
+                }
+
+                // Create CAShapeLayer and configure it.
+                let shape: id = msg_send![class!(CAShapeLayer), layer];
+                let _: () = msg_send![shape, setPath: path];
+                CGPathRelease(path);
+
+                let cg_color = make_cg_color(color.0, color.1, color.2, color.3);
+                let _: () = msg_send![shape, setStrokeColor: cg_color];
+                let clear_ns: id = NSColor::clearColor(nil);
+                let clear_cg: id = msg_send![clear_ns, CGColor];
+                let _: () = msg_send![shape, setFillColor: clear_cg];
+                let _: () = msg_send![shape, setLineWidth: 1.5_f64];
+
+                let view_layer: id = msg_send![view, layer];
+                let _: () = msg_send![view_layer, addSublayer: shape];
+                let _: () = msg_send![container, addSubview: view];
+                state.marker_views.push(view as usize);
+            }
+            "dashed" => {
+                let dash = 6.0_f64;
+                let gap = 3.0_f64;
+                let mut px = x;
+                while px < x + w {
+                    let seg = dash.min(x + w - px);
+                    if seg > 0.0 {
+                        let (lx, ly) = to_local(px, y);
+                        let rect = NSRect::new(NSPoint::new(lx, ly), NSSize::new(seg, 2.0));
+                        let view: id = NSView::alloc(nil).initWithFrame_(rect);
+                        let _: () = msg_send![view, setWantsLayer: YES];
+                        let layer: id = msg_send![view, layer];
+                        let cg = make_cg_color(color.0, color.1, color.2, color.3);
+                        let _: () = msg_send![layer, setBackgroundColor: cg];
+                        let _: () = msg_send![layer, setCornerRadius: 1.0_f64];
+                        let _: () = msg_send![container, addSubview: view];
+                        state.marker_views.push(view as usize);
+                    }
+                    px += dash + gap;
+                }
+            }
+            "dotted" => {
+                let dot = 2.0_f64;
+                let gap = 2.0_f64;
+                let mut px = x;
+                while px < x + w {
+                    let seg = dot.min(x + w - px);
+                    if seg > 0.0 {
+                        let (lx, ly) = to_local(px, y);
+                        let rect = NSRect::new(NSPoint::new(lx, ly), NSSize::new(seg, 2.0));
+                        let view: id = NSView::alloc(nil).initWithFrame_(rect);
+                        let _: () = msg_send![view, setWantsLayer: YES];
+                        let layer: id = msg_send![view, layer];
+                        let cg = make_cg_color(color.0, color.1, color.2, color.3);
+                        let _: () = msg_send![layer, setBackgroundColor: cg];
+                        let _: () = msg_send![layer, setCornerRadius: 1.0_f64];
+                        let _: () = msg_send![container, addSubview: view];
+                        state.marker_views.push(view as usize);
+                    }
+                    px += dot + gap;
+                }
+            }
+            _ => {
+                // solid
+                let (lx, ly) = to_local(x, y);
+                let rect = NSRect::new(NSPoint::new(lx, ly), NSSize::new(w, 2.0));
+                let view: id = NSView::alloc(nil).initWithFrame_(rect);
+                let _: () = msg_send![view, setWantsLayer: YES];
+                let layer: id = msg_send![view, layer];
+                let cg = make_cg_color(color.0, color.1, color.2, color.3);
+                let _: () = msg_send![layer, setBackgroundColor: cg];
+                let _: () = msg_send![layer, setCornerRadius: 1.0_f64];
+                let _: () = msg_send![container, addSubview: view];
+                state.marker_views.push(view as usize);
+            }
+        }
     }
 
     Ok(())

@@ -72,6 +72,28 @@
 	let aiApiBaseUrl = 'https://openrouter.ai/api/v1/chat/completions';
 	let aiTranslateTargetLanguage = 'English';
 	let aiPolishStyle = 'professional';
+
+	// Underline appearance
+	let underlineStyle = 'wavy';
+	let underlineColor = '#ff3b30';
+
+	const UNDERLINE_STYLES = [
+		{ value: 'wavy',   label: 'Wavy' },
+		{ value: 'solid',  label: 'Solid' },
+		{ value: 'dashed', label: 'Dashed' },
+		{ value: 'dotted', label: 'Dotted' },
+	];
+
+	const UNDERLINE_COLORS = [
+		{ value: '#ff3b30', label: 'Red',    tw: 'bg-[#ff3b30]' },
+		{ value: '#ff9500', label: 'Orange', tw: 'bg-[#ff9500]' },
+		{ value: '#ffcc00', label: 'Yellow', tw: 'bg-[#ffcc00]' },
+		{ value: '#ff2d55', label: 'Pink',   tw: 'bg-[#ff2d55]' },
+		{ value: '#af52de', label: 'Purple', tw: 'bg-[#af52de]' },
+		{ value: '#007aff', label: 'Blue',   tw: 'bg-[#007aff]' },
+		{ value: '#34c759', label: 'Green',  tw: 'bg-[#34c759]' },
+	];
+
 	const translateLanguageOptions = [
 		'简体中文',
 		'English',
@@ -125,6 +147,8 @@
 			aiApiBaseUrl = config.aiApiBaseUrl ?? 'https://openrouter.ai/api/v1/chat/completions';
 			aiTranslateTargetLanguage = config.aiTranslateTargetLanguage ?? 'English';
 			aiPolishStyle = config.aiPolishStyle ?? 'professional';
+			underlineStyle = (config as any).underlineStyle ?? 'wavy';
+			underlineColor = (config as any).underlineColor ?? '#ff3b30';
 
 			hasUnsavedChanges = false;
 		} catch (error) {
@@ -170,7 +194,9 @@
 					aiTimeoutMs: aiTimeoutMs,
 					aiApiBaseUrl: aiApiBaseUrl,
 					aiTranslateTargetLanguage: aiTranslateTargetLanguage,
-					aiPolishStyle: aiPolishStyle
+					aiPolishStyle: aiPolishStyle,
+				underlineStyle: underlineStyle,
+				underlineColor: underlineColor,
 				}
 			});
 
@@ -246,6 +272,8 @@
 			aiApiBaseUrl = 'https://openrouter.ai/api/v1/chat/completions';
 			aiTranslateTargetLanguage = 'English';
 			aiPolishStyle = 'professional';
+			underlineStyle = 'wavy';
+			underlineColor = '#ff3b30';
 			await saveConfiguration();
 		} catch (error) {
 			console.error('Failed to reset config:', error);
@@ -562,6 +590,52 @@
 							</div>
 						</div>
 					{/each}
+				</div>
+			</div>
+
+			<!-- Appearance -->
+			<div class="space-y-3">
+				<h3 class="text-sm font-semibold">Appearance</h3>
+
+				<div class="rounded-lg border p-3 space-y-4">
+					<!-- Underline Style -->
+					<div class="space-y-2">
+						<p class="text-sm font-medium">Underline Style</p>
+						<div class="flex gap-2">
+							{#each UNDERLINE_STYLES as s}
+								<button
+									class="px-3 py-1.5 rounded-md border text-xs font-medium transition-colors
+										{underlineStyle === s.value
+											? 'border-primary bg-primary text-primary-foreground'
+											: 'border-border bg-background hover:bg-muted'}"
+									onclick={() => { underlineStyle = s.value; hasUnsavedChanges = true; }}
+								>{s.label}</button>
+							{/each}
+						</div>
+					</div>
+
+					<!-- Underline Color -->
+					<div class="space-y-2">
+						<p class="text-sm font-medium">Underline Color</p>
+						<div class="flex gap-2 flex-wrap">
+							{#each UNDERLINE_COLORS as c}
+								<button
+									class="w-7 h-7 rounded-full border-2 transition-all {c.tw}
+										{underlineColor === c.value ? 'border-foreground scale-110' : 'border-transparent'}"
+									title={c.label}
+									onclick={() => { underlineColor = c.value; hasUnsavedChanges = true; }}
+								></button>
+							{/each}
+						</div>
+					</div>
+
+					<!-- Preview -->
+					<div class="space-y-1">
+						<p class="text-xs text-muted-foreground">Preview</p>
+						<span class="text-sm" style="text-decoration: underline; text-decoration-style: {underlineStyle === 'wavy' ? 'wavy' : underlineStyle}; text-decoration-color: {underlineColor};">
+							Sample typo text
+						</span>
+					</div>
 				</div>
 			</div>
 

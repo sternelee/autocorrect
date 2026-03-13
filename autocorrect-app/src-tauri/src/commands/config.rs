@@ -1,9 +1,13 @@
 use super::errors::Error;
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+
+pub const DEFAULT_UNDERLINE_STYLE: &str = "wavy";
+pub const DEFAULT_UNDERLINE_COLOR: &str = "#ff3b30";
 
 /// Custom app-specific settings stored separately from autocorrect config
 #[derive(Clone, Serialize, Deserialize)]
@@ -26,6 +30,10 @@ struct AppSettings {
     ai_translate_target_language: String,
     #[serde(default = "default_ai_polish_style")]
     ai_polish_style: String,
+    #[serde(default = "default_underline_style")]
+    underline_style: String,
+    #[serde(default = "default_underline_color")]
+    underline_color: String,
 }
 
 impl Default for AppSettings {
@@ -40,6 +48,8 @@ impl Default for AppSettings {
             ai_api_base_url: default_ai_api_base_url(),
             ai_translate_target_language: default_ai_translate_target_language(),
             ai_polish_style: default_ai_polish_style(),
+            underline_style: default_underline_style(),
+            underline_color: default_underline_color(),
         }
     }
 }
@@ -70,6 +80,14 @@ fn default_ai_translate_target_language() -> String {
 
 fn default_ai_polish_style() -> String {
     "professional".to_string()
+}
+
+fn default_underline_style() -> String {
+    DEFAULT_UNDERLINE_STYLE.to_string()
+}
+
+fn default_underline_color() -> String {
+    DEFAULT_UNDERLINE_COLOR.to_string()
 }
 
 /// Convert u8 to SeverityMode
@@ -116,6 +134,10 @@ pub struct AppConfig {
     pub ai_translate_target_language: String,
     /// Default polish style
     pub ai_polish_style: String,
+    /// Underline style: "wavy" | "solid" | "dashed" | "dotted"
+    pub underline_style: String,
+    /// Underline color hex (e.g. "#ff3b30")
+    pub underline_color: String,
 }
 
 /// Information about a single rule
@@ -160,6 +182,10 @@ pub struct ConfigUpdates {
     pub ai_translate_target_language: Option<String>,
     /// Default polish style
     pub ai_polish_style: Option<String>,
+    /// Underline style
+    pub underline_style: Option<String>,
+    /// Underline color hex
+    pub underline_color: Option<String>,
 }
 
 /// Get the current merged configuration (default + user config)
@@ -224,6 +250,8 @@ pub fn get_config() -> Result<AppConfig, Error> {
         ai_api_base_url: app_settings.ai_api_base_url,
         ai_translate_target_language: app_settings.ai_translate_target_language,
         ai_polish_style: app_settings.ai_polish_style,
+        underline_style: app_settings.underline_style,
+        underline_color: app_settings.underline_color,
     })
 }
 
@@ -278,7 +306,7 @@ pub fn get_rules() -> Result<Vec<RuleInfo>, Error> {
 
 /// Update configuration with specific changes
 #[tauri::command]
-pub fn update_config(updates: ConfigUpdates) -> Result<(), Error> {
+pub fn update_config(app: tauri::AppHandle, updates: ConfigUpdates) -> Result<(), Error> {
     let config_path = get_user_config_path();
 
     // Read existing user config or start with minimal structure
@@ -383,6 +411,30 @@ pub fn update_config(updates: ConfigUpdates) -> Result<(), Error> {
         save_app_settings(&app_settings)?;
     }
 
+    let mut underline_changed = false;
+    if let Some(style) = updates.underline_style {
+        let mut app_settings = load_app_settings();
+        app_settings.underline_style = style;
+        save_app_settings(&app_settings)?;
+        underline_changed = true;
+    }
+    if let Some(color) = updates.underline_color {
+        let mut app_settings = load_app_settings();
+        app_settings.underline_color = color;
+        save_app_settings(&app_settings)?;
+        underline_changed = true;
+    }
+    if underline_changed {
+        let settings = load_app_settings();
+        let _ = app.emit(
+            "underline-config-update",
+            serde_json::json!({
+                "underlineStyle": settings.underline_style,
+                "underlineColor": settings.underline_color,
+            }),
+        );
+    }
+
     // Serialize back to YAML
     // For a cleaner YAML output, we'll manually construct it
     let yaml = serialize_config_to_yaml(&user_config)?;
@@ -427,6 +479,13 @@ fn load_app_settings() -> AppSettings {
         }
     }
     AppSettings::default()
+}
+
+/// Return (underline_style, underline_color) from persisted app settings.
+/// Used by the overlay renderer without going through the full Tauri command layer.
+pub fn get_underline_config() -> (String, String) {
+    let s = load_app_settings();
+    (s.underline_style, s.underline_color)
 }
 
 /// Save app-specific settings

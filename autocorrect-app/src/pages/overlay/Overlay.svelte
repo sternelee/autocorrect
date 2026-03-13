@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { invoke } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
 
   interface TypoMarker {
@@ -19,7 +20,36 @@
     opacity: number;
   }
 
+  interface UnderlineConfig {
+    underlineStyle: string;
+    underlineColor: string;
+  }
+
   let markers = $state<MarkerView[]>([]);
+  let underlineStyle = $state('wavy');
+  let underlineColor = $state('#ff3b30');
+
+  // Build the inline CSS for a single marker element based on current style/color.
+  const markerCss = $derived(buildMarkerCss(underlineStyle, underlineColor));
+
+  function buildMarkerCss(style: string, color: string): string {
+    if (style === 'wavy') {
+      // Encode color for SVG data-URI (only # needs encoding).
+      const c = color.replace('#', '%23');
+      return [
+        `background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'%3E%3Cpath d='M0 4 Q 2 1, 4 4 T 8 4' fill='none' stroke='${c}' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E") repeat-x`,
+        'height: 6px',
+        'border: none',
+      ].join('; ');
+    }
+    const borderMap: Record<string, string> = {
+      solid: `2px solid ${color}`,
+      dashed: `2px dashed ${color}`,
+      dotted: `2.5px dotted ${color}`,
+    };
+    const border = borderMap[style] ?? `2px solid ${color}`;
+    return `background: none; height: 0; border-bottom: ${border}`;
+  }
 
   function clamp(value: number, min: number, max: number): number {
     return Math.min(Math.max(value, min), max);
@@ -69,11 +99,26 @@
   }
 
   onMount(() => {
-    const unlisten = listen<TypoMarker[]>('update-markers', (event) => {
+    // Load initial underline config.
+    invoke<{ underlineStyle: string; underlineColor: string }>('get_config')
+      .then((cfg) => {
+        underlineStyle = cfg.underlineStyle ?? 'wavy';
+        underlineColor = cfg.underlineColor ?? '#ff3b30';
+      })
+      .catch(() => {});
+
+    const unlistenMarkers = listen<TypoMarker[]>('update-markers', (event) => {
       markers = buildViews(event.payload || []);
     });
+
+    const unlistenStyle = listen<UnderlineConfig>('underline-config-update', (event) => {
+      underlineStyle = event.payload.underlineStyle;
+      underlineColor = event.payload.underlineColor;
+    });
+
     return () => {
-      unlisten.then((fn) => fn());
+      unlistenMarkers.then((fn) => fn());
+      unlistenStyle.then((fn) => fn());
     };
   });
 </script>
@@ -82,10 +127,7 @@
   {#each markers as m (m.key)}
     <div
       class="typo-underline"
-      style:left="{m.left}px"
-      style:top="{m.top}px"
-      style:width="{m.width}px"
-      style:opacity={m.opacity}
+      style="{markerCss}; left: {m.left}px; top: {m.top}px; width: {m.width}px; opacity: {m.opacity}"
     ></div>
   {/each}
 </div>
@@ -110,9 +152,6 @@
 
   .typo-underline {
     position: absolute;
-    height: 6px;
-    background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'%3E%3Cpath d='M0 4 Q 2 1, 4 4 T 8 4' fill='none' stroke='%23ff3b30' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E")
-      repeat-x;
     pointer-events: none;
     z-index: 9999;
     opacity: 0.96;
