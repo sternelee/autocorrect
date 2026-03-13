@@ -224,23 +224,31 @@ pub fn run() {
                         (0.0, 1080.0, 1920.0, 1080.0);
 
                     for marker in markers {
+                        // All coordinates (marker and mouse) are in the top-left
+                        // system: y=0 at top of primary screen, increases downward.
+                        //
+                        // Native markers: marker.y = top of char bounding box (AX).
+                        //   Underline is at marker.y + marker.height (bottom edge).
+                        // Fallback markers: marker.y = bottom of text line (lib.rs
+                        //   final_y) = underline position; marker.height = 2.0.
                         let is_fallback = marker.id.contains("fallback");
-                        let y_top_left = if is_fallback {
+                        let y_underline = if is_fallback {
                             marker.y
                         } else {
-                            desktop_top_y - marker.y
+                            marker.y + marker.height
                         };
+                        // Hit area: extend above the underline to cover the full
+                        // character height, plus a small pad on each side.
+                        let char_h = if is_fallback { 20.0_f64 } else { marker.height };
+                        let hit_top    = y_underline - char_h - 4.0;
+                        let hit_bottom = y_underline + 6.0;
+                        let hit_left   = marker.x - 4.0;
+                        let hit_right  = marker.x + marker.width + 4.0;
 
-                        // Add a larger hit area for easier hovering (e.g., ±8px vertically)
-                        let hit_rect_x = marker.x - 4.0;
-                        let hit_rect_y = y_top_left - 8.0;
-                        let hit_rect_w = marker.width + 8.0;
-                        let hit_rect_h = marker.height + 16.0;
-
-                        if mouse_x_f >= hit_rect_x 
-                            && mouse_x_f <= hit_rect_x + hit_rect_w 
-                            && mouse_y_f >= hit_rect_y 
-                            && mouse_y_f <= hit_rect_y + hit_rect_h 
+                        if mouse_x_f >= hit_left
+                            && mouse_x_f <= hit_right
+                            && mouse_y_f >= hit_top
+                            && mouse_y_f <= hit_bottom
                         {
                             hovered_marker = Some(marker);
                             break;

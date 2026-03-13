@@ -251,15 +251,20 @@ unsafe fn render_native_markers(
     };
 
     for (i, marker) in markers.iter().enumerate() {
-        // Fallback marker Y is already top-relative in lib.rs
-        // Native marker Y (AXBoundsForRange) is bottom-relative screen coordinate
+        // Both native (AXBoundsForRange) and fallback markers store Y in the
+        // top-left coordinate system (y=0 at top of primary screen, increases
+        // downward — same as Core Graphics / CGDisplay).
+        //
+        // For native markers, marker.y is the TOP of the character bounding
+        // rect; the underline should sit at the BOTTOM edge, so we add height.
+        // For fallback markers, lib.rs already stores final_y at the bottom
+        // of the text line, so we use it directly.
         let is_fallback = marker.id.contains("fallback");
         let y_top_left = if is_fallback {
             marker.y
         } else {
-            // Convert native BL to TL: y_tl = desktop_top - y_bl
-            let desktop_top_y = state.frame_origin_y + state.screen_height;
-            desktop_top_y - marker.y
+            // Bottom of character bounding box (top-left coords, y increases down)
+            marker.y + marker.height
         };
 
         add_line(marker.x, y_top_left, marker.width, (1.0, 0.1, 0.1, 0.95), &format!("MARKER_{}", i));
