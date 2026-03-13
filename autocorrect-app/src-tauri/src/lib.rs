@@ -192,9 +192,9 @@ pub fn run() {
                                 if let Ok(state) = popup_state.0.lock() {
                                     if state.is_visible {
                                         let (px, py) = state.position;
-                                        // Popup logical size matches tauri.conf.json (320 × 240).
-                                        let popup_w = 320.0_f64;
-                                        let popup_h = 240.0_f64;
+                                        // Popup logical size matches tauri.conf.json (300 × 120).
+                                        let popup_w = 300.0_f64;
+                                        let popup_h = 120.0_f64;
                                         let outside = mouse_x_f < px as f64
                                             || mouse_x_f > px as f64 + popup_w
                                             || mouse_y_f < py as f64
@@ -303,8 +303,8 @@ pub fn run() {
                                 let suggestion_text = marker.suggestions.first().cloned().unwrap_or_default();
                                 
                                 // Position popup from mouse cursor with a small offset.
-                                let popup_width = 320.0;
-                                let popup_height = 240.0;
+                                let popup_width = 300.0;
+                                let popup_height = 120.0;
                                 let offset_x = 12.0;
                                 let offset_y = 18.0;
 
