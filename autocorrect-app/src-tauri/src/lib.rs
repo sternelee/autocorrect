@@ -476,15 +476,16 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                     "com.apple.Terminal" | "com.googlecode.iterm2" | "io.alacritty" | "com.microsoft.VSCode" | "com.mitchellh.ghostty"
                 );
                 let is_slack = ctx.bundle_id == "com.tinyspeck.slackmacgap";
-
-                // For traditional apps, we demand ctx.editable to be true to avoid reading static text.
-                // However, Electron apps like Slack often incorrectly report AXTextArea as editable=false.
+                // Some native Apple apps (Notes, Mail) and some Electron apps
+                // incorrectly report editable=false on their text areas.
+                // Accept any traditional text role regardless of the editable flag —
+                // we rely on the terminal/bundle filters above for exclusions.
                 let should_process = if is_terminal {
                     false
                 } else if is_slack {
                     matches!(ctx.role.as_str(), "AXTextArea" | "AXWebArea" | "AXGroup" | "AXTextField")
                 } else {
-                    (is_traditional_input && ctx.editable) || is_web_input
+                    is_traditional_input || is_web_input
                 };
 
                 if !should_process {

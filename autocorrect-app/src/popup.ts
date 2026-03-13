@@ -112,10 +112,12 @@ async function acceptSuggestion() {
     // 1. Set clipboard to the corrected text
     // 2. Hide popup
     // 3. Simulate paste after delay
+    // Tauri v2 serialises JS camelCase → Rust snake_case automatically, so
+    // the Rust parameter `char_length` must be sent as `charLength` from JS.
     await invoke("accept_suggestion", {
       text: textToUse,
       offset: currentOffset,
-      char_length: currentCharLength, // Rust expects char_length mapped via serde but we should check Rust signature (it's char_length: Option<usize>)
+      charLength: currentCharLength,
     });
   } catch (error) {
     console.error("Failed to accept suggestion:", error);

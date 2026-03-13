@@ -78,25 +78,44 @@ pub fn show_popup(
         log::info!("Setting popup position to {:?}", position);
         let _ = popup_window.set_position(position);
 
-        // Show popup using orderFrontRegardless so it floats above the source app
-        // without activating AutoCorrect or causing the main window to appear.
-        // NSWindow API must run on the main thread.
+        // Show the popup and make it the key window so it receives keyboard events.
+        // We hide the main window first so that when the app activates (a side-effect
+        // of makeKeyAndOrderFront) it doesn't appear on top of the source app.
+        // All NSWindow calls must run on the main thread.
         #[cfg(target_os = "macos")]
         {
             let popup_window_mt = popup_window.clone();
+            let app_mt = app.clone();
             let _ = popup_window.run_on_main_thread(move || {
                 use cocoa::base::{id, NO};
                 use objc::{msg_send, sel, sel_impl};
+
+                // Hide the main window using NSWindow directly (synchronous, no
+                // Tauri dispatch queuing) so it is gone before makeKeyAndOrderFront
+                // activates the app.
+                if let Some(main) = app_mt.get_webview_window("main") {
+                    if let Ok(main_ptr) = main.ns_window() {
+                        unsafe {
+                            let main_ns = main_ptr as id;
+                            let _: () = msg_send![main_ns, orderOut: cocoa::base::nil];
+                        }
+                    }
+                }
+
                 if let Ok(ptr) = popup_window_mt.ns_window() {
                     unsafe {
                         let ns_window = ptr as id;
-                        // Use level 2001 — one above the overlay (2000) so popup
-                        // always appears on top of the typo underline markers.
+                        // Level 2001 — one above the overlay (2000).
                         let _: () = msg_send![ns_window, setLevel: 2001_i64];
-                        // Don't hide when the app is deactivated
+                        // Keep popup visible even when the app is not the active one.
                         let _: () = msg_send![ns_window, setHidesOnDeactivate: NO];
-                        // Bring to front without activating the app
-                        let _: () = msg_send![ns_window, orderFrontRegardless];
+                        // Make popup the key window so it receives keyboard events
+                        // (Enter to accept, Esc to reject).
+                        let _: () = msg_send![ns_window, makeKeyAndOrderFront: cocoa::base::nil];
+                        // Explicitly hand first-responder status to the contentView
+                        // (the WKWebView) so that keydown events reach the JS layer.
+                        let content_view: id = msg_send![ns_window, contentView];
+                        let _: () = msg_send![ns_window, makeFirstResponder: content_view];
                     }
                 }
             });
@@ -209,21 +228,17 @@ pub fn get_popup_state(state: State<SharedPopupState>) -> Result<serde_json::Val
 /// Accept the suggestion and apply to the currently selected text.
 #[tauri::command]
 pub fn accept_suggestion(
-    app: AppHandle, 
-    text: String, 
-    offset: Option<usize>, 
-    char_length: Option<usize>
+    app: AppHandle,
+    text: String,
+    offset: Option<usize>,
+    char_length: Option<usize>,
 ) -> Result<(), Error> {
     #[cfg(target_os = "macos")]
     {
-        // If an offset and length were provided (e.g. from hover), select the text first
-        if let (Some(start), Some(len)) = (offset, char_length) {
-            let _ = crate::macos_text::select_text_range(start, len);
-            // Give the OS a tiny moment to process the selection
-            std::thread::sleep(Duration::from_millis(50));
-        }
-
-        match apply_suggestion_to_selection_macos(app.clone(), &text) {
+        // Pass offset/char_length into the macOS handler so the typo range
+        // is selected AFTER focus returns to the source app (not while popup
+        // still has focus, which would select into the wrong window).
+        match apply_suggestion_to_selection_macos(app.clone(), &text, offset, char_length) {
             Ok(()) => {
                 let _ = app.emit(
                     "suggestion-accepted",
@@ -262,7 +277,12 @@ pub fn accept_suggestion(
 }
 
 #[cfg(target_os = "macos")]
-fn apply_suggestion_to_selection_macos(app: AppHandle, text: &str) -> Result<(), Error> {
+fn apply_suggestion_to_selection_macos(
+    app: AppHandle,
+    text: &str,
+    offset: Option<usize>,
+    char_length: Option<usize>,
+) -> Result<(), Error> {
     let source_app_name = app
         .try_state::<SharedPopupState>()
         .and_then(|state| state.0.lock().ok().and_then(|s| s.source_app_name.clone()));
@@ -275,14 +295,54 @@ fn apply_suggestion_to_selection_macos(app: AppHandle, text: &str) -> Result<(),
         .set_text(text.to_string())
         .map_err(|e| Error::Clipboard(format!("Failed to set clipboard text: {e}")))?;
 
-    // Hide popup first so focus returns to the previously active app/input.
+    // Hide popup so focus can return to the source app.
     hide_popup(app)?;
-    thread::sleep(Duration::from_millis(120));
+    thread::sleep(Duration::from_millis(80));
 
-    if let Some(app_name) = source_app_name {
+    if let Some(ref app_name) = source_app_name {
         if app_name != "autocorrect-app" && app_name != "AutoCorrect" {
-            activate_app_macos(&app_name)?;
-            thread::sleep(Duration::from_millis(120));
+            activate_app_macos(app_name)?;
+
+            // Wait until the source app is actually frontmost using NSWorkspace
+            // (instant ObjC call, no subprocess overhead).
+            let deadline = std::time::Instant::now();
+            loop {
+                thread::sleep(Duration::from_millis(30));
+                if is_app_frontmost_macos(app_name) {
+                    break;
+                }
+                if deadline.elapsed().as_millis() > 600 {
+                    log::warn!("[accept] activate timeout: {} still not frontmost", app_name);
+                    break;
+                }
+            }
+            // Extra settle time so the AX focused-element state catches up.
+            thread::sleep(Duration::from_millis(80));
+        }
+    }
+
+    // Now that the source app has focus, select the exact typo range so the
+    // paste replaces the word rather than inserting at the cursor.
+    if let (Some(start), Some(len)) = (offset, char_length) {
+        log::info!("[accept] select_text_range: offset={} len={}", start, len);
+        // Retry for up to 600 ms in case the AX focus is still settling.
+        let sel_deadline = std::time::Instant::now();
+        loop {
+            match crate::macos_text::select_text_range(start, len) {
+                Ok(()) => {
+                    log::info!("[accept] select_text_range succeeded");
+                    thread::sleep(Duration::from_millis(50));
+                    break;
+                }
+                Err(e) => {
+                    log::warn!("[accept] select_text_range failed: {}", e);
+                    if sel_deadline.elapsed().as_millis() > 600 {
+                        log::warn!("[accept] select_text_range timed out, paste will insert at caret");
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(60));
+                }
+            }
         }
     }
 
@@ -308,6 +368,30 @@ fn apply_suggestion_to_selection_macos(app: AppHandle, text: &str) -> Result<(),
 fn restore_clipboard(clipboard: &mut arboard::Clipboard, previous_clipboard: Option<String>) {
     if let Some(old_text) = previous_clipboard {
         let _ = clipboard.set_text(old_text);
+    }
+}
+
+/// Fast NSWorkspace-based check — no subprocess, returns in microseconds.
+#[cfg(target_os = "macos")]
+fn is_app_frontmost_macos(app_name: &str) -> bool {
+    use cocoa::base::id;
+    use objc::{msg_send, sel, sel_impl};
+    unsafe {
+        let workspace: id = msg_send![objc::class!(NSWorkspace), sharedWorkspace];
+        let front_app: id = msg_send![workspace, frontmostApplication];
+        if front_app.is_null() {
+            return false;
+        }
+        let name: id = msg_send![front_app, localizedName];
+        if name.is_null() {
+            return false;
+        }
+        let ns_str = cocoa::foundation::NSString::UTF8String(name);
+        if ns_str.is_null() {
+            return false;
+        }
+        let rust_str = std::ffi::CStr::from_ptr(ns_str).to_string_lossy();
+        rust_str.contains(app_name) || app_name.contains(rust_str.as_ref())
     }
 }
 
