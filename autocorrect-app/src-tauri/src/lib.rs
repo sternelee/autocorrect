@@ -106,19 +106,21 @@ pub fn run() {
                     .build(),
             )?;
 
-            // Request macOS Accessibility permission on first launch.
-            // Without this the AX API calls (text reading, range bounds,
-            // select_text_range) all fail silently in the packaged app.
+            // Check Accessibility permission.  We do NOT trigger the system
+            // dialog automatically (it shows every launch for unsigned apps
+            // and confuses users).  Instead we open System Settings directly
+            // so the user can add the app themselves, then restart.
             #[cfg(target_os = "macos")]
             {
-                if !macos_text::check_and_request_accessibility() {
+                if !macos_text::check_accessibility_trusted() {
                     log::warn!(
                         "Accessibility permission not granted. \
-                         Please open System Settings → Privacy & Security → Accessibility \
-                         and enable AutoCorrect."
+                         Opening System Settings → Privacy & Security → Accessibility. \
+                         Please enable AutoCorrect and restart the app."
                     );
+                    macos_text::open_accessibility_settings();
                 } else {
-                    log::info!("Accessibility permission granted.");
+                    log::info!("Accessibility permission granted ✓");
                 }
             }
 
@@ -807,27 +809,27 @@ fn stop_clipboard_monitor(window: tauri::Window) -> Result<(), String> {
 fn check_accessibility_permission() -> bool {
     #[cfg(target_os = "macos")]
     {
-        use macos_text::check_and_request_accessibility;
-        check_and_request_accessibility()
+        macos_text::check_accessibility_trusted()
     }
-
     #[cfg(not(target_os = "macos"))]
     {
-        true // Always true on other platforms
+        true
     }
 }
 
-/// Tauri command to request Accessibility permissions (shows system prompt)
+/// Open the Accessibility pane so the user can enable the app, then restart.
 #[tauri::command]
 fn request_accessibility_permission() -> bool {
     #[cfg(target_os = "macos")]
     {
-        use macos_text::check_and_request_accessibility;
-        check_and_request_accessibility()
+        if macos_text::check_accessibility_trusted() {
+            return true;
+        }
+        macos_text::open_accessibility_settings();
+        false
     }
-
     #[cfg(not(target_os = "macos"))]
     {
-        true // Always true on other platforms
+        true
     }
 }
