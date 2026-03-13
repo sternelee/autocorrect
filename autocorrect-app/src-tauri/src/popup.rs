@@ -90,8 +90,9 @@ pub fn show_popup(
                 if let Ok(ptr) = popup_window_mt.ns_window() {
                     unsafe {
                         let ns_window = ptr as id;
-                        // NSFloatingWindowLevel = 3 — floats above normal windows
-                        let _: () = msg_send![ns_window, setLevel: 3_i64];
+                        // Use level 2001 — one above the overlay (2000) so popup
+                        // always appears on top of the typo underline markers.
+                        let _: () = msg_send![ns_window, setLevel: 2001_i64];
                         // Don't hide when the app is deactivated
                         let _: () = msg_send![ns_window, setHidesOnDeactivate: NO];
                         // Bring to front without activating the app
