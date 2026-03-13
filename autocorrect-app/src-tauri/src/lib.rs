@@ -442,8 +442,25 @@ pub fn run() {
             reject_suggestion,
             trigger_spell_check_workflow,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|app_handle, event| {
+            // On macOS, clicking the Dock icon while all windows are hidden fires
+            // RunEvent::Reopen. Bring the main window back to the front.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Reopen {
+                has_visible_windows,
+                ..
+            } = event
+            {
+                if !has_visible_windows {
+                    if let Some(main) = app_handle.get_webview_window("main") {
+                        let _ = main.show();
+                        let _ = main.set_focus();
+                    }
+                }
+            }
+        });
 }
 
 /// 系统级错误同步逻辑
