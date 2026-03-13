@@ -105,15 +105,18 @@ pub fn show_popup(
                 if let Ok(ptr) = popup_window_mt.ns_window() {
                     unsafe {
                         let ns_window = ptr as id;
-                        // Level 2001 — one above the overlay (2000).
                         let _: () = msg_send![ns_window, setLevel: 2001_i64];
-                        // Keep popup visible even when the app is not the active one.
-                        let _: () = msg_send![ns_window, setHidesOnDeactivate: NO];
-                        // Make popup the key window so it receives keyboard events
-                        // (Enter to accept, Esc to reject).
+                        let _: () = msg_send![ns_window, setHidesOnDeactivate: cocoa::base::NO];
+                        let _: () = msg_send![ns_window, setAcceptsMouseMovedEvents: cocoa::base::YES];
+                        // Activate the app first so makeKeyAndOrderFront actually
+                        // grants key-window status.  Without this the popup appears
+                        // but remains a non-key window (AutoCorrect is not the
+                        // frontmost app), causing WKWebView to skip hover tracking
+                        // until the user clicks once.
+                        let app_ns: cocoa::base::id =
+                            msg_send![objc::class!(NSApplication), sharedApplication];
+                        let _: () = msg_send![app_ns, activateIgnoringOtherApps: cocoa::base::YES];
                         let _: () = msg_send![ns_window, makeKeyAndOrderFront: cocoa::base::nil];
-                        // Explicitly hand first-responder status to the contentView
-                        // (the WKWebView) so that keydown events reach the JS layer.
                         let content_view: id = msg_send![ns_window, contentView];
                         let _: () = msg_send![ns_window, makeFirstResponder: content_view];
                     }
