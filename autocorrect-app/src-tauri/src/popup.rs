@@ -78,10 +78,33 @@ pub fn show_popup(
         log::info!("Setting popup position to {:?}", position);
         let _ = popup_window.set_position(position);
 
-        // Show and focus the popup
-        let _ = popup_window.show();
-        let _ = popup_window.set_focus();
-        let _ = popup_window.set_always_on_top(true);
+        // Show popup using orderFrontRegardless so it floats above the source app
+        // without activating AutoCorrect or causing the main window to appear.
+        // NSWindow API must run on the main thread.
+        #[cfg(target_os = "macos")]
+        {
+            let popup_window_mt = popup_window.clone();
+            let _ = popup_window.run_on_main_thread(move || {
+                use cocoa::base::{id, NO};
+                use objc::{msg_send, sel, sel_impl};
+                if let Ok(ptr) = popup_window_mt.ns_window() {
+                    unsafe {
+                        let ns_window = ptr as id;
+                        // NSFloatingWindowLevel = 3 — floats above normal windows
+                        let _: () = msg_send![ns_window, setLevel: 3_i64];
+                        // Don't hide when the app is deactivated
+                        let _: () = msg_send![ns_window, setHidesOnDeactivate: NO];
+                        // Bring to front without activating the app
+                        let _: () = msg_send![ns_window, orderFrontRegardless];
+                    }
+                }
+            });
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = popup_window.show();
+            let _ = popup_window.set_always_on_top(true);
+        }
 
         // Emit event to frontend with the data including typos
         let _ = app.emit(

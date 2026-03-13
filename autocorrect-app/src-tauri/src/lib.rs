@@ -252,22 +252,36 @@ pub fn run() {
                                 let offset_x = 12.0;
                                 let offset_y = 18.0;
 
+                                // Use the PRIMARY display height in CG coordinates
+                                // (y=0 at top, increases down — same system as mouse_x/y).
+                                // desktop_height is the virtual desktop total which can be much
+                                // larger than the primary screen on multi-monitor setups, making
+                                // the clamp below ineffective. CGDisplayBounds gives us the
+                                // real primary screen bounds.
+                                #[cfg(target_os = "macos")]
+                                let primary_h = unsafe {
+                                    use core_graphics::display::{CGDisplayBounds, CGMainDisplayID};
+                                    CGDisplayBounds(CGMainDisplayID()).size.height
+                                };
+                                #[cfg(not(target_os = "macos"))]
+                                let primary_h = 1080.0_f64;
+
                                 let mut popup_x = mouse_x_f + offset_x;
-                                let mut popup_y = mouse_y_f + offset_y;
+                                // Prefer below cursor; if it goes off-screen, flip above.
+                                let mut popup_y = if mouse_y_f + offset_y + popup_height <= primary_h {
+                                    mouse_y_f + offset_y
+                                } else {
+                                    mouse_y_f - popup_height - offset_y
+                                };
 
-                                // If no space below cursor, place above cursor.
-                                if popup_y + popup_height > desktop_height {
-                                    popup_y = mouse_y_f - popup_height - offset_y;
-                                }
-
-                                // Clamp popup inside the virtual desktop.
+                                // Final clamp so the popup stays within primary screen bounds.
                                 let min_x = desktop_min_x;
-                                let max_x = desktop_min_x + desktop_width - popup_width;
-                                let min_y = 0.0;
-                                let max_y = desktop_height - popup_height;
-
-                                popup_x = popup_x.clamp(min_x, max_x.max(min_x));
-                                popup_y = popup_y.clamp(min_y, max_y.max(min_y));
+                                let max_x = (desktop_min_x + desktop_width - popup_width).max(min_x);
+                                popup_x = popup_x.clamp(min_x, max_x);
+                                popup_y = popup_y.clamp(0.0, (primary_h - popup_height).max(0.0));
+                                
+                                log::info!("[POPUP] hover triggered: mouse=({:.0},{:.0}) primary_h={:.0} -> popup=({:.0},{:.0})",
+                                    mouse_x_f, mouse_y_f, primary_h, popup_x, popup_y);
                                 
                                 let _ = popup::show_popup(
                                     app_handle_for_hover.clone(),

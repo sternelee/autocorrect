@@ -88,14 +88,12 @@ listen<PopupData>("popup-show", (event) => {
   actionsEl.classList.remove("hidden");
   editActionsEl.classList.add("hidden");
 
-  // Show the window
-  getCurrentWindow().show();
-  getCurrentWindow().setFocus();
+  // Window is shown by the backend via orderFrontRegardless (macOS).
+  // No-op here to avoid accidentally activating the app.
 });
 
 // Listen for popup-hide event
 listen("popup-hide", () => {
-  console.log("Popup hide");
   hidePopup();
 });
 
@@ -126,7 +124,6 @@ async function acceptSuggestion() {
 
 // Reject suggestion
 async function rejectSuggestion() {
-  console.log("Rejecting suggestion");
 
   try {
     await invoke("reject_suggestion");
