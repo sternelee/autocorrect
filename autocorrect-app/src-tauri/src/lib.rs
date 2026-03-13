@@ -34,59 +34,6 @@ use popup::{
     trigger_spell_check_workflow,
 };
 
-/// Show the widget popup at the specified position
-#[tauri::command]
-fn trigger_widget_popup(app: tauri::AppHandle, x: i32, y: i32) -> Result<(), String> {
-    log::info!("trigger_widget_popup called at ({}, {})", x, y);
-
-    // Get the text from the focused element
-    #[cfg(target_os = "macos")]
-    {
-        if let Ok(ctx) = macos_text::get_focused_text_context() {
-            if !ctx.text.is_empty() {
-                // Trigger the spell check workflow with the current text
-                let app_clone = app.clone();
-                std::thread::spawn(move || {
-                    popup::trigger_spell_check_workflow(app_clone, x, y + 40).ok();
-                });
-            }
-        }
-    }
-
-    Ok(())
-}
-
-/// Update widget position and visibility based on typos
-#[tauri::command]
-fn update_widget(app: tauri::AppHandle, typo_count: i32, x: f64, y: f64) -> Result<(), String> {
-    log::debug!("update_widget: count={}, x={}, y={}", typo_count, x, y);
-
-    if let Some(widget_window) = app.get_webview_window("widget") {
-        if typo_count > 0 {
-            // Position widget at bottom-left of input field
-            // x is left edge, y is top edge - so bottom-left is (x, y + height - widget_size)
-            let widget_x = x as i32;
-            let widget_y = (y as i32) + 20; // Slightly below the input field
-
-            let position = tauri::Position::Physical(tauri::PhysicalPosition {
-                x: widget_x,
-                y: widget_y,
-            });
-            let _ = widget_window.set_position(position);
-            let _ = widget_window.show();
-
-            // Emit event to update widget UI
-            let _ = app.emit(
-                "widget-update",
-                serde_json::json!({ "typoCount": typo_count }),
-            );
-        } else {
-            let _ = widget_window.hide();
-        }
-    }
-
-    Ok(())
-}
 
 #[allow(clippy::missing_panics_doc)]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -494,9 +441,6 @@ pub fn run() {
             accept_suggestion,
             reject_suggestion,
             trigger_spell_check_workflow,
-            // Widget commands
-            trigger_widget_popup,
-            update_widget,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

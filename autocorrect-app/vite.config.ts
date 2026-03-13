@@ -13,7 +13,6 @@ export default defineConfig({
 				main: './index.html',
 				popup: './popup.html',
 				overlay: './overlay.html',
-				widget: './widget.html',
 			},
 		},
 		target: process.env.TAURI_ENV_PLATFORM == 'windows' ? 'chrome105' : 'safari13',

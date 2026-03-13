@@ -2,6 +2,17 @@
 	import { invoke } from '@tauri-apps/api/core';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
+	import {
+		AlertDialog,
+		AlertDialogTrigger,
+		AlertDialogContent,
+		AlertDialogHeader,
+		AlertDialogFooter,
+		AlertDialogTitle,
+		AlertDialogDescription,
+		AlertDialogAction,
+		AlertDialogCancel,
+	} from '$lib/components/ui/alert-dialog';
 	import { AlertCircle, Plus, Trash2, Edit, Save, X } from 'lucide-svelte';
 
 	interface CustomCorrection {
@@ -18,6 +29,7 @@
 	let editingIndex: number | null = null;
 	let editTypo = '';
 	let editCorrection = '';
+
 
 	// Add new state
 	let showAddForm = false;
@@ -72,10 +84,6 @@
 	}
 
 	async function deleteCorrection(typo: string) {
-		if (!confirm(`Are you sure you want to delete the correction for "${typo}"?`)) {
-			return;
-		}
-
 		isLoading = true;
 		errorMessage = null;
 		successMessage = null;
@@ -85,7 +93,6 @@
 			successMessage = `Deleted: ${typo}`;
 			await loadCorrections();
 
-			// Clear success message after 3 seconds
 			setTimeout(() => {
 				successMessage = null;
 			}, 3000);
@@ -320,14 +327,36 @@
 										>
 											<Edit class="h-4 w-4" />
 										</button>
-										<button
-											onclick={() => deleteCorrection(correction.typo)}
-											class="rounded p-1 hover:bg-muted text-red-600 dark:text-red-400"
-											disabled={isLoading}
-											title="Delete"
-										>
-											<Trash2 class="h-4 w-4" />
-										</button>
+										<AlertDialog>
+											<AlertDialogTrigger>
+												<button
+													class="rounded p-1 hover:bg-muted text-red-600 dark:text-red-400"
+													disabled={isLoading}
+													title="Delete"
+												>
+													<Trash2 class="h-4 w-4" />
+												</button>
+											</AlertDialogTrigger>
+											<AlertDialogContent>
+												<AlertDialogHeader>
+													<AlertDialogTitle>Delete correction?</AlertDialogTitle>
+													<AlertDialogDescription>
+														Remove <span class="font-mono font-medium">"{correction.typo}"</span>
+														→ <span class="font-mono font-medium">"{correction.correction}"</span>
+														from custom corrections. This cannot be undone.
+													</AlertDialogDescription>
+												</AlertDialogHeader>
+												<AlertDialogFooter>
+													<AlertDialogCancel>Cancel</AlertDialogCancel>
+													<AlertDialogAction
+														onclick={() => deleteCorrection(correction.typo)}
+														class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+													>
+														Delete
+													</AlertDialogAction>
+												</AlertDialogFooter>
+											</AlertDialogContent>
+										</AlertDialog>
 									</div>
 								</td>
 							{/if}

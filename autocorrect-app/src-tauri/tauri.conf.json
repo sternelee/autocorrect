@@ -34,21 +34,6 @@
         "center": false,
         "visible": false,
         "focus": true
-      },
-      {
-        "label": "widget",
-        "url": "widget.html",
-        "title": "AutoCorrect Widget",
-        "width": 36,
-        "height": 36,
-        "resizable": false,
-        "decorations": false,
-        "transparent": true,
-        "alwaysOnTop": true,
-        "skipTaskbar": true,
-        "center": false,
-        "visible": false,
-        "focus": false
       }
     ],
     "security": {

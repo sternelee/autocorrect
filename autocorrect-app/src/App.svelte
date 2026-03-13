@@ -1,6 +1,5 @@
 <script lang="ts">
 	import SpellChecker from '$lib/components/SpellChecker.svelte';
-	import SuggestionPopup from '$lib/components/SuggestionPopup.svelte';
 	import SettingsPanel from '$lib/components/SettingsPanel.svelte';
 	import StatusIndicator from '$lib/components/StatusIndicator.svelte';
 	import { Button } from '$lib/components/ui/button';
@@ -13,24 +12,8 @@
 	let isEnabled = true;
 	let correctionCount = 0;
 
-	// Suggestion popup state (for in-app testing)
-	let showPopup = false;
-	let popupOriginal = '';
-	let popupSuggestion = '';
-	let popupPosition = { x: 0, y: 0 };
-
 	function handleToggleEnabled(enabled: boolean) {
 		isEnabled = enabled;
-	}
-
-	function handleAcceptSuggestion(text: string) {
-		// In a real implementation, this would replace the selected text
-		correctionCount++;
-		console.log('Accepted suggestion:', text);
-	}
-
-	function handleRejectSuggestion() {
-		console.log('Rejected suggestion');
 	}
 
 	// Listen for Tauri events from the Rust backend
@@ -135,13 +118,4 @@
 		{/if}
 	</main>
 
-	<!-- Suggestion Popup (global overlay) -->
-	<SuggestionPopup
-		bind:show={showPopup}
-		bind:originalText={popupOriginal}
-		bind:suggestion={popupSuggestion}
-		bind:position={popupPosition}
-		onAccept={handleAcceptSuggestion}
-		onReject={handleRejectSuggestion}
-	/>
 </div>
