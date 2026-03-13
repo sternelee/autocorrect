@@ -1,3 +1,4 @@
+mod ai_popup;
 mod clipboard;
 mod commands;
 mod hotkey;
@@ -7,6 +8,7 @@ mod popup;
 mod text_selection;
 mod typocheck;
 
+use ai_popup::{SharedAiPopupState, SharedNativeIconWindow};
 use commands::ai_grammar::{ai_grammar_check, ai_text_transform};
 use commands::config::{get_config, get_default_config, get_rules, update_config};
 use commands::custom_corrections::{
@@ -34,7 +36,6 @@ use popup::{
     trigger_spell_check_workflow,
 };
 
-
 #[allow(clippy::missing_panics_doc)]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -42,6 +43,7 @@ pub fn run() {
     let (_clipboard_tx, clipboard_rx) = std::sync::mpsc::channel();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_store::Builder::new().build())
         .setup(move |app| {
             app.handle().plugin(tauri_plugin_http::init())?;
 
@@ -73,6 +75,9 @@ pub fn run() {
 
             // Initialize popup state
             app.manage(SharedPopupState::new());
+            app.manage(SharedAiPopupState::new());
+            #[cfg(target_os = "macos")]
+            app.manage(SharedNativeIconWindow::new());
 
             // Initialize Overlay Manager
             let overlay_manager = OverlayManager::new(app.handle().clone());
@@ -116,10 +121,10 @@ pub fn run() {
                 let mut hover_start: Option<std::time::Instant> = None;
                 // Track previous left-button state to detect leading edge of a click.
                 let mut prev_left_down = false;
-                
+
                 loop {
                     thread::sleep(std::time::Duration::from_millis(100));
-                    
+
                     let overlay_manager = match app_handle_for_hover.try_state::<OverlayManager>() {
                         Some(m) => m,
                         None => continue,
@@ -130,6 +135,7 @@ pub fn run() {
                     let mouse_y_f = mouse_y as f64;
 
                     // Dismiss popup on click outside its bounds.
+                    // Also detect hover over the native AI icon.
                     #[cfg(target_os = "macos")]
                     {
                         let left_down = is_left_button_down();
@@ -139,7 +145,6 @@ pub fn run() {
                                 if let Ok(state) = popup_state.0.lock() {
                                     if state.is_visible {
                                         let (px, py) = state.position;
-                                        // Popup logical size matches tauri.conf.json (300 × 120).
                                         let popup_w = 300.0_f64;
                                         let popup_h = 120.0_f64;
                                         let outside = mouse_x_f < px as f64
@@ -155,6 +160,25 @@ pub fn run() {
                             }
                         }
                         prev_left_down = left_down;
+
+                        // Show AI popup when cursor enters the native icon bounds.
+                        if let Some(ai_state) = app_handle_for_hover.try_state::<crate::ai_popup::SharedAiPopupState>() {
+                            if let Ok(s) = ai_state.0.lock() {
+                                if s.icon_visible && !s.popup_visible {
+                                    let (ix, iy) = s.icon_position;
+                                    let (iw, ih) = s.icon_size;
+                                    let over_icon = mouse_x_f >= ix as f64
+                                        && mouse_x_f <= ix as f64 + iw as f64
+                                        && mouse_y_f >= iy as f64
+                                        && mouse_y_f <= iy as f64 + ih as f64;
+                                    if over_icon {
+                                        log::info!("[AI] cursor over icon ({},{}) icon_pos=({},{}) size=({},{})", mouse_x, mouse_y, ix, iy, iw, ih);
+                                        drop(s);
+                                        crate::ai_popup::show_ai_popup_from_hover(&app_handle_for_hover);
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     let markers = {
@@ -174,7 +198,7 @@ pub fn run() {
                         use cocoa::base::{id, nil};
                         use cocoa::foundation::NSRect;
                         use objc::{msg_send, sel, sel_impl};
-                        
+
                         let mut min_x = f64::MAX;
                         let mut min_y = f64::MAX;
                         let mut max_x = f64::MIN;
@@ -246,9 +270,9 @@ pub fn run() {
                                     line: 0,
                                     col: 0,
                                 }];
-                                
+
                                 let suggestion_text = marker.suggestions.first().cloned().unwrap_or_default();
-                                
+
                                 // Position popup from mouse cursor with a small offset.
                                 let popup_width = 300.0;
                                 let popup_height = 120.0;
@@ -282,10 +306,10 @@ pub fn run() {
                                 let max_x = (desktop_min_x + desktop_width - popup_width).max(min_x);
                                 popup_x = popup_x.clamp(min_x, max_x);
                                 popup_y = popup_y.clamp(0.0, (primary_h - popup_height).max(0.0));
-                                
+
                                 log::info!("[POPUP] hover triggered: mouse=({:.0},{:.0}) primary_h={:.0} -> popup=({:.0},{:.0})",
                                     mouse_x_f, mouse_y_f, primary_h, popup_x, popup_y);
-                                
+
                                 let _ = popup::show_popup(
                                     app_handle_for_hover.clone(),
                                     popup_x as i32,
@@ -296,7 +320,7 @@ pub fn run() {
                                     Some(marker.offset),
                                     Some(marker.char_length)
                                 );
-                                
+
                                 // Prevent re-triggering until we move away
                                 hover_start = None;
                             }
@@ -306,7 +330,7 @@ pub fn run() {
                         if !last_hovered_id.is_empty() {
                             last_hovered_id.clear();
                             hover_start = None;
-                            
+
                             // Let the frontend popup hide itself when mouse leaves its window,
                             // or we could hide it here. We'll let the user interact with the popup.
                         }
@@ -441,6 +465,11 @@ pub fn run() {
             accept_suggestion,
             reject_suggestion,
             trigger_spell_check_workflow,
+            // AI popup commands
+            ai_popup::show_ai_popup,
+            ai_popup::hide_ai_popup,
+            ai_popup::get_ai_popup_state,
+            ai_popup::accept_ai_result,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -513,13 +542,13 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                 };
 
                 if !should_process {
-                    log::info!(
-                        "[DIAG] Filtered out: role={}, editable={}, bundle={}, terminal={}",
-                        ctx.role,
-                        ctx.editable,
-                        ctx.bundle_id,
-                        is_terminal
-                    );
+                    // log::info!(
+                    //     "[DIAG] Filtered out: role={}, editable={}, bundle={}, terminal={}",
+                    //     ctx.role,
+                    //     ctx.editable,
+                    //     ctx.bundle_id,
+                    //     is_terminal
+                    // );
                     overlay_manager.update_markers(vec![]);
                     return;
                 }
@@ -716,6 +745,47 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                 // Important: still call update_markers([]) so ensure_native_overlay runs
                 // and shows the pink diagnostic line.
                 overlay_manager.update_markers(vec![]);
+            }
+        }
+    }
+
+    // Detect long text selections and show/hide the AI floating icon.
+    #[cfg(target_os = "macos")]
+    {
+        const MIN_SELECTION_CHARS: usize = 6;
+        let mut icon_triggered = false;
+        match macos_text::get_selected_text() {
+            Ok(sel) if sel.chars().count() >= MIN_SELECTION_CHARS => {
+                let (cx, cy) = get_cursor_position();
+                let icon_x = cx + 16;
+                // cy is in Quartz top-left coords (y increases downward);
+                // subtract 56 to place the icon 56 px above the cursor.
+                let icon_y = cy.saturating_sub(56);
+                log::info!(
+                    "[AI] selection={} chars, cursor=({},{}), icon=({},{})",
+                    sel.chars().count(),
+                    cx,
+                    cy,
+                    icon_x,
+                    icon_y
+                );
+                ai_popup::show_ai_icon(app, icon_x, icon_y as i32, sel);
+                icon_triggered = true;
+            }
+            Ok(sel) => {
+                log::debug!("[AI] selection too short: {} chars", sel.chars().count());
+            }
+            Err(e) => {
+                log::debug!("[AI] get_selected_text err: {:?}", e);
+            }
+        }
+        if !icon_triggered {
+            let popup_open = app
+                .try_state::<SharedAiPopupState>()
+                .and_then(|s| s.0.lock().ok().map(|g| g.popup_visible))
+                .unwrap_or(false);
+            if !popup_open {
+                ai_popup::hide_ai_icon(app);
             }
         }
     }

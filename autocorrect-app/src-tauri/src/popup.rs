@@ -107,7 +107,8 @@ pub fn show_popup(
                         let ns_window = ptr as id;
                         let _: () = msg_send![ns_window, setLevel: 2001_i64];
                         let _: () = msg_send![ns_window, setHidesOnDeactivate: cocoa::base::NO];
-                        let _: () = msg_send![ns_window, setAcceptsMouseMovedEvents: cocoa::base::YES];
+                        let _: () =
+                            msg_send![ns_window, setAcceptsMouseMovedEvents: cocoa::base::YES];
                         // Activate the app first so makeKeyAndOrderFront actually
                         // grants key-window status.  Without this the popup appears
                         // but remains a non-key window (AutoCorrect is not the
@@ -311,7 +312,7 @@ fn apply_suggestion_to_selection_macos(
             let deadline = std::time::Instant::now();
             loop {
                 thread::sleep(Duration::from_millis(30));
-                if is_app_frontmost_macos(app_name) {
+                if is_app_frontmost_macos_pub(app_name) {
                     break;
                 }
                 if deadline.elapsed().as_millis() > 600 {
@@ -381,7 +382,7 @@ fn restore_clipboard(clipboard: &mut arboard::Clipboard, previous_clipboard: Opt
 
 /// Fast NSWorkspace-based check — no subprocess, returns in microseconds.
 #[cfg(target_os = "macos")]
-fn is_app_frontmost_macos(app_name: &str) -> bool {
+pub fn is_app_frontmost_macos_pub(app_name: &str) -> bool {
     use cocoa::base::id;
     use objc::{msg_send, sel, sel_impl};
     unsafe {
@@ -404,7 +405,7 @@ fn is_app_frontmost_macos(app_name: &str) -> bool {
 }
 
 #[cfg(target_os = "macos")]
-fn get_frontmost_app_name_macos() -> Option<String> {
+pub fn get_frontmost_app_name_macos() -> Option<String> {
     let output = std::process::Command::new("osascript")
         .arg("-e")
         .arg("tell application \"System Events\" to get name of first application process whose frontmost is true")

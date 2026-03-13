@@ -81,7 +81,12 @@ impl OverlayManager {
         for (i, m) in markers.iter().enumerate() {
             log::debug!(
                 "[DIAG] overlay marker[{}]: id={}, x={:.1}, y={:.1}, w={:.1}, h={:.1}",
-                i, m.id, m.x, m.y, m.width, m.height
+                i,
+                m.id,
+                m.x,
+                m.y,
+                m.width,
+                m.height
             );
         }
 
@@ -91,9 +96,9 @@ impl OverlayManager {
             let (ul_style, ul_color) = crate::commands::config::get_underline_config();
             let _ = self.handle.run_on_main_thread(move || {
                 if let Ok(mut guard) = state.lock() {
-                    if let Err(err) = unsafe {
-                        render_native_markers(&mut guard, &markers, &ul_style, &ul_color)
-                    } {
+                    if let Err(err) =
+                        unsafe { render_native_markers(&mut guard, &markers, &ul_style, &ul_color) }
+                    {
                         log::warn!("Native overlay render error: {}", err);
                     }
                 }
@@ -226,12 +231,7 @@ fn parse_hex_color(hex: &str) -> (f64, f64, f64, f64) {
 #[cfg(target_os = "macos")]
 extern "C" {
     fn CGPathCreateMutable() -> *mut std::ffi::c_void;
-    fn CGPathMoveToPoint(
-        path: *mut std::ffi::c_void,
-        m: *const std::ffi::c_void,
-        x: f64,
-        y: f64,
-    );
+    fn CGPathMoveToPoint(path: *mut std::ffi::c_void, m: *const std::ffi::c_void, x: f64, y: f64);
     fn CGPathAddQuadCurveToPoint(
         path: *mut std::ffi::c_void,
         m: *const std::ffi::c_void,
@@ -284,9 +284,8 @@ unsafe fn render_native_markers(
     let origin_y = state.frame_origin_y;
 
     // Convert top-left screen coordinates to NSWindow local (bottom-left) coordinates.
-    let to_local = |x: f64, y_tl: f64| -> (f64, f64) {
-        (x - origin_x, desktop_top_y - y_tl - origin_y)
-    };
+    let to_local =
+        |x: f64, y_tl: f64| -> (f64, f64) { (x - origin_x, desktop_top_y - y_tl - origin_y) };
 
     let make_cg_color = |r: f64, g: f64, b: f64, a: f64| -> id {
         let ns: id = msg_send![class!(NSColor),
@@ -296,7 +295,11 @@ unsafe fn render_native_markers(
 
     for marker in markers.iter() {
         let is_fallback = marker.id.contains("fallback");
-        let y = if is_fallback { marker.y } else { marker.y + marker.height };
+        let y = if is_fallback {
+            marker.y
+        } else {
+            marker.y + marker.height
+        };
         let x = marker.x;
         let w = marker.width;
 
@@ -313,8 +316,7 @@ unsafe fn render_native_markers(
                 let (local_x, base_local_y) = to_local(x, y);
                 let local_y = base_local_y - view_h / 2.0;
 
-                let rect =
-                    NSRect::new(NSPoint::new(local_x, local_y), NSSize::new(w, view_h));
+                let rect = NSRect::new(NSPoint::new(local_x, local_y), NSSize::new(w, view_h));
                 let view: id = NSView::alloc(nil).initWithFrame_(rect);
                 let _: () = msg_send![view, setWantsLayer: YES];
 

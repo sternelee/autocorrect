@@ -1,10 +1,10 @@
 use super::errors::Error;
 use serde::{Deserialize, Serialize};
-use tauri::Emitter;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::PathBuf;
+use tauri::Emitter;
 
 pub const DEFAULT_UNDERLINE_STYLE: &str = "wavy";
 pub const DEFAULT_UNDERLINE_COLOR: &str = "#ff3b30";
