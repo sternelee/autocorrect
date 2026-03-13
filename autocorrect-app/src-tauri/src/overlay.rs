@@ -12,12 +12,16 @@ pub struct TypoMarker {
     pub width: f64,
     pub height: f64,
     pub text: String,
+    pub suggestions: Vec<String>,
+    pub offset: usize,
+    pub char_length: usize,
 }
 
 pub struct OverlayManager {
     handle: AppHandle,
     #[cfg(target_os = "macos")]
     state: Arc<Mutex<NativeOverlayState>>,
+    pub current_markers: Arc<Mutex<Vec<TypoMarker>>>,
 }
 
 static LAST_MARKER_COUNT: AtomicUsize = AtomicUsize::new(usize::MAX);
@@ -42,6 +46,7 @@ impl OverlayManager {
             handle,
             #[cfg(target_os = "macos")]
             state: Arc::new(Mutex::new(NativeOverlayState::default())),
+            current_markers: Arc::new(Mutex::new(Vec::new())),
         }
     }
 
@@ -63,6 +68,10 @@ impl OverlayManager {
     }
 
     pub fn update_markers(&self, markers: Vec<TypoMarker>) {
+        if let Ok(mut lock) = self.current_markers.lock() {
+            *lock = markers.clone();
+        }
+
         let marker_count = markers.len();
         let previous = LAST_MARKER_COUNT.swap(marker_count, Ordering::Relaxed);
         if previous != marker_count {

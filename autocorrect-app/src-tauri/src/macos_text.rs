@@ -466,6 +466,7 @@ const kAXValueCGRectType: i32 = 3;
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXUIElementCopyAttributeValue(element: id, attribute: id, value: *mut id) -> i32;
+    fn AXUIElementSetAttributeValue(element: id, attribute: id, value: id) -> i32;
     fn AXUIElementGetPid(element: id, pid: *mut i32) -> i32;
     fn AXUIElementCopyParameterizedAttributeValue(
         element: id,
@@ -557,17 +558,69 @@ fn slice_by_utf16_range(s: &str, start_u16: usize, end_u16: usize) -> String {
     s[start_byte..end_byte].to_string()
 }
 
-// 保留原有的 MOUSE 追踪逻辑以便兼容
-static MOUSE_X: AtomicI32 = AtomicI32::new(800);
-static MOUSE_Y: AtomicI32 = AtomicI32::new(400);
+/// 设置焦点输入框的选中文本范围
+#[cfg(target_os = "macos")]
+pub fn select_text_range(start: usize, length: usize) -> Result<()> {
+    if !unsafe { AXIsProcessTrusted() } {
+        return Err(AccessibilityError::PermissionDenied);
+    }
 
-pub fn update_mouse_position(x: i32, y: i32) {
-    MOUSE_X.store(x, Ordering::Relaxed);
-    MOUSE_Y.store(y, Ordering::Relaxed);
+    unsafe {
+        let system_element = AXUIElementCreateSystemWide();
+        let mut focused_element: id = nil;
+        let err = AXUIElementCopyAttributeValue(
+            system_element,
+            to_ax_string("AXFocusedUIElement"),
+            &mut focused_element,
+        );
+
+        if err != 0 || focused_element == nil {
+            return Err(AccessibilityError::NoFocusedElement);
+        }
+
+        let range = CFRange {
+            location: start as i64,
+            length: length as i64,
+        };
+        let ax_range = AXValueCreate(
+            kAXValueCFRangeType,
+            &range as *const _ as *const std::ffi::c_void,
+        );
+
+        let err_set = AXUIElementSetAttributeValue(
+            focused_element,
+            to_ax_string("AXSelectedTextRange"),
+            ax_range,
+        );
+
+        if err_set != 0 {
+            log::warn!("[DIAG] select_text_range failed with err={}", err_set);
+            return Err(AccessibilityError::ApiError(format!(
+                "Failed to set selected text range: {}",
+                err_set
+            )));
+        }
+
+        Ok(())
+    }
+}
+
+// Use CGEvent to get accurate global mouse position
+pub fn update_mouse_position(_x: i32, _y: i32) {
+    // No-op: we now fetch dynamically
 }
 
 pub fn get_cursor_position_nsevent() -> (i32, i32) {
-    let x = MOUSE_X.load(Ordering::Relaxed);
-    let y = MOUSE_Y.load(Ordering::Relaxed);
-    (x, y)
+    #[cfg(target_os = "macos")]
+    {
+        use core_graphics::event::CGEvent;
+        use core_graphics::event_source::{CGEventSource, CGEventSourceStateID};
+        if let Ok(source) = CGEventSource::new(CGEventSourceStateID::CombinedSessionState) {
+            if let Ok(event) = CGEvent::new(source) {
+                let point = event.location();
+                return (point.x as i32, point.y as i32);
+            }
+        }
+    }
+    (0, 0)
 }

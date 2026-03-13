@@ -45,6 +45,8 @@ pub fn show_popup(
     original_text: String,
     suggestion: String,
     typos: Option<Vec<TypoSuggestion>>,
+    offset: Option<usize>,
+    char_length: Option<usize>,
 ) -> Result<(), Error> {
     log::info!("show_popup called with position: ({}, {})", x, y);
 
@@ -69,7 +71,10 @@ pub fn show_popup(
         }
 
         // Position the window
-        let position = tauri::Position::Physical(tauri::PhysicalPosition { x, y });
+        let position = tauri::Position::Logical(tauri::LogicalPosition {
+            x: x as f64,
+            y: y as f64,
+        });
         log::info!("Setting popup position to {:?}", position);
         let _ = popup_window.set_position(position);
 
@@ -86,7 +91,9 @@ pub fn show_popup(
                 "suggestion": suggestion,
                 "x": x,
                 "y": y,
-                "typos": typos.unwrap_or_default()
+                "typos": typos.unwrap_or_default(),
+                "offset": offset,
+                "charLength": char_length
             }),
         );
 
@@ -130,8 +137,10 @@ pub fn hide_popup(app: AppHandle) -> Result<(), Error> {
 #[tauri::command]
 pub fn position_popup(app: AppHandle, x: i32, y: i32) -> Result<(), Error> {
     if let Some(popup_window) = app.get_webview_window("popup") {
-        let _ =
-            popup_window.set_position(tauri::Position::Physical(tauri::PhysicalPosition { x, y }));
+        let _ = popup_window.set_position(tauri::Position::Logical(tauri::LogicalPosition {
+            x: x as f64,
+            y: y as f64,
+        }));
 
         // Update state
         if let Some(state) = app.try_state::<SharedPopupState>() {
@@ -175,9 +184,21 @@ pub fn get_popup_state(state: State<SharedPopupState>) -> Result<serde_json::Val
 
 /// Accept the suggestion and apply to the currently selected text.
 #[tauri::command]
-pub fn accept_suggestion(app: AppHandle, text: String) -> Result<(), Error> {
+pub fn accept_suggestion(
+    app: AppHandle, 
+    text: String, 
+    offset: Option<usize>, 
+    char_length: Option<usize>
+) -> Result<(), Error> {
     #[cfg(target_os = "macos")]
     {
+        // If an offset and length were provided (e.g. from hover), select the text first
+        if let (Some(start), Some(len)) = (offset, char_length) {
+            let _ = crate::macos_text::select_text_range(start, len);
+            // Give the OS a tiny moment to process the selection
+            std::thread::sleep(Duration::from_millis(50));
+        }
+
         match apply_suggestion_to_selection_macos(app.clone(), &text) {
             Ok(()) => {
                 let _ = app.emit(
@@ -306,8 +327,21 @@ fn activate_app_macos(app_name: &str) -> Result<(), Error> {
 /// Reject the suggestion - just hide popup
 #[tauri::command]
 pub fn reject_suggestion(app: AppHandle) -> Result<(), Error> {
+    #[cfg(target_os = "macos")]
+    let source_app_name = app
+        .try_state::<SharedPopupState>()
+        .and_then(|state| state.0.lock().ok().and_then(|s| s.source_app_name.clone()));
+
     // Clone before hiding so we can still use app for emit
     hide_popup(app.clone())?;
+
+    #[cfg(target_os = "macos")]
+    if let Some(app_name) = source_app_name {
+        if app_name != "autocorrect-app" && app_name != "AutoCorrect" {
+            let _ = activate_app_macos(&app_name);
+        }
+    }
+
     let _ = app.emit("suggestion-rejected", ());
     Ok(())
 }
@@ -368,7 +402,7 @@ pub fn trigger_spell_check_workflow(app: AppHandle, x: i32, y: i32) -> Result<()
     }
 
     // Run spell check
-    let result = spell_check_sync(text, Some(true))?;
+    let result = spell_check_sync(text.clone(), Some(true))?;
 
     // If there are changes or typos, show popup
     if (result.has_changes || !result.typos.is_empty()) && !result.corrected.is_empty() {
@@ -377,9 +411,11 @@ pub fn trigger_spell_check_workflow(app: AppHandle, x: i32, y: i32) -> Result<()
             app,
             x,
             y,
-            result.original,
+            text,
             result.corrected,
             Some(result.typos),
+            None,
+            None,
         )?;
     } else {
         // No changes needed, emit a notification

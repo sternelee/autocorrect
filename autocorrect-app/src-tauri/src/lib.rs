@@ -144,6 +144,159 @@ pub fn run() {
                 thread::sleep(std::time::Duration::from_millis(800));
             });
 
+            // Spawn thread to monitor mouse hover over typo markers
+            let app_handle_for_hover = app.handle().clone();
+            thread::spawn(move || {
+                let mut last_hovered_id = String::new();
+                let mut hover_start: Option<std::time::Instant> = None;
+                
+                loop {
+                    thread::sleep(std::time::Duration::from_millis(100));
+                    
+                    let overlay_manager = match app_handle_for_hover.try_state::<OverlayManager>() {
+                        Some(m) => m,
+                        None => continue,
+                    };
+
+                    let (mouse_x, mouse_y) = text_selection::get_cursor_position();
+                    let mouse_x_f = mouse_x as f64;
+                    let mouse_y_f = mouse_y as f64;
+
+                    let markers = {
+                        if let Ok(lock) = overlay_manager.current_markers.lock() {
+                            lock.clone()
+                        } else {
+                            continue;
+                        }
+                    };
+
+                    let mut hovered_marker = None;
+
+                    // Get screen bounds for coordinate conversion (similar to overlay.rs)
+                    #[cfg(target_os = "macos")]
+                    let (desktop_min_x, desktop_top_y, desktop_width, desktop_height) = unsafe {
+                        use cocoa::appkit::NSScreen;
+                        use cocoa::base::{id, nil};
+                        use cocoa::foundation::NSRect;
+                        use objc::{msg_send, sel, sel_impl};
+                        
+                        let mut min_x = f64::MAX;
+                        let mut min_y = f64::MAX;
+                        let mut max_x = f64::MIN;
+                        let mut max_y = f64::MIN;
+                        let screens: id = NSScreen::screens(nil);
+                        let count: usize = msg_send![screens, count];
+                        for idx in 0..count {
+                            let screen: id = msg_send![screens, objectAtIndex: idx];
+                            let frame: NSRect = msg_send![screen, frame];
+                            min_x = min_x.min(frame.origin.x);
+                            min_y = min_y.min(frame.origin.y);
+                            max_x = max_x.max(frame.origin.x + frame.size.width);
+                            max_y = max_y.max(frame.origin.y + frame.size.height);
+                        }
+                        (
+                            min_x,
+                            max_y,
+                            max_x - min_x,
+                            max_y - min_y,
+                        )
+                    };
+                    #[cfg(not(target_os = "macos"))]
+                    let (desktop_min_x, desktop_top_y, desktop_width, desktop_height) =
+                        (0.0, 1080.0, 1920.0, 1080.0);
+
+                    for marker in markers {
+                        let is_fallback = marker.id.contains("fallback");
+                        let y_top_left = if is_fallback {
+                            marker.y
+                        } else {
+                            desktop_top_y - marker.y
+                        };
+
+                        // Add a larger hit area for easier hovering (e.g., ±8px vertically)
+                        let hit_rect_x = marker.x - 4.0;
+                        let hit_rect_y = y_top_left - 8.0;
+                        let hit_rect_w = marker.width + 8.0;
+                        let hit_rect_h = marker.height + 16.0;
+
+                        if mouse_x_f >= hit_rect_x 
+                            && mouse_x_f <= hit_rect_x + hit_rect_w 
+                            && mouse_y_f >= hit_rect_y 
+                            && mouse_y_f <= hit_rect_y + hit_rect_h 
+                        {
+                            hovered_marker = Some(marker);
+                            break;
+                        }
+                    }
+
+                    if let Some(marker) = hovered_marker {
+                        if last_hovered_id != marker.id {
+                            last_hovered_id = marker.id.clone();
+                            hover_start = Some(std::time::Instant::now());
+                        } else if let Some(start) = hover_start {
+                            // Show popup after 300ms of hovering
+                            if start.elapsed().as_millis() > 300 {
+                                // Prepare typo suggestion objects
+                                let typo_suggestions = vec![crate::commands::spellcheck::TypoSuggestion {
+                                    typo: marker.text.clone(),
+                                    suggestions: marker.suggestions.clone(),
+                                    line: 0,
+                                    col: 0,
+                                }];
+                                
+                                let suggestion_text = marker.suggestions.first().cloned().unwrap_or_default();
+                                
+                                // Position popup from mouse cursor with a small offset.
+                                let popup_width = 320.0;
+                                let popup_height = 240.0;
+                                let offset_x = 12.0;
+                                let offset_y = 18.0;
+
+                                let mut popup_x = mouse_x_f + offset_x;
+                                let mut popup_y = mouse_y_f + offset_y;
+
+                                // If no space below cursor, place above cursor.
+                                if popup_y + popup_height > desktop_height {
+                                    popup_y = mouse_y_f - popup_height - offset_y;
+                                }
+
+                                // Clamp popup inside the virtual desktop.
+                                let min_x = desktop_min_x;
+                                let max_x = desktop_min_x + desktop_width - popup_width;
+                                let min_y = 0.0;
+                                let max_y = desktop_height - popup_height;
+
+                                popup_x = popup_x.clamp(min_x, max_x.max(min_x));
+                                popup_y = popup_y.clamp(min_y, max_y.max(min_y));
+                                
+                                let _ = popup::show_popup(
+                                    app_handle_for_hover.clone(),
+                                    popup_x as i32,
+                                    popup_y as i32,
+                                    marker.text.clone(),
+                                    suggestion_text,
+                                    Some(typo_suggestions),
+                                    Some(marker.offset),
+                                    Some(marker.char_length)
+                                );
+                                
+                                // Prevent re-triggering until we move away
+                                hover_start = None;
+                            }
+                        }
+                    } else {
+                        // Mouse moved away from the marker
+                        if !last_hovered_id.is_empty() {
+                            last_hovered_id.clear();
+                            hover_start = None;
+                            
+                            // Let the frontend popup hide itself when mouse leaves its window,
+                            // or we could hide it here. We'll let the user interact with the popup.
+                        }
+                    }
+                }
+            });
+
             // Spawn thread to handle hotkey events and trigger spell check workflow
             let app_handle = app.handle().clone();
             thread::spawn(move || {
@@ -360,6 +513,9 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                                 width: rect.size.width,
                                 height: rect.size.height,
                                 text: typo.typo.clone(),
+                                suggestions: typo.suggestions.clone(),
+                                offset: absolute_offset,
+                                char_length: typo_u16_len,
                             });
                         }
                     }
@@ -457,6 +613,9 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                         let final_x = base_x + prefix_width;
                         let final_y = base_y + (fallback_line * line_height) + line_height - 2.0;
 
+                        let absolute_offset = ctx.base_offset.saturating_add(byte_offset_to_utf16_offset(&ctx.text, typo.byte_offset));
+                        let char_length = typo.typo.encode_utf16().count();
+
                         markers.push(TypoMarker {
                             id: format!("layout-fallback-{}-{}", i, typo.typo),
                             x: final_x,
@@ -464,6 +623,9 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                             width: word_width,
                             height: 2.0,
                             text: typo.typo.clone(),
+                            suggestions: typo.suggestions.clone(),
+                            offset: absolute_offset,
+                            char_length,
                         });
                     }
                     log::info!("Generated {} fallback markers", markers.len());
