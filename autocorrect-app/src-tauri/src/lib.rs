@@ -529,7 +529,11 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                 let is_web_input = ctx.role == "AXWebArea";
                 let is_terminal = matches!(
                     ctx.bundle_id.as_str(),
-                    "com.apple.Terminal" | "com.googlecode.iterm2" | "io.alacritty" | "com.microsoft.VSCode" | "com.mitchellh.ghostty"
+                    "com.apple.Terminal"
+                        | "com.googlecode.iterm2"
+                        | "io.alacritty"
+                        | "com.microsoft.VSCode"
+                        | "com.mitchellh.ghostty"
                 );
                 let is_slack = ctx.bundle_id == "com.tinyspeck.slackmacgap";
                 // Some native Apple apps (Notes, Mail) and some Electron apps
@@ -539,13 +543,22 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                 let should_process = if is_terminal {
                     false
                 } else if is_slack {
-                    matches!(ctx.role.as_str(), "AXTextArea" | "AXWebArea" | "AXGroup" | "AXTextField")
+                    matches!(
+                        ctx.role.as_str(),
+                        "AXTextArea" | "AXWebArea" | "AXGroup" | "AXTextField"
+                    )
                 } else {
                     is_traditional_input || is_web_input
                 };
 
                 if !should_process {
-                    log::info!("[DIAG] Filtered out: role={}, editable={}, bundle={}, terminal={}", ctx.role, ctx.editable, ctx.bundle_id, is_terminal);
+                    log::info!(
+                        "[DIAG] Filtered out: role={}, editable={}, bundle={}, terminal={}",
+                        ctx.role,
+                        ctx.editable,
+                        ctx.bundle_id,
+                        is_terminal
+                    );
                     overlay_manager.update_markers(vec![]);
                     return;
                 }
@@ -558,9 +571,16 @@ fn sync_system_typos(app: &tauri::AppHandle) {
 
                 // 2. 检查拼写错误
                 let typos = typocheck::check_typos(&ctx.text);
-                log::info!("[DIAG] Checked text (len={}) for typos: found {}", ctx.text.len(), typos.len());
+                log::info!(
+                    "[DIAG] Checked text (len={}) for typos: found {}",
+                    ctx.text.len(),
+                    typos.len()
+                );
                 if typos.is_empty() {
-                    log::info!("[DIAG] No typos found in text: {:?}", ctx.text.chars().take(50).collect::<String>());
+                    log::info!(
+                        "[DIAG] No typos found in text: {:?}",
+                        ctx.text.chars().take(50).collect::<String>()
+                    );
                 } else {
                     for t in &typos {
                         log::info!("[DIAG] Typo found: '{}' at byte {}", t.typo, t.byte_offset);
@@ -574,8 +594,10 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                     let typo_u16_offset = byte_offset_to_utf16_offset(&ctx.text, typo.byte_offset);
                     let absolute_offset = ctx.base_offset.saturating_add(typo_u16_offset);
                     let typo_u16_len = typo.typo.encode_utf16().count();
-                    
-                    if let Ok(rect) = macos_text::get_focused_range_bounds(absolute_offset, typo_u16_len) {
+
+                    if let Ok(rect) =
+                        macos_text::get_focused_range_bounds(absolute_offset, typo_u16_len)
+                    {
                         if rect.size.width > 0.0 {
                             markers.push(TypoMarker {
                                 id: format!("{}-{}", absolute_offset, typo.typo),
@@ -597,8 +619,12 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                     let frame_rect = macos_text::get_focused_element_bounds().ok();
                     let caret_rect = macos_text::get_focused_caret_bounds().ok();
                     let (cursor_x, cursor_y) = get_cursor_position();
-                    
-                    log::info!("[DIAG] Fallback started. frame={:?} caret={:?}", frame_rect.is_some(), caret_rect.is_some());
+
+                    log::info!(
+                        "[DIAG] Fallback started. frame={:?} caret={:?}",
+                        frame_rect.is_some(),
+                        caret_rect.is_some()
+                    );
 
                     let has_valid_frame = frame_rect
                         .as_ref()
@@ -618,8 +644,10 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                         .max()
                         .unwrap_or(text_char_len)
                         .max(1);
-                    let caret_char_offset = utf16_offset_to_char_offset(&ctx.text, ctx.caret_offset);
-                    let (caret_line, caret_col) = char_offset_to_line_col(&ctx.text, caret_char_offset);
+                    let caret_char_offset =
+                        utf16_offset_to_char_offset(&ctx.text, ctx.caret_offset);
+                    let (caret_line, caret_col) =
+                        char_offset_to_line_col(&ctx.text, caret_char_offset);
 
                     let (base_x, base_y, line_height) = if has_valid_frame {
                         let frame = frame_rect.unwrap_or_default();
@@ -627,7 +655,7 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                         // Adjusted padding_x to 12.0 to move the underline 2px to the right.
                         let padding_x = 12.0;
                         let padding_y = 12.0;
-                        
+
                         // Treat the frame's origin as the true top-left of the text area
                         (frame.origin.x + padding_x, frame.origin.y + padding_y, 22.0)
                     } else if has_valid_caret {
@@ -637,28 +665,39 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                         let caret_y = caret.origin.y;
                         let caret_line = caret_line.saturating_sub(1) as f64;
                         let lh = caret.size.height.clamp(16.0, 28.0);
-                        (caret.origin.x - (caret_col.saturating_sub(1) as f64 * 8.0), caret_y - caret_line * lh, lh)
+                        (
+                            caret.origin.x - (caret_col.saturating_sub(1) as f64 * 8.0),
+                            caret_y - caret_line * lh,
+                            lh,
+                        )
                     } else {
                         (cursor_x as f64, cursor_y as f64 - 20.0, 22.0)
                     };
 
                     for (i, typo) in typos.iter().enumerate().take(10) {
                         let fallback_line = typo.line.saturating_sub(1) as f64;
-                        let line_text = typo.line.checked_sub(1).and_then(|idx| visible_lines.get(idx)).copied();
-                        
+                        let line_text = typo
+                            .line
+                            .checked_sub(1)
+                            .and_then(|idx| visible_lines.get(idx))
+                            .copied();
+
                         // Re-tuned character width. 8.1 still caused slight rightward drift at the end of long sentences.
-                        let base_char_width = 7.95; 
-                        
+                        let base_char_width = 7.95;
+
                         let prefix_chars = typo.col.saturating_sub(1);
-                        let text_before = line_text.map(|l| {
-                            let end = char_index_to_byte_offset(l, prefix_chars);
-                            &l[..end.min(l.len())]
-                        }).unwrap_or("");
-                        
+                        let text_before = line_text
+                            .map(|l| {
+                                let end = char_index_to_byte_offset(l, prefix_chars);
+                                &l[..end.min(l.len())]
+                            })
+                            .unwrap_or("");
+
                         // Calculate width of text before typo
                         let prefix_width = text_before.chars().fold(0.0_f64, |acc, ch| {
                             let factor = match ch {
-                                'i' | 'l' | 'I' | 'j' | 't' | 'f' | 'r' | '1' | '\'' | '`' | '|' | '.' | ',' | ':' | ';' => 0.4,
+                                'i' | 'l' | 'I' | 'j' | 't' | 'f' | 'r' | '1' | '\'' | '`'
+                                | '|' | '.' | ',' | ':' | ';' => 0.4,
                                 'm' | 'w' | 'M' | 'W' => 1.4,
                                 'A'..='Z' => 1.05,
                                 ' ' => 0.65,
@@ -669,22 +708,29 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                         });
 
                         // Calculate width of the typo itself
-                        let word_width = typo.typo.chars().fold(0.0_f64, |acc, ch| {
-                            let factor = match ch {
-                                'i' | 'l' | 'I' | 'j' | 't' | 'f' | 'r' | '1' | '\'' | '`' | '|' | '.' | ',' | ':' | ';' => 0.4,
-                                'm' | 'w' | 'M' | 'W' => 1.4,
-                                'A'..='Z' => 1.05,
-                                ' ' => 0.65,
-                                _ if ch.is_ascii_punctuation() => 0.6,
-                                _ => 1.0,
-                            };
-                            acc + (base_char_width * factor)
-                        }).max(6.0_f64);
+                        let word_width = typo
+                            .typo
+                            .chars()
+                            .fold(0.0_f64, |acc, ch| {
+                                let factor = match ch {
+                                    'i' | 'l' | 'I' | 'j' | 't' | 'f' | 'r' | '1' | '\'' | '`'
+                                    | '|' | '.' | ',' | ':' | ';' => 0.4,
+                                    'm' | 'w' | 'M' | 'W' => 1.4,
+                                    'A'..='Z' => 1.05,
+                                    ' ' => 0.65,
+                                    _ if ch.is_ascii_punctuation() => 0.6,
+                                    _ => 1.0,
+                                };
+                                acc + (base_char_width * factor)
+                            })
+                            .max(6.0_f64);
 
                         let final_x = base_x + prefix_width;
                         let final_y = base_y + (fallback_line * line_height) + line_height - 2.0;
 
-                        let absolute_offset = ctx.base_offset.saturating_add(byte_offset_to_utf16_offset(&ctx.text, typo.byte_offset));
+                        let absolute_offset = ctx.base_offset.saturating_add(
+                            byte_offset_to_utf16_offset(&ctx.text, typo.byte_offset),
+                        );
                         let char_length = typo.typo.encode_utf16().count();
 
                         markers.push(TypoMarker {
@@ -706,7 +752,7 @@ fn sync_system_typos(app: &tauri::AppHandle) {
             }
             Err(e) => {
                 log::info!("[DIAG] sync_system_typos: focus fetch failed: {:?}", e);
-                // Important: still call update_markers([]) so ensure_native_overlay runs 
+                // Important: still call update_markers([]) so ensure_native_overlay runs
                 // and shows the pink diagnostic line.
                 overlay_manager.update_markers(vec![]);
             }

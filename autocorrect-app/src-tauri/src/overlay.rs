@@ -157,8 +157,14 @@ unsafe fn ensure_native_overlay(state: &mut NativeOverlayState) -> Result<(), St
     state.screen_height = max_y - min_y;
     state.frame_origin_x = frame.origin.x;
     state.frame_origin_y = frame.origin.y;
-    log::info!("[OVERLAY] Overlay frame: origin=({},{}), size=({},{}) screen_h={}", 
-        min_x, min_y, frame.size.width, frame.size.height, state.screen_height);
+    log::info!(
+        "[OVERLAY] Overlay frame: origin=({},{}), size=({},{}) screen_h={}",
+        min_x,
+        min_y,
+        frame.size.width,
+        frame.size.height,
+        state.screen_height
+    );
 
     // NSNonactivatingPanelMask (1 << 7) allows the panel to stay on top without taking focus.
     // We use the raw value because it's sometimes missing from the cocoa-rs enums.
@@ -232,7 +238,11 @@ unsafe fn render_native_markers(
 
     // Helper to add a line
     // Standard Coordinate System: Top-Left (0,0 is top-left of primary monitor)
-    let mut add_line = |x: f64, y_top_left: f64, w: f64, color: (f64, f64, f64, f64), _name: &str| {
+    let mut add_line = |x: f64,
+                        y_top_left: f64,
+                        w: f64,
+                        color: (f64, f64, f64, f64),
+                        _name: &str| {
         let desktop_top_y = state.frame_origin_y + state.screen_height;
         let screen_y_bl = desktop_top_y - y_top_left;
         let local_y = screen_y_bl - state.frame_origin_y;
@@ -267,7 +277,13 @@ unsafe fn render_native_markers(
             marker.y + marker.height
         };
 
-        add_line(marker.x, y_top_left, marker.width, (1.0, 0.1, 0.1, 0.95), &format!("MARKER_{}", i));
+        add_line(
+            marker.x,
+            y_top_left,
+            marker.width,
+            (1.0, 0.1, 0.1, 0.95),
+            &format!("MARKER_{}", i),
+        );
     }
 
     Ok(())

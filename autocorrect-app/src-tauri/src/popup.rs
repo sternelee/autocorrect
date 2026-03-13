@@ -312,7 +312,10 @@ fn apply_suggestion_to_selection_macos(
                     break;
                 }
                 if deadline.elapsed().as_millis() > 600 {
-                    log::warn!("[accept] activate timeout: {} still not frontmost", app_name);
+                    log::warn!(
+                        "[accept] activate timeout: {} still not frontmost",
+                        app_name
+                    );
                     break;
                 }
             }
@@ -337,7 +340,9 @@ fn apply_suggestion_to_selection_macos(
                 Err(e) => {
                     log::warn!("[accept] select_text_range failed: {}", e);
                     if sel_deadline.elapsed().as_millis() > 600 {
-                        log::warn!("[accept] select_text_range timed out, paste will insert at caret");
+                        log::warn!(
+                            "[accept] select_text_range timed out, paste will insert at caret"
+                        );
                         break;
                     }
                     thread::sleep(Duration::from_millis(60));

@@ -110,7 +110,12 @@ pub fn get_focused_element_data(range_start: usize, range_len: usize) -> Result<
         );
 
         if err_bounds != 0 {
-            log::info!("[DIAG] AXBoundsForRange error: {} for range {}-{}", err_bounds, range_start, range_len);
+            log::info!(
+                "[DIAG] AXBoundsForRange error: {} for range {}-{}",
+                err_bounds,
+                range_start,
+                range_len
+            );
         }
 
         if err_bounds == 0 && bounds_value != nil {
@@ -155,7 +160,7 @@ pub fn get_focused_text_context() -> Result<FocusedTextContext> {
         // Get PID and Bundle ID safely
         let mut pid: i32 = 0;
         AXUIElementGetPid(focused_element, &mut pid);
-        
+
         let mut bundle_id = String::new();
         if pid > 0 {
             let app_class = objc::class!(NSRunningApplication);
@@ -187,73 +192,84 @@ pub fn get_focused_text_context() -> Result<FocusedTextContext> {
         // 优先全文 (AXValue)
         let mut text_value: id = nil;
         AXUIElementCopyAttributeValue(focused_element, to_ax_string("AXValue"), &mut text_value);
-        
+
         // Slack/Electron fallback (AXSelectedText)
         if text_value == nil {
-            AXUIElementCopyAttributeValue(focused_element, to_ax_string("AXSelectedText"), &mut text_value);
+            AXUIElementCopyAttributeValue(
+                focused_element,
+                to_ax_string("AXSelectedText"),
+                &mut text_value,
+            );
         }
 
         if text_value != nil {
             // Verify if the value is actually an NSString
             let ns_string_class: id = msg_send![objc::class!(NSString), class];
             let is_string: bool = msg_send![text_value, isKindOfClass: ns_string_class];
-            
+
             if is_string {
                 let full_text = from_ax_string(text_value);
                 if !full_text.is_empty() {
-                let mut selected_range_value: id = nil;
-                AXUIElementCopyAttributeValue(
-                    focused_element,
-                    to_ax_string("AXSelectedTextRange"),
-                    &mut selected_range_value,
-                );
-                
-                let mut selected_range = CFRange { location: 0, length: 0 };
-                if selected_range_value != nil {
-                    let _ = AXValueGetValue(
-                        selected_range_value,
-                        kAXValueCFRangeType,
-                        &mut selected_range as *mut _ as *mut std::ffi::c_void,
+                    let mut selected_range_value: id = nil;
+                    AXUIElementCopyAttributeValue(
+                        focused_element,
+                        to_ax_string("AXSelectedTextRange"),
+                        &mut selected_range_value,
                     );
-                }
 
-                let total_u16 = full_text.encode_utf16().count();
-                if total_u16 > 20000 {
-                    let caret_u16 = if selected_range.location >= 0 { selected_range.location as usize } else { total_u16 };
-                    let start_u16 = caret_u16.saturating_sub(3000);
-                    let end_u16 = (caret_u16 + 1000).min(total_u16);
-                    let sliced = slice_by_utf16_range(&full_text, start_u16, end_u16);
+                    let mut selected_range = CFRange {
+                        location: 0,
+                        length: 0,
+                    };
+                    if selected_range_value != nil {
+                        let _ = AXValueGetValue(
+                            selected_range_value,
+                            kAXValueCFRangeType,
+                            &mut selected_range as *mut _ as *mut std::ffi::c_void,
+                        );
+                    }
+
+                    let total_u16 = full_text.encode_utf16().count();
+                    if total_u16 > 20000 {
+                        let caret_u16 = if selected_range.location >= 0 {
+                            selected_range.location as usize
+                        } else {
+                            total_u16
+                        };
+                        let start_u16 = caret_u16.saturating_sub(3000);
+                        let end_u16 = (caret_u16 + 1000).min(total_u16);
+                        let sliced = slice_by_utf16_range(&full_text, start_u16, end_u16);
+                        return Ok(FocusedTextContext {
+                            text: sliced,
+                            base_offset: start_u16,
+                            caret_offset: caret_u16.saturating_sub(start_u16),
+                            role,
+                            editable,
+                            bundle_id,
+                        });
+                    }
+
                     return Ok(FocusedTextContext {
-                        text: sliced,
-                        base_offset: start_u16,
-                        caret_offset: caret_u16.saturating_sub(start_u16),
+                        text: full_text,
+                        base_offset: 0,
+                        caret_offset: selected_range.location.max(0) as usize,
                         role,
                         editable,
                         bundle_id,
                     });
                 }
-
-                return Ok(FocusedTextContext {
-                    text: full_text,
-                    base_offset: 0,
-                    caret_offset: selected_range.location.max(0) as usize,
-                    role,
-                    editable,
-                    bundle_id,
-                });
             }
         }
-    }
 
-    Ok(FocusedTextContext {
-        text: String::new(),
-        base_offset: 0,
-        caret_offset: 0,
-        role,
-        editable,
-        bundle_id,
-    })
-}
+        Ok(FocusedTextContext {
+            text: String::new(),
+            base_offset: 0,
+            caret_offset: 0,
+            role,
+            editable,
+            bundle_id,
+        })
+    }
 }
 
 /// 仅获取焦点输入框指定范围屏幕坐标
@@ -294,7 +310,12 @@ pub fn get_focused_range_bounds(range_start: usize, range_len: usize) -> Result<
         );
 
         if err_bounds != 0 {
-            log::info!("[DIAG] AXBoundsForRange error: {} for range {}-{}", err_bounds, range_start, range_len);
+            log::info!(
+                "[DIAG] AXBoundsForRange error: {} for range {}-{}",
+                err_bounds,
+                range_start,
+                range_len
+            );
         }
 
         if err_bounds == 0 && bounds_value != nil {
