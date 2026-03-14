@@ -122,7 +122,7 @@ pub fn get_focused_element_data(range_start: usize, range_len: usize) -> Result<
             let mut rect = CGRect::default();
             if AXValueGetValue(
                 bounds_value,
-                kAXValueCGRectType,
+                K_AXVALUE_CGRECT_TYPE,
                 &mut rect as *mut _ as *mut std::ffi::c_void,
             ) {
                 log::info!("[DIAG] AXBoundsForRange success: {:?}", rect);
@@ -322,7 +322,7 @@ pub fn get_focused_range_bounds(range_start: usize, range_len: usize) -> Result<
             let mut rect = CGRect::default();
             if AXValueGetValue(
                 bounds_value,
-                kAXValueCGRectType,
+                K_AXVALUE_CGRECT_TYPE,
                 &mut rect as *mut _ as *mut std::ffi::c_void,
             ) {
                 log::info!("[DIAG] AXBoundsForRange success: {:?}", rect);
@@ -420,7 +420,7 @@ pub fn get_focused_element_bounds() -> Result<CGRect> {
             let mut rect = CGRect::default();
             if AXValueGetValue(
                 frame_value,
-                kAXValueCGRectType,
+                K_AXVALUE_CGRECT_TYPE,
                 &mut rect as *mut _ as *mut std::ffi::c_void,
             ) {
                 log::info!("[DIAG] get_focused_element_bounds result: {:?}", rect);
@@ -483,7 +483,7 @@ struct CFRange {
 }
 
 const kAXValueCFRangeType: i32 = 4;
-const kAXValueCGRectType: i32 = 3;
+const K_AXVALUE_CGRECT_TYPE: i32 = 3;
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {

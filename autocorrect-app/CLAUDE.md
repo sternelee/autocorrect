@@ -4,137 +4,140 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-AutoCorrect Desktop App is a system-wide text correction and spell checking application built with Tauri 2 (Rust backend) and Svelte 5 (frontend). It provides Grammarly-like real-time text checking with overlay markers and a suggestion popup system for macOS.
+AutoCorrect Desktop App is a Tauri 2 + Svelte 5 desktop client for system-wide text correction on macOS. It combines:
 
-## Build and Development Commands
+- local formatting/linting from the Rust `autocorrect` crate,
+- typo detection via `typos`,
+- optional AI transforms via OpenAI-compatible chat-completions APIs,
+- macOS Accessibility-based selection/replacement,
+- always-on-top popup/overlay windows for inline UX.
+
+## Core Development Commands
 
 ```bash
-# Install dependencies
+# Install JS dependencies
 npm install
 
-# Development (hot reload)
+# Run app in development (starts Vite + Tauri)
 npm run tauri:dev
 
-# Build for release
-npm run tauri:build
-
-# Debug build (faster compilation)
-npm run tauri:build:debug
-
-# Frontend-only (no Rust backend)
+# Frontend-only dev server
 npm run dev
 
-# Type checking
+# Typecheck Svelte + TS
 npm run check
 
-# Linting and formatting
+# Lint (Prettier check + ESLint)
 npm run lint
+
+# Auto-format
 npm run format
+
+# Production and debug builds
+npm run tauri:build
+npm run tauri:build:debug
 ```
 
-## Architecture
+## Rust Commands (backend only)
 
-### Tauri Backend (src-tauri/)
+```bash
+# Build backend crate only
+cargo build --manifest-path src-tauri/Cargo.toml
 
-The Rust backend handles system integration, spell checking, and UI coordination:
+# Run backend tests
+cargo test --manifest-path src-tauri/Cargo.toml
 
-**Entry Point** (`lib.rs`):
-- Initializes popup state, overlay manager, and hotkey listener
-- Spawns background thread for system typo sync (800ms polling)
-- Routes hotkey events to spell check workflow
+# Run a single Rust test (by name filter)
+cargo test --manifest-path src-tauri/Cargo.toml <test_name>
 
-**Core Modules**:
-
-| Module | Purpose |
-|--------|---------|
-| `popup.rs` | Popup window state management and suggestion acceptance/rejection |
-| `overlay.rs` | Transparent fullscreen overlay for typo markers (Grammarly-style underlines) |
-| `text_selection.rs` | System-wide text selection via Accessibility API with clipboard fallback |
-| `macos_text.rs` | macOS Accessibility API bindings (AXUIElement, focused element data) |
-| `hotkey.rs` | Global hotkey listener using rdev |
-| `clipboard.rs` | Clipboard monitoring and text operations |
-| `typocheck.rs` | Typo detection using the `typos` crate |
-
-**Commands** (`commands/`):
-
-| Command File | Functions |
-|--------------|-----------|
-| `spellcheck.rs` | `spell_check`, `get_clipboard_text`, `set_clipboard_text`, `simulate_paste` |
-| `config.rs` | Configuration management for AutoCorrect rules |
-| `hotkey_config.rs` | Hotkey customization and persistence |
-| `custom_corrections.rs` | User-defined corrections dictionary |
-| `ai_grammar.rs` | OpenAI/OpenRouter integration for AI-powered grammar checking |
-| `errors.rs` | Unified error types for Tauri commands |
-
-**Spell Check Pipeline** (`commands/spellcheck.rs`):
-1. Local formatting via `autocorrect::format_for()` (CJK spacing, punctuation)
-2. Lint via `autocorrect::lint_for()` for line-by-line changes
-3. Typo detection via `typos` crate (configurable)
-4. CSpell integration (optional)
-5. AI grammar enhancement via OpenAI-compatible API (optional)
-
-### Frontend (src/)
-
-**Main Components**:
-
-| Component | Purpose |
-|-----------|---------|
-| `SpellChecker.svelte` | Main text input and correction interface |
-| `SettingsPanel.svelte` | Configuration UI for rules, hotkeys, AI settings |
-| `SuggestionPopup.svelte` | Floating suggestion window |
-| `StatusIndicator.svelte` | Enable/disable toggle and correction count |
-| `CustomCorrectionsManager.svelte` | Custom dictionary management |
-
-**UI Library**: Tailwind CSS 4 with shadcn-svelte components (`src/lib/components/ui/`)
-
-### Windows (tauri.conf.json + programmatic)
-
-1. **main** (800x600): Primary application window (`index.html`)
-2. **popup** (320x240): Transparent, always-on-top suggestion popup (`popup.html`)
-3. **overlay**: Fullscreen transparent window created programmatically for typo markers (click-through, `overlay.html`)
-
-### Event Flow
-
-```
-Hotkey (Cmd+Shift+A) → hotkey.rs → trigger_spell_check_workflow()
-    ↓
-get_selected_text() → text_selection.rs
-    ↓ (Accessibility API or clipboard fallback)
-spell_check() → commands/spellcheck.rs
-    ↓ (autocorrect + typos + optional AI)
-show_popup() → popup.rs → emit "popup-show" event
-    ↓
-Frontend renders suggestions → accept_suggestion() / reject_suggestion()
-    ↓ (accept)
-apply_suggestion_to_selection_macos() → clipboard + paste simulation
+# Run a specific Rust integration/example target
+cargo test --manifest-path src-tauri/Cargo.toml --test <test_target>
+cargo run --manifest-path src-tauri/Cargo.toml --example <example_name>
 ```
 
-### Configuration
+## Architecture (Big Picture)
 
-- **App settings**: `~/.autocorrect-app.json` (AI, CSpell, typo checking toggles)
-- **AutoCorrect rules**: `~/.autocorrectrc` (formatting rules)
-- **Hotkey config**: Stored via `hotkey_config.rs` in app data directory
+### 1) Multi-window Tauri app with Svelte entrypoints
 
-### Frontend-Backend Communication
+Configured in `src-tauri/tauri.conf.json` and mounted from:
 
-- **Tauri commands**: Frontend invokes Rust functions via `@tauri-apps/api` (`invoke()`)
-- **Tauri events**: Backend emits events like `popup-show`, `popup-hide`, `overlay-update` for reactive UI
-- **Capabilities**: Permissions defined in `src-tauri/capabilities/default.json`
+- `src/main.ts` → main settings/checker window (`src/App.svelte`)
+- `src/pages/popup/main.ts` → suggestion popup UI
+- `src/pages/overlay/main.ts` → transparent typo underline overlay
+- `src/pages/ai-popup/main.ts` → AI tools popup
 
-## macOS-Specific Notes
+The backend orchestrates all windows and emits events; Svelte pages are thin reactive views over Tauri commands/events.
 
-- Requires Accessibility permissions (`check_and_request_accessibility()`)
-- Uses private APIs (`macos-private-api` feature in tauri.conf.json)
-- Overlay uses `setIgnoresMouseEvents: true` for click-through
-- Text replacement uses AppleScript for paste simulation
+### 2) Backend as orchestration layer (`src-tauri/src/lib.rs`)
 
-## Key Dependencies
+`run()` wires up the app lifecycle:
 
-- `autocorrect` (path dependency): Core formatting engine
-- `typos` / `typos-cli`: Spell checking
-- `enigo`: Keyboard simulation
-- `rdev`: Global hotkey listening (forked version for macOS stability)
-- `arboard`: Clipboard operations
-- `cocoa`, `objc`, `core-foundation`: macOS Accessibility bindings
-- `tauri-plugin-log`: Logging
-- `tauri-plugin-http`: HTTP requests (for AI grammar API)
+- initializes shared popup/AI/overlay state,
+- registers Tauri commands,
+- starts background threads for:
+  - system typo synchronization loop (~800ms),
+  - hover/click detection for marker interactions,
+  - hotkey event handling,
+  - clipboard event forwarding.
+
+This file is the control plane: if behavior spans selection → checking → overlays/popups, start here.
+
+### 3) Spellcheck pipeline and config split
+
+Primary spellcheck path is in `src-tauri/src/commands/spellcheck.rs`:
+
+1. `autocorrect::format_for` (correction output)
+2. `autocorrect::lint_for` (structured line-level diffs)
+3. `typos` detection (optional via settings)
+4. optional AI post-processing when enabled.
+
+Config is split intentionally:
+
+- `~/.autocorrectrc` for autocorrect rules/word lists (YAML)
+- `~/.autocorrect-app.json` for app-only settings (AI, typo toggle, underline style/color, etc.)
+
+Config read/write and projection to frontend happen in `src-tauri/src/commands/config.rs`.
+
+### 4) System integration boundary (macOS)
+
+macOS-specific behavior lives in:
+
+- `macos_text.rs` (Accessibility APIs, focused context, range bounds, selection operations)
+- `text_selection.rs` (selection retrieval + clipboard fallback)
+- `popup.rs` (focus return + replacement flow via clipboard/paste)
+- `overlay.rs` (marker rendering coordination)
+
+When fixing issues like “wrong range replaced”, “popup focus oddities”, or “marker position drift”, trace through these modules together; they form one runtime flow.
+
+### 5) Event-driven frontend/backend contract
+
+Backend emits events (e.g. `popup-show`, `popup-hide`, `update-markers`, `underline-config-update`), and frontend pages subscribe via `@tauri-apps/api/event`.
+
+Backend commands are invoked from Svelte via `invoke()` for mutations and requests. Most UI behavior is therefore a command + event roundtrip rather than shared state.
+
+## Key Frontend Surfaces
+
+- `src/App.svelte`: main window tab shell (spell check, settings, about)
+- `src/lib/components/SpellChecker.svelte`: manual checking + AI transform tools
+- `src/lib/components/SettingsPanel.svelte`: rules, AI settings, hotkey, underline appearance, import/export
+- `src/pages/popup/Popup.svelte`: lightweight correction popup with suggestion chips and custom dictionary action
+- `src/pages/overlay/Overlay.svelte`: purely visual typo underline renderer
+- `src/pages/ai-popup/AiPopup.svelte`: contextual AI actions for selected text
+
+## Hotkey and popup workflow
+
+High-level runtime path:
+
+1. Global hotkey triggers spell-check workflow.
+2. Selected text is fetched (AX API first, clipboard fallback path).
+3. Spellcheck pipeline returns corrected text + typo suggestions.
+4. Popup is shown near cursor or hovered marker.
+5. Accept/reject routes through `popup.rs` to apply replacement and restore focus to source app.
+
+If this chain breaks, inspect `hotkey.rs` + `popup.rs` + `text_selection.rs` + `macos_text.rs` together.
+
+## Notes for future edits
+
+- Keep command names and payload shapes aligned between Rust `#[tauri::command]` functions and Svelte `invoke()` calls.
+- Underline style/color settings are persisted in app settings and pushed live via `underline-config-update`; update both persistence and event emission when changing appearance behavior.
+- This repo currently has no dedicated frontend test runner script in `package.json`; validation is primarily `npm run check`, `npm run lint`, and Rust tests/builds.
