@@ -44,10 +44,6 @@
 
 	interface AppConfig {
 		aiGrammarEnabled?: boolean;
-		openaiApiKey?: string;
-		openaiModel?: string;
-		aiTimeoutMs?: number;
-		aiApiBaseUrl?: string;
 		aiTranslateTargetLanguage?: string;
 		aiPolishStyle?: string;
 	}
@@ -173,10 +169,6 @@
 			if (!config.aiGrammarEnabled) {
 				throw new Error('Please enable AI Grammar Check in Settings first.');
 			}
-			const apiKey = (config.openaiApiKey || '').trim();
-			if (!apiKey) {
-				throw new Error('OpenAI/OpenRouter API key is empty. Set it in Settings.');
-			}
 
 			const result = await invoke<{
 				outputText?: string;
@@ -190,10 +182,6 @@
 				request: {
 					text: currentText,
 					operation,
-					apiKey,
-					apiBaseUrl: config.aiApiBaseUrl,
-					model: config.openaiModel,
-					timeoutMs: config.aiTimeoutMs,
 					targetLanguage: aiTargetLanguage,
 					polishStyle: aiPolishStyle
 				}

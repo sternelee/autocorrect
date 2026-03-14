@@ -93,7 +93,7 @@ impl OverlayManager {
         #[cfg(target_os = "macos")]
         {
             let state = Arc::clone(&self.state);
-            let (ul_style, ul_color) = crate::commands::config::get_underline_config();
+            let (ul_style, ul_color) = crate::commands::config::get_underline_config(&self.handle);
             let _ = self.handle.run_on_main_thread(move || {
                 if let Ok(mut guard) = state.lock() {
                     if let Err(err) =

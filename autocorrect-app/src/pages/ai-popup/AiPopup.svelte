@@ -8,10 +8,6 @@
   // Mirror the AppConfig shape used by SpellChecker / SettingsPanel.
   interface AppConfig {
     aiGrammarEnabled?: boolean;
-    openaiApiKey?: string;
-    openaiModel?: string;
-    aiTimeoutMs?: number;
-    aiApiBaseUrl?: string;
     aiTranslateTargetLanguage?: string;
     aiPolishStyle?: string;
   }
@@ -43,9 +39,8 @@
     try {
       // Load config fresh each time — same pattern as SpellChecker.svelte.
       const config = await invoke<AppConfig>('get_config');
-      const apiKey = (config.openaiApiKey ?? '').trim();
-      if (!apiKey) {
-        throw new Error('OpenAI/OpenRouter API key is empty. Please set it in Settings → AI.');
+      if (!config.aiGrammarEnabled) {
+        throw new Error('Please enable AI Grammar Check in Settings first.');
       }
 
       const polishStyleMap: Record<string, string> = {
@@ -57,10 +52,6 @@
         request: {
           text: selectedText,
           operation: tool === 'improve' || tool === 'summarize' ? 'polish' : tool,
-          apiKey,
-          apiBaseUrl: config.aiApiBaseUrl ?? null,
-          model: config.openaiModel ?? null,
-          timeoutMs: config.aiTimeoutMs ?? 15000,
           targetLanguage: tool === 'translate' ? translateLang : null,
           polishStyle: polishStyleMap[tool] ?? config.aiPolishStyle ?? null,
         },

@@ -1,3 +1,4 @@
+use super::config::load_app_settings;
 use super::errors::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -6,9 +7,6 @@ use serde_json::json;
 #[serde(rename_all = "camelCase")]
 pub struct AiGrammarRequest {
     pub text: String,
-    pub api_key: Option<String>,
-    pub model: Option<String>,
-    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -23,10 +21,6 @@ pub struct AiGrammarResponse {
 pub struct AiTextTransformRequest {
     pub text: String,
     pub operation: String, // grammar | translate | polish
-    pub api_key: String,
-    pub api_base_url: Option<String>,
-    pub model: Option<String>,
-    pub timeout_ms: Option<u64>,
     pub target_language: Option<String>,
     pub polish_style: Option<String>,
 }
@@ -191,25 +185,25 @@ fn build_system_prompt(
 }
 
 #[tauri::command]
-pub async fn ai_grammar_check(request: AiGrammarRequest) -> Result<AiGrammarResponse, Error> {
-    let api_key = request.api_key.unwrap_or_default().trim().to_string();
+pub async fn ai_grammar_check(
+    app: tauri::AppHandle,
+    request: AiGrammarRequest,
+) -> Result<AiGrammarResponse, Error> {
+    let settings = load_app_settings(&app)?;
+    let api_key = settings.openai_api_key.trim().to_string();
     if api_key.is_empty() {
         return Err(Error::Api(
             "OpenAI API key is required for AI grammar check".to_string(),
         ));
     }
 
-    let model = normalize_model(request.model);
-    let timeout_ms = request.timeout_ms.unwrap_or(12_000);
+    let model = normalize_model(Some(settings.openai_model));
+    let timeout_ms = settings.ai_timeout_ms;
+    let api_base_url = normalize_endpoint(Some(settings.ai_api_base_url));
 
-    let corrected_text = correct_text_with_openai(
-        default_chat_endpoint(),
-        &api_key,
-        &model,
-        &request.text,
-        timeout_ms,
-    )
-    .await?;
+    let corrected_text =
+        correct_text_with_openai(&api_base_url, &api_key, &model, &request.text, timeout_ms)
+            .await?;
     Ok(AiGrammarResponse {
         corrected_text,
         model,
@@ -218,16 +212,18 @@ pub async fn ai_grammar_check(request: AiGrammarRequest) -> Result<AiGrammarResp
 
 #[tauri::command]
 pub async fn ai_text_transform(
+    app: tauri::AppHandle,
     request: AiTextTransformRequest,
 ) -> Result<AiTextTransformResponse, Error> {
-    let api_key = request.api_key.trim();
+    let settings = load_app_settings(&app)?;
+    let api_key = settings.openai_api_key.trim().to_string();
     if api_key.is_empty() {
         return Err(Error::Api("API key is required".to_string()));
     }
 
-    let model = normalize_model(request.model);
-    let timeout_ms = request.timeout_ms.unwrap_or(12_000);
-    let api_base_url = normalize_endpoint(request.api_base_url);
+    let model = normalize_model(Some(settings.openai_model));
+    let timeout_ms = settings.ai_timeout_ms;
+    let api_base_url = normalize_endpoint(Some(settings.ai_api_base_url));
     let operation = request.operation.trim().to_lowercase();
     let system_prompt = build_system_prompt(
         &operation,
@@ -251,7 +247,7 @@ pub async fn ai_text_transform(
     let response = client
         .post(&api_base_url)
         .header("Content-Type", "application/json")
-        .bearer_auth(api_key)
+        .bearer_auth(&api_key)
         .body(payload.to_string())
         .send()
         .await

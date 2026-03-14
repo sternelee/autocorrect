@@ -10,7 +10,9 @@ mod typocheck;
 
 use ai_popup::{SharedAiPopupState, SharedNativeIconWindow};
 use commands::ai_grammar::{ai_grammar_check, ai_text_transform};
-use commands::config::{get_config, get_default_config, get_rules, update_config};
+use commands::config::{
+    ensure_app_settings_initialized, get_config, get_default_config, get_rules, update_config,
+};
 use commands::custom_corrections::{
     add_custom_correction, delete_custom_correction, get_custom_corrections,
     get_custom_corrections_path_cmd, update_custom_correction,
@@ -72,6 +74,8 @@ pub fn run() {
                     log::info!("Accessibility permission granted ✓");
                 }
             }
+
+            ensure_app_settings_initialized(&app.handle())?;
 
             // Initialize popup state
             app.manage(SharedPopupState::new());

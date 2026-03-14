@@ -1,3 +1,4 @@
+use super::config::{load_app_settings, AppSettings};
 use super::errors::Error;
 use crate::commands::ai_grammar::correct_text_with_openai;
 use crate::typocheck;
@@ -5,82 +6,7 @@ use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
-use std::path::PathBuf;
 
-/// App-specific settings
-#[derive(Clone, Serialize, Deserialize)]
-struct AppSettings {
-    #[serde(default = "default_typo_checking")]
-    typo_checking_enabled: bool,
-    #[serde(default)]
-    ai_grammar_enabled: bool,
-    #[serde(default)]
-    openai_api_key: String,
-    #[serde(default = "default_openai_model")]
-    openai_model: String,
-    #[serde(default = "default_ai_max_input_chars")]
-    ai_max_input_chars: usize,
-    #[serde(default = "default_ai_timeout_ms")]
-    ai_timeout_ms: u64,
-    #[serde(default = "default_ai_api_base_url")]
-    ai_api_base_url: String,
-}
-
-fn default_typo_checking() -> bool {
-    true
-}
-
-fn default_openai_model() -> String {
-    "gpt-4.1-mini".to_string()
-}
-
-fn default_ai_max_input_chars() -> usize {
-    2000
-}
-
-fn default_ai_timeout_ms() -> u64 {
-    12000
-}
-
-fn default_ai_api_base_url() -> String {
-    "https://openrouter.ai/api/v1/chat/completions".to_string()
-}
-
-impl Default for AppSettings {
-    fn default() -> Self {
-        Self {
-            typo_checking_enabled: default_typo_checking(),
-            ai_grammar_enabled: false,
-            openai_api_key: String::new(),
-            openai_model: default_openai_model(),
-            ai_max_input_chars: default_ai_max_input_chars(),
-            ai_timeout_ms: default_ai_timeout_ms(),
-            ai_api_base_url: default_ai_api_base_url(),
-        }
-    }
-}
-
-/// Get the path to the app settings file
-fn get_app_settings_path() -> PathBuf {
-    let home_dir = env::var("HOME")
-        .or_else(|_| env::var("USERPROFILE"))
-        .unwrap_or_else(|_| ".".to_string());
-
-    PathBuf::from(home_dir).join(".autocorrect-app.json")
-}
-
-/// Load app-specific settings
-fn load_app_settings() -> AppSettings {
-    let settings_path = get_app_settings_path();
-    if settings_path.exists() {
-        if let Ok(content) = fs::read_to_string(&settings_path) {
-            if let Ok(settings) = serde_json::from_str(&content) {
-                return settings;
-            }
-        }
-    }
-    AppSettings::default()
-}
 
 #[derive(Clone, Serialize)]
 pub struct SpellCheckResult {
@@ -157,9 +83,13 @@ fn run_local_spellcheck(
 }
 
 #[tauri::command]
-pub async fn spell_check(text: String, enable_ai: Option<bool>) -> Result<SpellCheckResult, Error> {
+pub async fn spell_check(
+    app: tauri::AppHandle,
+    text: String,
+    enable_ai: Option<bool>,
+) -> Result<SpellCheckResult, Error> {
     let original = text.clone();
-    let app_settings = load_app_settings();
+    let app_settings = load_app_settings(&app)?;
 
     let text_for_local = text.clone();
     let settings_for_local = app_settings.clone();
@@ -228,8 +158,12 @@ pub async fn spell_check(text: String, enable_ai: Option<bool>) -> Result<SpellC
     })
 }
 
-pub fn spell_check_sync(text: String, enable_ai: Option<bool>) -> Result<SpellCheckResult, Error> {
-    tauri::async_runtime::block_on(spell_check(text, enable_ai))
+pub fn spell_check_sync(
+    app: tauri::AppHandle,
+    text: String,
+    enable_ai: Option<bool>,
+) -> Result<SpellCheckResult, Error> {
+    tauri::async_runtime::block_on(spell_check(app, text, enable_ai))
 }
 
 #[tauri::command]

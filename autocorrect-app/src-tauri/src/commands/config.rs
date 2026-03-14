@@ -5,35 +5,36 @@ use std::env;
 use std::fs;
 use std::path::PathBuf;
 use tauri::Emitter;
+use tauri_plugin_store::StoreExt;
 
 pub const DEFAULT_UNDERLINE_STYLE: &str = "wavy";
 pub const DEFAULT_UNDERLINE_COLOR: &str = "#ff3b30";
 
 /// Custom app-specific settings stored separately from autocorrect config
 #[derive(Clone, Serialize, Deserialize)]
-struct AppSettings {
+pub struct AppSettings {
     #[serde(default = "default_typo_checking")]
-    typo_checking_enabled: bool,
+    pub typo_checking_enabled: bool,
     #[serde(default)]
-    ai_grammar_enabled: bool,
+    pub ai_grammar_enabled: bool,
     #[serde(default)]
-    openai_api_key: String,
+    pub openai_api_key: String,
     #[serde(default = "default_openai_model")]
-    openai_model: String,
+    pub openai_model: String,
     #[serde(default = "default_ai_max_input_chars")]
-    ai_max_input_chars: usize,
+    pub ai_max_input_chars: usize,
     #[serde(default = "default_ai_timeout_ms")]
-    ai_timeout_ms: u64,
+    pub ai_timeout_ms: u64,
     #[serde(default = "default_ai_api_base_url")]
-    ai_api_base_url: String,
+    pub ai_api_base_url: String,
     #[serde(default = "default_ai_translate_target_language")]
-    ai_translate_target_language: String,
+    pub ai_translate_target_language: String,
     #[serde(default = "default_ai_polish_style")]
-    ai_polish_style: String,
+    pub ai_polish_style: String,
     #[serde(default = "default_underline_style")]
-    underline_style: String,
+    pub underline_style: String,
     #[serde(default = "default_underline_color")]
-    underline_color: String,
+    pub underline_color: String,
 }
 
 impl Default for AppSettings {
@@ -190,7 +191,7 @@ pub struct ConfigUpdates {
 
 /// Get the current merged configuration (default + user config)
 #[tauri::command]
-pub fn get_config() -> Result<AppConfig, Error> {
+pub fn get_config(app: tauri::AppHandle) -> Result<AppConfig, Error> {
     let config_path = get_user_config_path();
     let user_config_content = if config_path.exists() {
         fs::read_to_string(&config_path).unwrap_or_default()
@@ -202,7 +203,7 @@ pub fn get_config() -> Result<AppConfig, Error> {
     let current_config = autocorrect::config::Config::current();
 
     // Load app-specific settings
-    let app_settings = load_app_settings();
+    let app_settings = load_app_settings(&app)?;
 
     // Extract spellcheck words from user config if present
     let spellcheck_words = if user_config_content.is_empty() {
@@ -356,81 +357,78 @@ pub fn update_config(app: tauri::AppHandle, updates: ConfigUpdates) -> Result<()
         user_config.spellcheck.words = words;
     }
 
-    // Handle app-specific settings (typo checking)
+    // Handle app-specific settings in a single load/update/save cycle.
+    let mut app_settings = load_app_settings(&app)?;
+    let mut app_settings_changed = false;
+    let mut underline_changed = false;
+
     if let Some(typo_enabled) = updates.typo_checking_enabled {
-        let mut app_settings = load_app_settings();
         app_settings.typo_checking_enabled = typo_enabled;
-        save_app_settings(&app_settings)?;
+        app_settings_changed = true;
     }
 
     if let Some(ai_enabled) = updates.ai_grammar_enabled {
-        let mut app_settings = load_app_settings();
         app_settings.ai_grammar_enabled = ai_enabled;
-        save_app_settings(&app_settings)?;
+        app_settings_changed = true;
     }
 
     if let Some(openai_api_key) = updates.openai_api_key {
-        let mut app_settings = load_app_settings();
         app_settings.openai_api_key = openai_api_key;
-        save_app_settings(&app_settings)?;
+        app_settings_changed = true;
     }
 
     if let Some(openai_model) = updates.openai_model {
-        let mut app_settings = load_app_settings();
         app_settings.openai_model = openai_model;
-        save_app_settings(&app_settings)?;
+        app_settings_changed = true;
     }
 
     if let Some(ai_max_input_chars) = updates.ai_max_input_chars {
-        let mut app_settings = load_app_settings();
         app_settings.ai_max_input_chars = ai_max_input_chars;
-        save_app_settings(&app_settings)?;
+        app_settings_changed = true;
     }
 
     if let Some(ai_timeout_ms) = updates.ai_timeout_ms {
-        let mut app_settings = load_app_settings();
         app_settings.ai_timeout_ms = ai_timeout_ms;
-        save_app_settings(&app_settings)?;
+        app_settings_changed = true;
     }
 
     if let Some(ai_api_base_url) = updates.ai_api_base_url {
-        let mut app_settings = load_app_settings();
         app_settings.ai_api_base_url = ai_api_base_url;
-        save_app_settings(&app_settings)?;
+        app_settings_changed = true;
     }
 
     if let Some(ai_translate_target_language) = updates.ai_translate_target_language {
-        let mut app_settings = load_app_settings();
         app_settings.ai_translate_target_language = ai_translate_target_language;
-        save_app_settings(&app_settings)?;
+        app_settings_changed = true;
     }
 
     if let Some(ai_polish_style) = updates.ai_polish_style {
-        let mut app_settings = load_app_settings();
         app_settings.ai_polish_style = ai_polish_style;
-        save_app_settings(&app_settings)?;
+        app_settings_changed = true;
     }
 
-    let mut underline_changed = false;
     if let Some(style) = updates.underline_style {
-        let mut app_settings = load_app_settings();
         app_settings.underline_style = style;
-        save_app_settings(&app_settings)?;
+        app_settings_changed = true;
         underline_changed = true;
     }
+
     if let Some(color) = updates.underline_color {
-        let mut app_settings = load_app_settings();
         app_settings.underline_color = color;
-        save_app_settings(&app_settings)?;
+        app_settings_changed = true;
         underline_changed = true;
     }
+
+    if app_settings_changed {
+        save_app_settings(&app, &app_settings)?;
+    }
+
     if underline_changed {
-        let settings = load_app_settings();
         let _ = app.emit(
             "underline-config-update",
             serde_json::json!({
-                "underlineStyle": settings.underline_style,
-                "underlineColor": settings.underline_color,
+                "underlineStyle": app_settings.underline_style,
+                "underlineColor": app_settings.underline_color,
             }),
         );
     }
@@ -459,8 +457,11 @@ fn get_user_config_path() -> PathBuf {
     PathBuf::from(home_dir).join(".autocorrectrc")
 }
 
-/// Get the path to the app settings file
-fn get_app_settings_path() -> PathBuf {
+const APP_SETTINGS_STORE_FILE: &str = "app-settings.json";
+const APP_SETTINGS_STORE_KEY: &str = "appSettings";
+
+/// Get the path to the legacy app settings file.
+fn get_legacy_app_settings_path() -> PathBuf {
     let home_dir = env::var("HOME")
         .or_else(|_| env::var("USERPROFILE"))
         .unwrap_or_else(|_| ".".to_string());
@@ -468,32 +469,70 @@ fn get_app_settings_path() -> PathBuf {
     PathBuf::from(home_dir).join(".autocorrect-app.json")
 }
 
-/// Load app-specific settings
-fn load_app_settings() -> AppSettings {
-    let settings_path = get_app_settings_path();
-    if settings_path.exists() {
-        if let Ok(content) = fs::read_to_string(&settings_path) {
-            if let Ok(settings) = serde_json::from_str(&content) {
-                return settings;
-            }
-        }
+fn read_legacy_app_settings() -> Option<AppSettings> {
+    let settings_path = get_legacy_app_settings_path();
+    if !settings_path.exists() {
+        return None;
     }
-    AppSettings::default()
+
+    let content = fs::read_to_string(&settings_path).ok()?;
+    serde_json::from_str(&content).ok()
+}
+
+pub fn ensure_app_settings_initialized(app: &tauri::AppHandle) -> Result<(), Error> {
+    let store = app
+        .store(APP_SETTINGS_STORE_FILE)
+        .map_err(|e| Error::Config(format!("Failed to access settings store: {}", e)))?;
+
+    if store.get(APP_SETTINGS_STORE_KEY).is_some() {
+        return Ok(());
+    }
+
+    let settings = read_legacy_app_settings().unwrap_or_default();
+    let value = serde_json::to_value(&settings)
+        .map_err(|e| Error::Config(format!("Failed to serialize settings: {}", e)))?;
+    store.set(APP_SETTINGS_STORE_KEY, value);
+    store
+        .save()
+        .map_err(|e| Error::Config(format!("Failed to persist settings store: {}", e)))?;
+
+    Ok(())
+}
+
+/// Load app-specific settings from store.
+pub fn load_app_settings(app: &tauri::AppHandle) -> Result<AppSettings, Error> {
+    ensure_app_settings_initialized(app)?;
+
+    let store = app
+        .store(APP_SETTINGS_STORE_FILE)
+        .map_err(|e| Error::Config(format!("Failed to access settings store: {}", e)))?;
+
+    if let Some(value) = store.get(APP_SETTINGS_STORE_KEY) {
+        serde_json::from_value(value)
+            .map_err(|e| Error::Config(format!("Failed to parse settings from store: {}", e)))
+    } else {
+        Ok(AppSettings::default())
+    }
 }
 
 /// Return (underline_style, underline_color) from persisted app settings.
 /// Used by the overlay renderer without going through the full Tauri command layer.
-pub fn get_underline_config() -> (String, String) {
-    let s = load_app_settings();
+pub fn get_underline_config(app: &tauri::AppHandle) -> (String, String) {
+    let s = load_app_settings(app).unwrap_or_default();
     (s.underline_style, s.underline_color)
 }
 
-/// Save app-specific settings
-fn save_app_settings(settings: &AppSettings) -> Result<(), Error> {
-    let settings_path = get_app_settings_path();
-    let json = serde_json::to_string_pretty(settings)
+/// Save app-specific settings into store.
+pub fn save_app_settings(app: &tauri::AppHandle, settings: &AppSettings) -> Result<(), Error> {
+    let store = app
+        .store(APP_SETTINGS_STORE_FILE)
+        .map_err(|e| Error::Config(format!("Failed to access settings store: {}", e)))?;
+    let value = serde_json::to_value(settings)
         .map_err(|e| Error::Config(format!("Failed to serialize settings: {}", e)))?;
-    fs::write(&settings_path, json)?;
+    store.set(APP_SETTINGS_STORE_KEY, value);
+    store
+        .save()
+        .map_err(|e| Error::Config(format!("Failed to persist settings store: {}", e)))?;
     Ok(())
 }
 

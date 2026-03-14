@@ -519,7 +519,7 @@ pub fn trigger_spell_check_workflow(app: AppHandle, x: i32, y: i32) -> Result<()
     }
 
     // Run spell check
-    let result = spell_check_sync(text.clone(), Some(true))?;
+    let result = spell_check_sync(app.clone(), text.clone(), Some(true))?;
 
     // If there are changes or typos, show popup
     if (result.has_changes || !result.typos.is_empty()) && !result.corrected.is_empty() {
