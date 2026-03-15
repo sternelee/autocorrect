@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+
 use crate::commands::errors::Error;
 use std::sync::{Arc, Mutex};
 use std::thread;

@@ -38,6 +38,9 @@ typos-cli = "1.37.1"
 toml = "0.8"
 tauri-plugin-store = "2"
 
+[lints.rust]
+unexpected_cfgs = "allow"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
 core-foundation-sys = "0.8"

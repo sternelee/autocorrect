@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+
 use cocoa::base::{id, nil};
 use cocoa::appkit::NSScreen;
 use cocoa::foundation::NSRect;

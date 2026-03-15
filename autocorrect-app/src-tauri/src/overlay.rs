@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+
 use serde::Serialize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

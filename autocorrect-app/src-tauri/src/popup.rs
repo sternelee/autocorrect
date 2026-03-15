@@ -1,3 +1,5 @@
+#![allow(unexpected_cfgs)]
+
 use crate::commands::errors::Error;
 use crate::commands::spellcheck::{SpellCheckResult, TypoSuggestion};
 use std::sync::{Arc, Mutex};
