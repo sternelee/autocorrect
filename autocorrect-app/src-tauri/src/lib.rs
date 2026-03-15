@@ -761,9 +761,10 @@ fn sync_system_typos(app: &tauri::AppHandle) {
         match macos_text::get_selected_text() {
             Ok(sel) if sel.chars().count() >= MIN_SELECTION_CHARS => {
                 let (cx, cy) = get_cursor_position();
-                // Position icon closer to cursor: 24px to the right, 24px above
-                let icon_x = cx + 24;
-                let icon_y = cy.saturating_sub(24);
+                let icon_x = cx + 16;
+                // cy is in Quartz top-left coords (y increases downward);
+                // subtract 56 to place the icon 56 px above the cursor.
+                let icon_y = cy.saturating_sub(56);
                 log::info!(
                     "[AI] selection={} chars, cursor=({},{}), icon=({},{})",
                     sel.chars().count(),

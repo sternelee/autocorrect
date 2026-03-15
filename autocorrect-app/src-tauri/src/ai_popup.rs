@@ -256,10 +256,10 @@ pub fn show_ai_popup_from_hover(app: &AppHandle) {
         (s.selected_text.clone(), s.icon_position)
     };
 
-    // Place popup above the cursor position.
-    // Center horizontally on cursor; keep at least 30px from screen top.
-    let popup_x = icon_pos.0 - 190 + 16; // Center on cursor (380/2 - 24 + 16 offset)
-    let popup_y = (icon_pos.1 - 520).max(30); // Above icon (500px height + 20px gap)
+    // Place popup above the icon (popup height=500, gap=10).
+    // Center horizontally on the icon; keep at least 30px from screen top.
+    let popup_x = icon_pos.0 - 172; // (380/2) - (icon_size/2) ≈ 172
+    let popup_y = (icon_pos.1 - 510).max(30);
     let _ = show_ai_popup_at(app, popup_x, popup_y, selected_text);
 }
 
