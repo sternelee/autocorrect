@@ -86,7 +86,7 @@
     };
   });
 
-  async function acceptr(text?: string) {
+  async function accept(text?: string) {
     const textToUse = text ?? suggestion;
     if (!textToUse.trim()) return;
     try {
@@ -100,7 +100,7 @@
     }
   }
 
-  async function rejectr() {
+  async function reject() {
     try {
       await invoke("reject_suggestion");
     } catch (error) {
@@ -133,10 +133,10 @@
   function onKeydown(e: KeyboardEvent) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      acceptr();
+      accept();
     } else if (e.key === "Escape") {
       e.preventDefault();
-      rejectr();
+      reject();
     }
   }
 </script>
@@ -187,7 +187,7 @@
   {#if chips.length > 0}
     <div class="chips">
       {#each chips as chip}
-        <button class="chip" onclick={() => acceptr(chip)}>{chip}</button>
+        <button class="chip" onclick={() => accept(chip)}>{chip}</button>
       {/each}
       {#if customPair}
         <TooltipProvider>
