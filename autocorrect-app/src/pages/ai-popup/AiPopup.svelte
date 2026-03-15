@@ -1,9 +1,17 @@
 <script lang="ts">
-  import { invoke } from '@tauri-apps/api/core';
-  import { listen } from '@tauri-apps/api/event';
-  import { onMount } from 'svelte';
+  import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
+  import { onMount } from "svelte";
+  import { locale, t } from "$lib/i18n";
+  $locale;
 
-  type Tool = 'translate' | 'polish' | 'improve' | 'summarize';
+  // Reactive translation helper
+  const tr = $derived((key: string, params?: Record<string, string | number>) => {
+    const _ = $locale;
+    return t(key, params);
+  });
+
+  type Tool = "translate" | "polish" | "improve" | "summarize";
 
   // Mirror the AppConfig shape used by SpellChecker / SettingsPanel.
   interface AppConfig {
@@ -12,51 +20,60 @@
     aiPolishStyle?: string;
   }
 
-  let selectedText = $state('');
-  let result = $state('');
+  let selectedText = $state("");
+  let result = $state("");
   let loading = $state(false);
-  let error = $state('');
+  let error = $state("");
   let activeTool = $state<Tool | null>(null);
-  let translateLang = $state('English');
+  let translateLang = $state("English");
 
-  const tools: { id: Tool; label: string; icon: string }[] = [
-    { id: 'translate', label: 'Translate', icon: '🌐' },
-    { id: 'polish', label: 'Polish', icon: '✨' },
-    { id: 'improve', label: 'Improve', icon: '📝' },
-    { id: 'summarize', label: 'Summarize', icon: '📋' },
+  const tools: { id: Tool; label: () => string; icon: string }[] = [
+    { id: "translate", label: () => tr("aipopup.translate"), icon: "🌐" },
+    { id: "polish", label: () => tr("aipopup.polish"), icon: "✨" },
+    { id: "improve", label: () => tr("aipopup.improve"), icon: "📝" },
+    { id: "summarize", label: () => tr("aipopup.summarize"), icon: "📋" },
   ];
 
-  const languages = ['English', 'Chinese', 'Japanese', 'Spanish', 'French', 'German', 'Korean'];
+  const languages = [
+    "English",
+    "Chinese",
+    "Japanese",
+    "Spanish",
+    "French",
+    "German",
+    "Korean",
+  ];
 
   async function runTool(tool: Tool) {
     if (!selectedText.trim()) return;
 
     activeTool = tool;
     loading = true;
-    error = '';
-    result = '';
+    error = "";
+    result = "";
 
     try {
       // Load config fresh each time — same pattern as SpellChecker.svelte.
-      const config = await invoke<AppConfig>('get_config');
+      const config = await invoke<AppConfig>("get_config");
       if (!config.aiGrammarEnabled) {
-        throw new Error('Please enable AI Grammar Check in Settings first.');
+        throw new Error(tr("aipopup.aiEnableHint"));
       }
 
       const polishStyleMap: Record<string, string> = {
-        improve: 'clear, natural, and engaging',
-        summarize: 'summarize concisely in the same language as the input',
+        improve: "clear, natural, and engaging",
+        summarize: "summarize concisely in the same language as the input",
       };
 
-      const res = await invoke<{ outputText?: string }>('ai_text_transform', {
+      const res = await invoke<{ outputText?: string }>("ai_text_transform", {
         request: {
           text: selectedText,
-          operation: tool === 'improve' || tool === 'summarize' ? 'polish' : tool,
-          targetLanguage: tool === 'translate' ? translateLang : null,
+          operation:
+            tool === "improve" || tool === "summarize" ? "polish" : tool,
+          targetLanguage: tool === "translate" ? translateLang : null,
           polishStyle: polishStyleMap[tool] ?? config.aiPolishStyle ?? null,
         },
       });
-      result = res.outputText ?? '';
+      result = res.outputText ?? "";
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -64,49 +81,58 @@
     }
   }
 
-  async function acceptResult() {
+  async function acceptResultr() {
     if (!result.trim()) return;
-    await invoke('accept_ai_result', { text: result });
+    await invoke("accept_ai_result", { text: result });
   }
 
   async function close() {
-    await invoke('hide_ai_popup');
+    await invoke("hide_ai_popup");
   }
 
   onMount(() => {
-    const unlistenPromise = listen<{ selectedText: string }>('ai-popup-show', (e) => {
-      selectedText = e.payload.selectedText;
-      result = '';
-      error = '';
-      activeTool = null;
-      loading = false;
-    });
+    const unlistenPromise = listen<{ selectedText: string }>(
+      "ai-popup-show",
+      (e) => {
+        selectedText = e.payload.selectedText;
+        result = "";
+        error = "";
+        activeTool = null;
+        loading = false;
+      },
+    );
 
-    invoke<{ selectedText: string }>('get_ai_popup_state')
-      .then((state) => { if (state.selectedText) selectedText = state.selectedText; })
+    invoke<{ selectedText: string }>("get_ai_popup_state")
+      .then((state) => {
+        if (state.selectedText) selectedText = state.selectedText;
+      })
       .catch(() => {});
 
-    return () => { unlistenPromise.then((fn) => fn()); };
+    return () => {
+      unlistenPromise.then((fn) => fn());
+    };
   });
 
   const preview = $derived(
-    selectedText.length > 120 ? selectedText.slice(0, 120) + '…' : selectedText
+    selectedText.length > 120 ? selectedText.slice(0, 120) + "…" : selectedText,
   );
 </script>
 
-<div class="popup">
+<div class="popup" data-locale={$locale}>
   <!-- Header -->
   <div class="header">
     <div class="header-left">
-      <span class="ai-badge">✦ AI Tools</span>
+      <span class="ai-badge">{tr("aipopup.tools")}</span>
     </div>
-    <button class="close-btn" onclick={close} aria-label="Close">✕</button>
+    <button class="close-btn" onclick={close} aria-label={tr("aipopup.close")}
+      >✕</button
+    >
   </div>
 
   <!-- Selected text preview -->
   {#if selectedText}
     <div class="preview">
-      <span class="preview-label">Selected</span>
+      <span class="preview-label">{tr("aipopup.selected")}</span>
       <p class="preview-text">{preview}</p>
     </div>
   {/if}
@@ -121,20 +147,23 @@
         disabled={loading}
       >
         <span>{tool.icon}</span>
-        <span>{tool.label}</span>
+        <span>{tool.label()}</span>
       </button>
     {/each}
   </div>
 
   <!-- Language selector (only for translate) -->
-  {#if activeTool === 'translate' || (!activeTool && false)}
+  {#if activeTool === "translate" || (!activeTool && false)}
     <div class="lang-row">
-      <span class="lang-label">Into:</span>
+      <span class="lang-label">{tr("aipopup.into")}</span>
       {#each languages as lang}
         <button
           class="lang-btn"
           class:selected={translateLang === lang}
-          onclick={() => { translateLang = lang; runTool('translate'); }}
+          onclick={() => {
+            translateLang = lang;
+            runTool("translate");
+          }}
         >
           {lang}
         </button>
@@ -146,7 +175,7 @@
   {#if loading}
     <div class="loading">
       <div class="spinner"></div>
-      <span>Generating…</span>
+      <span>{tr("aipopup.generating")}</span>
     </div>
   {/if}
 
@@ -166,10 +195,16 @@
       ></textarea>
       <div class="result-actions">
         <button class="accept-btn" onclick={acceptResult}>
-          ✓ Accept
+          {tr("aipopup.accept")}
         </button>
-        <button class="discard-btn" onclick={() => { result = ''; activeTool = null; }}>
-          Discard
+        <button
+          class="discard-btn"
+          onclick={() => {
+            result = "";
+            activeTool = null;
+          }}
+        >
+          {tr("aipopup.discard")}
         </button>
       </div>
     </div>
@@ -181,7 +216,7 @@
     margin: 0;
     padding: 0;
     background: transparent;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     font-size: 13px;
   }
 
@@ -264,7 +299,7 @@
 
   .tools {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeatr(4, 1fr);
     gap: 6px;
     padding: 10px 14px;
   }
@@ -283,7 +318,7 @@
     font-size: 11px;
     transition: all 0.12s ease;
   }
-  .tool-btn:hover:not(:disabled) {
+  .tool-btn:hover:notr(:disabled) {
     background: rgba(167, 139, 250, 0.15);
     border-color: rgba(167, 139, 250, 0.3);
     color: #c4b5fd;
@@ -341,7 +376,9 @@
     animation: spin 0.6s linear infinite;
   }
   @keyframes spin {
-    to { transform: rotate(360deg); }
+    to {
+      transform: rotate(360deg);
+    }
   }
 
   .error {

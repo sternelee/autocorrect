@@ -1,5 +1,8 @@
-import "../../app.css";
-import { mount } from "svelte";
-import AiPopup from "./AiPopup.svelte";
+import '../../app.css';
+import { mount } from 'svelte';
+import AiPopup from './AiPopup.svelte';
+import { initI18n } from '$lib/i18n/setup';
 
-mount(AiPopup, { target: document.getElementById("app")! });
+initI18n();
+
+mount(AiPopup, { target: document.getElementById('app')! });

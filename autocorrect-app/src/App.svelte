@@ -1,4 +1,5 @@
 <script lang="ts">
+	$locale;
 	import SpellChecker from '$lib/components/SpellChecker.svelte';
 	import SettingsPanel from '$lib/components/SettingsPanel.svelte';
 	import StatusIndicator from '$lib/components/StatusIndicator.svelte';
@@ -6,11 +7,19 @@
 	import { Settings, Home, Info } from 'lucide-svelte';
 	import { listen } from '@tauri-apps/api/event';
 	import { onMount } from 'svelte';
+	import { locale, t } from '$lib/i18n';
+	$locale;
+
+	// Reactive translation helper
+	const tr = $derived((key: string, params?: Record<string, string | number>) => {
+		const _ = $locale;
+		return t(key, params);
+	});
 
 	// App state
-	let currentTab: 'spellchecker' | 'settings' | 'about' = 'spellchecker';
-	let isEnabled = true;
-	let correctionCount = 0;
+	let currentTab: 'spellchecker' | 'settings' | 'about' = $state('spellchecker');
+	let isEnabled = $state(true);
+	let correctionCount = $state(0);
 
 	function handleToggleEnabled(enabled: boolean) {
 		isEnabled = enabled;
@@ -25,7 +34,7 @@
 
 		// Listen for no-changes-needed notification
 		const unlistenNoChanges = listen('no-changes-needed', () => {
-			console.log('No spelling changes needed');
+			console.log(tr('spell.noSuggestions'));
 			// Could show a small toast notification here
 		});
 
@@ -37,7 +46,7 @@
 	});
 </script>
 
-<div class="flex h-screen flex-col bg-background">
+<div class="flex h-screen flex-col bg-background" data-locale={$locale}>
 	<!-- Top Status Bar -->
 	<header class="border-b bg-card/50 backdrop-blur-sm">
 		<div class="flex items-center justify-between px-4 py-2">
@@ -55,7 +64,7 @@
 					size="sm"
 				>
 					<Home class="mr-1 h-4 w-4" />
-					Spell Check
+					{tr('app.tab.spellchecker')}
 				</Button>
 				<Button
 					onclick={() => (currentTab = 'settings')}
@@ -63,7 +72,7 @@
 					size="sm"
 				>
 					<Settings class="mr-1 h-4 w-4" />
-					Settings
+					{tr('app.tab.settings')}
 				</Button>
 				<Button
 					onclick={() => (currentTab = 'about')}
@@ -71,7 +80,7 @@
 					size="sm"
 				>
 					<Info class="mr-1 h-4 w-4" />
-					About
+					{tr('app.tab.about')}
 				</Button>
 			</nav>
 
@@ -96,23 +105,19 @@
 					<div class="mx-auto flex h-16 w-16 items-center justify-center rounded-2xl bg-primary">
 						<span class="text-3xl font-bold text-primary-foreground">A</span>
 					</div>
-					<h2 class="text-2xl font-bold">AutoCorrect</h2>
-					<p class="text-muted-foreground">
-						Automatic text correction and spell checking powered by AutoCorrect.
-					</p>
+					<h2 class="text-2xl font-bold">{tr('app.about.title')}</h2>
+					<p class="text-muted-foreground">{tr('app.about.desc')}</p>
 					<div class="space-y-2 rounded-lg border bg-card p-4 text-left">
-						<h3 class="text-sm font-semibold">Features</h3>
+						<h3 class="text-sm font-semibold">{tr('app.about.features')}</h3>
 						<ul class="space-y-1 text-sm text-muted-foreground">
-							<li>- Real-time spell checking</li>
-							<li>- Automatic text formatting</li>
-							<li>- Custom dictionary support</li>
-							<li>- Configurable rules</li>
-							<li>- Global hotkey support</li>
+							<li>{tr('app.about.f1')}</li>
+							<li>{tr('app.about.f2')}</li>
+							<li>{tr('app.about.f3')}</li>
+							<li>{tr('app.about.f4')}</li>
+							<li>{tr('app.about.f5')}</li>
 						</ul>
 					</div>
-					<div class="text-xs text-muted-foreground">
-						Version 0.1.0 &bull; Built with Tauri + Svelte
-					</div>
+					<div class="text-xs text-muted-foreground">{tr('app.about.version')}</div>
 				</div>
 			</div>
 		{/if}

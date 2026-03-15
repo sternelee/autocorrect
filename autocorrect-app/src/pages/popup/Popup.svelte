@@ -1,14 +1,22 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { invoke } from '@tauri-apps/api/core';
-  import { listen } from '@tauri-apps/api/event';
-  import { getCurrentWindow } from '@tauri-apps/api/window';
+  import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import {
     Tooltip,
     TooltipTrigger,
     TooltipContent,
     TooltipProvider,
-  } from '$lib/components/ui/tooltip';
+  } from "$lib/components/ui/tooltip";
+  import { locale, t } from "$lib/i18n";
+  $locale;
+
+  // Reactive translation helper
+  const tr = $derived((key: string, params?: Record<string, string | number>) => {
+    const _ = $locale;
+    return t(key, params);
+  });
 
   interface TypoSuggestion {
     typo: string;
@@ -27,8 +35,8 @@
     charLength?: number;
   }
 
-  let originalText = $state('');
-  let suggestion = $state('');
+  let originalText = $state("");
+  let suggestion = $state("");
   let typos = $state<TypoSuggestion[]>([]);
   let offset = $state<number | null>(null);
   let charLength = $state<number | null>(null);
@@ -41,10 +49,12 @@
       ? typos[0].suggestions.slice(0, 4)
       : suggestion && suggestion !== originalText
         ? [suggestion]
-        : []
+        : [],
   );
 
-  const title = $derived(typos.length > 0 ? 'Correct spelling' : 'AutoCorrect');
+  const title = $derived(
+    typos.length > 0 ? tr("popup.correct") : tr("popup.title"),
+  );
 
   // The word/phrase pair to save as a custom correction:
   // typo popup → typos[0].typo → first chip; general → originalText → suggestion.
@@ -53,11 +63,11 @@
       ? { from: typos[0].typo, to: typos[0].suggestions[0] }
       : originalText && suggestion && originalText !== suggestion
         ? { from: originalText, to: suggestion }
-        : null
+        : null,
   );
 
   onMount(() => {
-    const unlistenShow = listen<PopupData>('popup-show', (event) => {
+    const unlistenShow = listen<PopupData>("popup-show", (event) => {
       const data = event.payload;
       originalText = data.originalText;
       suggestion = data.suggestion;
@@ -66,7 +76,7 @@
       charLength = data.charLength ?? null;
     });
 
-    const unlistenHide = listen('popup-hide', () => {
+    const unlistenHide = listen("popup-hide", () => {
       hidePopup();
     });
 
@@ -76,29 +86,33 @@
     };
   });
 
-  async function accept(text?: string) {
+  async function acceptr(text?: string) {
     const textToUse = text ?? suggestion;
     if (!textToUse.trim()) return;
     try {
-      await invoke('accept_suggestion', { text: textToUse, offset, charLength });
+      await invoke("accept_suggestion", {
+        text: textToUse,
+        offset,
+        charLength,
+      });
     } catch (error) {
-      console.error('Failed to accept suggestion:', error);
+      console.error("Failed to accept suggestion:", error);
     }
   }
 
-  async function reject() {
+  async function rejectr() {
     try {
-      await invoke('reject_suggestion');
+      await invoke("reject_suggestion");
     } catch (error) {
-      console.error('Failed to reject suggestion:', error);
+      console.error("Failed to reject suggestion:", error);
       hidePopup();
     }
   }
 
   function hidePopup() {
     getCurrentWindow().hide();
-    originalText = '';
-    suggestion = '';
+    originalText = "";
+    suggestion = "";
     typos = [];
     addedToCustom = false;
   }
@@ -106,43 +120,65 @@
   async function addToCustom() {
     if (!customPair) return;
     try {
-      await invoke('add_custom_correction', {
+      await invoke("add_custom_correction", {
         typo: customPair.from,
         correction: customPair.to,
       });
       addedToCustom = true;
     } catch (error) {
-      console.error('Failed to add custom correction:', error);
+      console.error("Failed to add custom correction:", error);
     }
   }
 
   function onKeydown(e: KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      accept();
-    } else if (e.key === 'Escape') {
+      acceptr();
+    } else if (e.key === "Escape") {
       e.preventDefault();
-      reject();
+      rejectr();
     }
   }
 </script>
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="popup">
+<div class="popup" data-locale={$locale}>
   <div class="header">
     <span class="header-icon">
       <!-- pencil icon -->
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
-        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+      <svg
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2.2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
       </svg>
     </span>
     <span class="title">{title}</span>
     <div class="header-actions">
-      <button class="icon-btn close" title="Close (Esc)" onclick={reject}>
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
-          <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+      <button class="icon-btn close" title={tr("popup.close")} onclick={reject}>
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+          stroke-linecap="round"
+        >
+          <line x1="18" y1="6" x2="6" y2="18" /><line
+            x1="6"
+            y1="6"
+            x2="18"
+            y2="18"
+          />
         </svg>
       </button>
     </div>
@@ -151,7 +187,7 @@
   {#if chips.length > 0}
     <div class="chips">
       {#each chips as chip}
-        <button class="chip" onclick={() => accept(chip)}>{chip}</button>
+        <button class="chip" onclick={() => acceptr(chip)}>{chip}</button>
       {/each}
       {#if customPair}
         <TooltipProvider>
@@ -164,20 +200,40 @@
                 onclick={addToCustom}
               >
                 {#if addedToCustom}
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-                    <polyline points="20 6 9 17 4 12"/>
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <polyline points="20 6 9 17 4 12" />
                   </svg>
                 {:else}
-                  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"/>
-                    <line x1="12" y1="8" x2="12" y2="14"/>
-                    <line x1="9" y1="11" x2="15" y2="11"/>
+                  <svg
+                    width="13"
+                    height="13"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                  >
+                    <path
+                      d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"
+                    />
+                    <line x1="12" y1="8" x2="12" y2="14" />
+                    <line x1="9" y1="11" x2="15" y2="11" />
                   </svg>
                 {/if}
               </button>
             </TooltipTrigger>
             <TooltipContent side="top">
-              {addedToCustom ? 'Saved' : 'Save to dictionary'}
+              {addedToCustom ? tr("popup.saved") : tr("popup.saveDict")}
             </TooltipContent>
           </Tooltip>
         </TooltipProvider>
@@ -188,7 +244,8 @@
 
 <style>
   :global(body) {
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-family:
+      -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: transparent;
     overflow: hidden;
     -webkit-app-region: drag;
@@ -259,7 +316,9 @@
     align-items: center;
     justify-content: center;
     color: #6b7280;
-    transition: background 0.12s, color 0.12s;
+    transition:
+      background 0.12s,
+      color 0.12s;
     padding: 0;
     -webkit-app-region: no-drag;
   }
@@ -305,7 +364,7 @@
     align-self: center;
   }
 
-  .add-custom:hover:not(:disabled) {
+  .add-custom:hover:notr(:disabled) {
     background: #f3f4f6;
     color: #6b7280;
   }

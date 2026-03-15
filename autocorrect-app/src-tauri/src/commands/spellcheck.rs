@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 use std::env;
 use std::fs;
 
-
 #[derive(Clone, Serialize)]
 pub struct SpellCheckResult {
     pub original: String,

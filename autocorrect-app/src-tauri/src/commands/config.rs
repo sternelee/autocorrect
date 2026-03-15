@@ -35,6 +35,8 @@ pub struct AppSettings {
     pub underline_style: String,
     #[serde(default = "default_underline_color")]
     pub underline_color: String,
+    #[serde(default = "default_ui_language")]
+    pub ui_language: String,
 }
 
 impl Default for AppSettings {
@@ -51,6 +53,7 @@ impl Default for AppSettings {
             ai_polish_style: default_ai_polish_style(),
             underline_style: default_underline_style(),
             underline_color: default_underline_color(),
+            ui_language: default_ui_language(),
         }
     }
 }
@@ -89,6 +92,10 @@ fn default_underline_style() -> String {
 
 fn default_underline_color() -> String {
     DEFAULT_UNDERLINE_COLOR.to_string()
+}
+
+fn default_ui_language() -> String {
+    "en".to_string()
 }
 
 /// Convert u8 to SeverityMode
@@ -139,6 +146,8 @@ pub struct AppConfig {
     pub underline_style: String,
     /// Underline color hex (e.g. "#ff3b30")
     pub underline_color: String,
+    /// UI language code (e.g. "en", "zh-CN")
+    pub ui_language: String,
 }
 
 /// Information about a single rule
@@ -187,6 +196,8 @@ pub struct ConfigUpdates {
     pub underline_style: Option<String>,
     /// Underline color hex
     pub underline_color: Option<String>,
+    /// UI language code
+    pub ui_language: Option<String>,
 }
 
 /// Get the current merged configuration (default + user config)
@@ -253,6 +264,7 @@ pub fn get_config(app: tauri::AppHandle) -> Result<AppConfig, Error> {
         ai_polish_style: app_settings.ai_polish_style,
         underline_style: app_settings.underline_style,
         underline_color: app_settings.underline_color,
+        ui_language: app_settings.ui_language,
     })
 }
 
@@ -419,6 +431,15 @@ pub fn update_config(app: tauri::AppHandle, updates: ConfigUpdates) -> Result<()
         underline_changed = true;
     }
 
+    let mut ui_language_changed = false;
+    if let Some(ui_language) = updates.ui_language {
+        if app_settings.ui_language != ui_language {
+            app_settings.ui_language = ui_language;
+            app_settings_changed = true;
+            ui_language_changed = true;
+        }
+    }
+
     if app_settings_changed {
         save_app_settings(&app, &app_settings)?;
     }
@@ -429,6 +450,15 @@ pub fn update_config(app: tauri::AppHandle, updates: ConfigUpdates) -> Result<()
             serde_json::json!({
                 "underlineStyle": app_settings.underline_style,
                 "underlineColor": app_settings.underline_color,
+            }),
+        );
+    }
+
+    if ui_language_changed {
+        let _ = app.emit(
+            "ui-language-update",
+            serde_json::json!({
+                "uiLanguage": app_settings.ui_language,
             }),
         );
     }
