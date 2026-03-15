@@ -783,14 +783,13 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                 log::debug!("[AI] get_selected_text err: {:?}", e);
             }
         }
-        if !icon_triggered {
-            let popup_open = app
-                .try_state::<SharedAiPopupState>()
-                .and_then(|s| s.0.lock().ok().map(|g| g.popup_visible))
-                .unwrap_or(false);
-            if !popup_open {
-                ai_popup::hide_ai_icon(app);
-            }
+        // Hide icon when clicking outside or when popup is shown
+        let popup_open = app
+            .try_state::<SharedAiPopupState>()
+            .and_then(|s| s.0.lock().ok().map(|g| g.popup_visible))
+            .unwrap_or(false);
+        if !icon_triggered || popup_open {
+            ai_popup::hide_ai_icon(app);
         }
     }
 }

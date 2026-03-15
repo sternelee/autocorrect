@@ -170,31 +170,33 @@ unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
         let _: () = msg_send![window, setLevel: 2002_i64];
         let _: () = msg_send![window, setAcceptsMouseMovedEvents: YES];
 
-        // Circular background view.
+        // Clear background view - no background, just emoji
         let content_frame =
             NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(ICON_SIZE, ICON_SIZE));
         let bg_view: id = NSView::alloc(nil).initWithFrame_(content_frame);
         let _: () = msg_send![bg_view, setWantsLayer: YES];
         let bg_layer: id = msg_send![bg_view, layer];
-        // Soft amber/yellow tint — matches the lightbulb.
-        let bg_color: id = msg_send![class!(NSColor),
-            colorWithCalibratedRed: 0.98_f64 green: 0.85_f64 blue: 0.3_f64 alpha: 0.92_f64];
-        let cg_bg: id = msg_send![bg_color, CGColor];
-        let _: () = msg_send![bg_layer, setBackgroundColor: cg_bg];
-        let _: () = msg_send![bg_layer, setCornerRadius: (ICON_SIZE / 2.0)];
+        // Transparent background
+        let clear_color: id = msg_send![class!(NSColor), clearColor];
+        let cg_clear: id = msg_send![clear_color, CGColor];
+        let _: () = msg_send![bg_layer, setBackgroundColor: cg_clear];
 
-        // 💡 label.
+        // 💡 label - centered vertically
         let label: id = msg_send![class!(NSTextField), alloc];
-        let label: id = msg_send![label, initWithFrame: content_frame];
+        let label_frame = NSRect::new(
+            NSPoint::new(0.0, (ICON_SIZE - 20.0) / 2.0),
+            NSSize::new(ICON_SIZE, 20.0),
+        );
+        let label: id = msg_send![label, initWithFrame: label_frame];
         let emoji = NSString::alloc(nil).init_str("💡");
         let _: () = msg_send![label, setStringValue: emoji];
         let _: () = msg_send![label, setBezeled: NO];
         let _: () = msg_send![label, setDrawsBackground: NO];
         let _: () = msg_send![label, setEditable: NO];
         let _: () = msg_send![label, setSelectable: NO];
-        // Center the emoji.
+        // Center the emoji horizontally and vertically
         let _: () = msg_send![label, setAlignment: 1_i64]; // NSTextAlignmentCenter
-        // Font size.
+        // Font size
         let font: id = msg_send![class!(NSFont), systemFontOfSize: 20.0_f64];
         let _: () = msg_send![label, setFont: font];
 
@@ -267,6 +269,9 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
         None => return Ok(()),
     };
 
+    // Hide the floating icon when popup shows
+    hide_ai_icon(app);
+
     if let Some(state) = app.try_state::<SharedAiPopupState>() {
         if let Ok(mut s) = state.0.lock() {
             s.popup_visible = true;
@@ -282,6 +287,7 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
             y: y as f64,
         }));
         let _ = win.show();
+        let _ = win.set_focus();
 
         #[cfg(target_os = "macos")]
         if let Ok(ptr) = win.ns_window() {
@@ -304,6 +310,8 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
                 let _: () = msg_send![ns, setHidesOnDeactivate: NO];
                 let _: () = msg_send![ns, setAcceptsMouseMovedEvents: YES];
                 let _: () = msg_send![ns, orderFrontRegardless];
+                // Make the popup the key window to receive keyboard events
+                let _: () = msg_send![ns, makeKeyWindow];
             }
         }
     });
