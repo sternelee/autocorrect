@@ -256,10 +256,9 @@ pub fn show_ai_popup_from_hover(app: &AppHandle) {
         (s.selected_text.clone(), s.icon_position)
     };
 
-    // Place popup above the icon (popup height=500, gap=10).
-    // Center horizontally on the icon; keep at least 30px from screen top.
-    let popup_x = icon_pos.0 - 172; // (380/2) - (icon_size/2) ≈ 172
-    let popup_y = (icon_pos.1 - 510).max(30);
+    // Place popup to the right of the icon, similar to popup positioning
+    let popup_x = icon_pos.0 + 46;  // icon size 36 + 10px gap
+    let popup_y = icon_pos.1 - 100;  // vertically centered on icon
     let _ = show_ai_popup_at(app, popup_x, popup_y, selected_text);
 }
 
@@ -291,7 +290,7 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
         #[cfg(target_os = "macos")]
         if let Ok(ptr) = win.ns_window() {
             use cocoa::base::{id, NO, YES};
-            use objc::{msg_send, sel, sel_impl};
+        use objc::{msg_send, sel, sel_impl};
 
             unsafe {
                 let ns = ptr as id;
@@ -305,8 +304,9 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
                 let cur_mask: usize = msg_send![ns, styleMask];
                 let _: () = msg_send![ns, setStyleMask: cur_mask | 128_usize];
                 let _: () = msg_send![ns, setFloatingPanel: YES];
-                let _: () = msg_send![ns, setBecomesKeyOnlyIfNeeded: YES];
-                let _: () = msg_send![ns, setLevel: 2002_i64];
+                // 移除 setBecomesKeyOnlyIfNeeded，确保窗口能正确获得焦点
+                // let _: () = msg_send![ns, setBecomesKeyOnlyIfNeeded: YES];
+                let _: () = msg_send![ns, setLevel: 2001_i64];  // 改为 2001
                 let _: () = msg_send![ns, setHidesOnDeactivate: NO];
                 let _: () = msg_send![ns, setAcceptsMouseMovedEvents: YES];
 

@@ -760,16 +760,24 @@ fn sync_system_typos(app: &tauri::AppHandle) {
         let mut icon_triggered = false;
         match macos_text::get_selected_text() {
             Ok(sel) if sel.chars().count() >= MIN_SELECTION_CHARS => {
-                let (cx, cy) = get_cursor_position();
-                let icon_x = cx + 16;
-                // cy is in Quartz top-left coords (y increases downward);
-                // subtract 56 to place the icon 56 px above the cursor.
-                let icon_y = cy.saturating_sub(56);
+                // 使用选区 bounds 定位图标到选中文本右上角
+                let (icon_x, icon_y) = match macos_text::get_selected_text_bounds() {
+                    Ok((sx, sy, sw, sh)) => {
+                        log::info!("[AI] selection bounds: x={} y={} w={} h={}", sx, sy, sw, sh);
+                        // 右上角位置: x = 左上角 x + 宽度, y = 左上角 y
+                        (sx + sw + 8, sy - 18)
+                    }
+                    Err(e) => {
+                        log::warn!("[AI] get_selected_text_bounds error: {:?}", e);
+                        // 回退方案：获取鼠标位置
+                        let (cx, cy) = get_cursor_position();
+                        // 图标显示在鼠标位置上方偏右处
+                        (cx + 20, cy - 18)
+                    }
+                };
                 log::info!(
-                    "[AI] selection={} chars, cursor=({},{}), icon=({},{})",
+                    "[AI] selection={} chars, icon=({},{})",
                     sel.chars().count(),
-                    cx,
-                    cy,
                     icon_x,
                     icon_y
                 );

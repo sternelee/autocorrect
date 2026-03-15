@@ -1,4 +1,6 @@
 use cocoa::base::{id, nil};
+use cocoa::appkit::NSScreen;
+use cocoa::foundation::NSRect;
 use core_graphics::display::CGRect;
 use objc::{msg_send, sel, sel_impl};
 use std::process::Command;
@@ -471,6 +473,93 @@ pub fn get_selected_text() -> Result<String> {
         }
 
         Ok(text)
+    }
+}
+
+/// 获取选中文字的屏幕区域坐标（用于显示 AI 图标在选中文本右上角）
+#[cfg(target_os = "macos")]
+pub fn get_selected_text_bounds() -> Result<(i32, i32, i32, i32)> {
+    // 返回 (x, y, width, height) - x,y 为左上角坐标
+    if !unsafe { AXIsProcessTrusted() } {
+        return Err(AccessibilityError::PermissionDenied);
+    }
+
+    unsafe {
+        let system_element = AXUIElementCreateSystemWide();
+        let mut focused_element: id = nil;
+
+        let err = AXUIElementCopyAttributeValue(
+            system_element,
+            to_ax_string("AXFocusedUIElement"),
+            &mut focused_element,
+        );
+
+        if err != 0 || focused_element == nil {
+            return Err(AccessibilityError::NoFocusedElement);
+        }
+
+        // 获取选区范围
+        let mut selected_range_value: id = nil;
+        let err_range = AXUIElementCopyAttributeValue(
+            focused_element,
+            to_ax_string("AXSelectedTextRange"),
+            &mut selected_range_value,
+        );
+
+        if err_range != 0 || selected_range_value == nil {
+            return Err(AccessibilityError::NoTextSelected);
+        }
+
+        let mut selected_range = CFRange { location: 0, length: 0 };
+        let range_size = std::mem::size_of::<CFRange>();
+        if AXValueGetValue(
+            selected_range_value,
+            kAXValueCFRangeType,
+            &mut selected_range as *mut _ as *mut std::ffi::c_void,
+        ) {
+            let range_start = selected_range.location.max(0) as usize;
+            let range_len = selected_range.length.max(0) as usize;
+
+            // 获取 AXBoundsForRange
+            let ax_range = AXValueCreate(
+                kAXValueCFRangeType,
+                &selected_range as *const _ as *const std::ffi::c_void,
+            );
+
+            let mut bounds_value: id = nil;
+            let err_bounds = AXUIElementCopyParameterizedAttributeValue(
+                focused_element,
+                to_ax_string("AXBoundsForRange"),
+                ax_range,
+                &mut bounds_value,
+            );
+
+            if err_bounds == 0 && bounds_value != nil {
+                let mut rect = CGRect::default();
+                if AXValueGetValue(
+                    bounds_value,
+                    K_AXVALUE_CGRECT_TYPE,
+                    &mut rect as *mut _ as *mut std::ffi::c_void,
+                ) {
+                    // 添加调试日志查看原始值
+                    log::info!(
+                        "[DIAG] get_selected_text_bounds: rect origin=({},{}) size=({},{})",
+                        rect.origin.x, rect.origin.y, rect.size.width, rect.size.height
+                    );
+
+                    // 返回原始值，不做转换（AXBoundsForRange 可能已经返回屏幕坐标）
+                    let sx = rect.origin.x as i32;
+                    let sy = rect.origin.y as i32;
+                    let sw = rect.size.width as i32;
+                    let sh = rect.size.height as i32;
+
+                    log::info!("[DIAG] get_selected_text_bounds returning: ({},{},{},{})", sx, sy, sw, sh);
+                    return Ok((sx, sy, sw, sh));
+                }
+            }
+        }
+
+        Err(AccessibilityError::NoTextSelected)
     }
 }
 
