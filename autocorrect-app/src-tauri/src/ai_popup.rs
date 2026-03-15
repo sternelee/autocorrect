@@ -311,7 +311,7 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
                 let _: () = msg_send![ns, setAcceptsMouseMovedEvents: YES];
                 let _: () = msg_send![ns, orderFrontRegardless];
                 // Make the popup the key window to receive keyboard events
-                let _: () = msg_send![ns, makeKeyWindow];
+                let _: () = msg_send![ns, makeKeyAndOrderFront: cocoa::base::nil];
             }
         }
     });
