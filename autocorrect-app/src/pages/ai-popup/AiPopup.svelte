@@ -3,6 +3,15 @@
   import { listen } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
   import { locale, t } from "$lib/i18n";
+  import {
+    Tooltip,
+    TooltipTrigger,
+    TooltipContent,
+    TooltipProvider,
+  } from "$lib/components/ui/tooltip";
+  import { Button } from "$lib/components/ui/button";
+  import { Input } from "$lib/components/ui/input";
+  import { Textarea } from "$lib/components/ui/textarea";
   $locale;
 
   // Reactive translation helper
@@ -81,7 +90,7 @@
     }
   }
 
-  async function acceptResultr() {
+  async function acceptResult() {
     if (!result.trim()) return;
     await invoke("accept_ai_result", { text: result });
   }
@@ -118,15 +127,44 @@
   );
 </script>
 
+<svelte:window onkeydown={(e) => {
+  if (e.key === "Escape") close();
+}} />
+
 <div class="popup" data-locale={$locale}>
   <!-- Header -->
   <div class="header">
-    <div class="header-left">
-      <span class="ai-badge">{tr("aipopup.tools")}</span>
+    <span class="header-icon">
+      <!-- magic wand icon -->
+      <svg
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="2"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      >
+        <path d="M21.5 2v6h-6M21.34 2.5a8 8 0 1 1-.58 4.9" />
+      </svg>
+    </span>
+    <span class="title">{tr("aipopup.tools")}</span>
+    <div class="header-actions">
+      <button class="icon-btn close" title={tr("aipopup.close")} onclick={close}>
+        <svg
+          width="13"
+          height="13"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2.5"
+          stroke-linecap="round"
+        >
+          <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+        </svg>
+      </button>
     </div>
-    <button class="close-btn" onclick={close} aria-label={tr("aipopup.close")}
-      >✕</button
-    >
   </div>
 
   <!-- Selected text preview -->
@@ -146,8 +184,8 @@
         onclick={() => runTool(tool.id)}
         disabled={loading}
       >
-        <span>{tool.icon}</span>
-        <span>{tool.label()}</span>
+        <span class="tool-icon">{tool.icon}</span>
+        <span class="tool-label">{tool.label()}</span>
       </button>
     {/each}
   </div>
@@ -187,99 +225,106 @@
   <!-- Result -->
   {#if result && !loading}
     <div class="result-wrap">
-      <textarea
+      <Textarea
         class="result-area"
         bind:value={result}
         rows={6}
         spellcheck={false}
-      ></textarea>
+      />
       <div class="result-actions">
-        <button class="accept-btn" onclick={acceptResult}>
+        <Button size="sm" onclick={acceptResult}>
           {tr("aipopup.accept")}
-        </button>
-        <button
-          class="discard-btn"
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
           onclick={() => {
             result = "";
             activeTool = null;
           }}
         >
           {tr("aipopup.discard")}
-        </button>
+        </Button>
       </div>
     </div>
   {/if}
 </div>
 
 <style>
-  :global(html, body) {
-    margin: 0;
-    padding: 0;
+  :global(body) {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: transparent;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    font-size: 13px;
+    overflow: hidden;
   }
 
   .popup {
-    width: 380px;
-    background: rgba(28, 28, 32, 0.96);
-    border-radius: 14px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    color: #e5e7eb;
-    overflow: hidden;
-    box-shadow:
-      0 8px 32px rgba(0, 0, 0, 0.5),
-      0 0 0 0.5px rgba(255, 255, 255, 0.08);
-    animation: slide-in 0.18s cubic-bezier(0.34, 1.56, 0.64, 1);
-  }
-
-  @keyframes slide-in {
-    from {
-      transform: translateY(-6px) scale(0.97);
-      opacity: 0;
-    }
-    to {
-      transform: translateY(0) scale(1);
-      opacity: 1;
-    }
+    display: inline-flex;
+    flex-direction: column;
+    gap: 8px;
+    background: rgba(255, 255, 255, 0.97);
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+    border-radius: 10px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.14), 0 0 0 1px rgba(0, 0, 0, 0.06);
+    padding: 8px 10px 10px;
+    min-width: 280px;
+    max-width: 100vw;
+    border-bottom: 3px solid #7c3aed;
   }
 
   .header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    padding: 10px 14px 8px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+    gap: 6px;
   }
 
-  .ai-badge {
-    font-size: 12px;
-    font-weight: 600;
-    color: #a78bfa;
-    letter-spacing: 0.3px;
+  .header-icon {
+    color: #7c3aed;
+    display: flex;
+    align-items: center;
+    flex-shrink: 0;
   }
 
-  .close-btn {
-    background: none;
-    border: none;
-    color: #6b7280;
+  .title {
     font-size: 13px;
-    cursor: pointer;
-    padding: 2px 4px;
-    border-radius: 4px;
-    line-height: 1;
+    font-weight: 600;
+    color: #111827;
+    flex: 1;
+    white-space: nowrap;
   }
-  .close-btn:hover {
-    color: #e5e7eb;
-    background: rgba(255, 255, 255, 0.08);
+
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+
+  .icon-btn {
+    width: 26px;
+    height: 26px;
+    border: none;
+    background: transparent;
+    border-radius: 6px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #6b7280;
+    transition: background 0.12s, color 0.12s;
+    padding: 0;
+  }
+
+  .icon-btn.close:hover {
+    background: #fee2e2;
+    color: #dc2626;
   }
 
   .preview {
-    padding: 8px 14px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    padding: 8px 10px;
+    background: #f9fafb;
+    border-radius: 6px;
   }
+
   .preview-label {
     font-size: 10px;
     text-transform: uppercase;
@@ -288,10 +333,11 @@
     display: block;
     margin-bottom: 3px;
   }
+
   .preview-text {
     margin: 0;
     font-size: 12px;
-    color: #9ca3af;
+    color: #374151;
     line-height: 1.4;
     white-space: pre-wrap;
     word-break: break-word;
@@ -299,9 +345,8 @@
 
   .tools {
     display: grid;
-    grid-template-columns: repeatr(4, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     gap: 6px;
-    padding: 10px 14px;
   }
 
   .tool-btn {
@@ -310,53 +355,68 @@
     align-items: center;
     gap: 3px;
     padding: 8px 4px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 8px;
-    color: #d1d5db;
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    color: #374151;
     cursor: pointer;
     font-size: 11px;
     transition: all 0.12s ease;
   }
-  .tool-btn:hover:notr(:disabled) {
-    background: rgba(167, 139, 250, 0.15);
-    border-color: rgba(167, 139, 250, 0.3);
-    color: #c4b5fd;
+
+  .tool-btn:hover:not(:disabled) {
+    background: #f3f4f6;
+    border-color: #7c3aed;
+    color: #7c3aed;
   }
+
   .tool-btn.active {
-    background: rgba(167, 139, 250, 0.2);
-    border-color: rgba(167, 139, 250, 0.5);
-    color: #c4b5fd;
+    background: #ede9fe;
+    border-color: #7c3aed;
+    color: #7c3aed;
   }
+
   .tool-btn:disabled {
     opacity: 0.5;
     cursor: not-allowed;
+  }
+
+  .tool-icon {
+    font-size: 14px;
+  }
+
+  .tool-label {
+    font-size: 10px;
+    font-weight: 500;
   }
 
   .lang-row {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
-    padding: 0 14px 10px;
+    padding: 0 4px;
     align-items: center;
   }
+
   .lang-label {
     font-size: 11px;
     color: #6b7280;
   }
+
   .lang-btn {
     font-size: 11px;
     padding: 2px 8px;
     border-radius: 10px;
-    background: rgba(255, 255, 255, 0.05);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    color: #9ca3af;
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    color: #6b7280;
     cursor: pointer;
   }
+
   .lang-btn.selected {
-    background: rgba(167, 139, 250, 0.2);
-    border-color: rgba(167, 139, 250, 0.4);
-    color: #c4b5fd;
+    background: #ede9fe;
+    border-color: #7c3aed;
+    color: #7c3aed;
   }
 
   .loading {
@@ -364,17 +424,19 @@
     align-items: center;
     gap: 8px;
     padding: 12px 14px;
-    color: #9ca3af;
+    color: #6b7280;
     font-size: 12px;
   }
+
   .spinner {
     width: 14px;
     height: 14px;
-    border: 2px solid rgba(167, 139, 250, 0.2);
-    border-top-color: #a78bfa;
+    border: 2px solid #e5e7eb;
+    border-top-color: #7c3aed;
     border-radius: 50%;
     animation: spin 0.6s linear infinite;
   }
+
   @keyframes spin {
     to {
       transform: rotate(360deg);
@@ -382,26 +444,27 @@
   }
 
   .error {
-    margin: 0 14px 10px;
+    margin: 0 4px;
     padding: 8px 10px;
-    background: rgba(239, 68, 68, 0.15);
-    border: 1px solid rgba(239, 68, 68, 0.3);
+    background: #fef2f2;
+    border: 1px solid #fecaca;
     border-radius: 6px;
-    color: #fca5a5;
+    color: #dc2626;
     font-size: 12px;
     line-height: 1.4;
   }
 
   .result-wrap {
-    padding: 0 14px 14px;
+    padding: 0 4px;
   }
-  .result-area {
+
+  :global(.result-area) {
     width: 100%;
     box-sizing: border-box;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    color: #e5e7eb;
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 6px;
+    color: #111827;
     font-size: 12px;
     line-height: 1.5;
     padding: 8px 10px;
@@ -409,41 +472,14 @@
     font-family: inherit;
     outline: none;
   }
-  .result-area:focus {
-    border-color: rgba(167, 139, 250, 0.4);
+
+  :global(.result-area:focus) {
+    border-color: #7c3aed;
   }
 
   .result-actions {
     display: flex;
     gap: 8px;
     margin-top: 8px;
-  }
-  .accept-btn {
-    flex: 1;
-    padding: 7px 0;
-    background: #7c3aed;
-    border: none;
-    border-radius: 8px;
-    color: white;
-    font-size: 12px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: background 0.12s ease;
-  }
-  .accept-btn:hover {
-    background: #6d28d9;
-  }
-  .discard-btn {
-    padding: 7px 14px;
-    background: rgba(255, 255, 255, 0.06);
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 8px;
-    color: #9ca3af;
-    font-size: 12px;
-    cursor: pointer;
-  }
-  .discard-btn:hover {
-    background: rgba(255, 255, 255, 0.1);
-    color: #d1d5db;
   }
 </style>
