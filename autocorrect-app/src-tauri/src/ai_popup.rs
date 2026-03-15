@@ -287,12 +287,12 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
             y: y as f64,
         }));
         let _ = win.show();
-        let _ = win.set_focus();
 
         #[cfg(target_os = "macos")]
         if let Ok(ptr) = win.ns_window() {
             use cocoa::base::{id, NO, YES};
             use objc::{msg_send, sel, sel_impl};
+
             unsafe {
                 let ns = ptr as id;
                 // Convert to NSNonactivatingPanel — floats above source app
@@ -309,9 +309,15 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
                 let _: () = msg_send![ns, setLevel: 2002_i64];
                 let _: () = msg_send![ns, setHidesOnDeactivate: NO];
                 let _: () = msg_send![ns, setAcceptsMouseMovedEvents: YES];
-                let _: () = msg_send![ns, orderFrontRegardless];
-                // Make the popup the key window to receive keyboard events
+
+                // Activate app so the popup receives mouse events
+                let app_ns: id = msg_send![objc::class!(NSApplication), sharedApplication];
+                let _: () = msg_send![app_ns, activateIgnoringOtherApps: YES];
                 let _: () = msg_send![ns, makeKeyAndOrderFront: cocoa::base::nil];
+
+                // Set first responder to enable hover/click events
+                let content_view: id = msg_send![ns, contentView];
+                let _: () = msg_send![ns, makeFirstResponder: content_view];
             }
         }
     });
