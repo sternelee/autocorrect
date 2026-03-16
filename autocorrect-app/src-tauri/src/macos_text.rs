@@ -1,12 +1,14 @@
 #![allow(unexpected_cfgs)]
 
-use cocoa::appkit::NSScreen;
-use cocoa::base::{id, nil};
-use cocoa::foundation::NSRect;
 use core_graphics::display::CGRect;
-use objc::{msg_send, sel, sel_impl};
+use objc2::msg_send;
+use objc2::runtime::{AnyClass, AnyObject};
 use std::process::Command;
 use std::sync::atomic::{AtomicI32, Ordering};
+
+// Type alias for Objective-C object pointers (Accessibility API uses raw pointers)
+type id = *mut AnyObject;
+const nil: id = std::ptr::null_mut();
 
 /// Accessibility API Error
 #[derive(Debug, thiserror::Error)]
@@ -82,14 +84,14 @@ pub fn get_focused_element_data(range_start: usize, range_len: usize) -> Result<
             &mut focused_element,
         );
 
-        if err != 0 || focused_element == nil {
+        if err != 0 || focused_element.is_null() {
             return Err(AccessibilityError::NoFocusedElement);
         }
 
         // 2. 获取全文 (用于校验 offset)
         let mut text_value: id = nil;
         AXUIElementCopyAttributeValue(focused_element, to_ax_string("AXValue"), &mut text_value);
-        let full_text = if text_value != nil {
+        let full_text = if !text_value.is_null() {
             from_ax_string(text_value)
         } else {
             String::new()
@@ -122,7 +124,7 @@ pub fn get_focused_element_data(range_start: usize, range_len: usize) -> Result<
             );
         }
 
-        if err_bounds == 0 && bounds_value != nil {
+        if err_bounds == 0 && !bounds_value.is_null() {
             let mut rect = CGRect::default();
             if AXValueGetValue(
                 bounds_value,
@@ -157,7 +159,7 @@ pub fn get_focused_text_context() -> Result<FocusedTextContext> {
             &mut focused_element,
         );
 
-        if err != 0 || focused_element == nil {
+        if err != 0 || focused_element.is_null() {
             return Err(AccessibilityError::NoFocusedElement);
         }
 
@@ -167,11 +169,11 @@ pub fn get_focused_text_context() -> Result<FocusedTextContext> {
 
         let mut bundle_id = String::new();
         if pid > 0 {
-            let app_class = objc::class!(NSRunningApplication);
+            let app_class = AnyClass::get("NSRunningApplication").expect("NSRunningApplication not found");
             let app: id = msg_send![app_class, runningApplicationWithProcessIdentifier: pid];
-            if app != nil {
+            if !app.is_null() {
                 let ns_bundle_id: id = msg_send![app, bundleIdentifier];
-                if ns_bundle_id != nil {
+                if !ns_bundle_id.is_null() {
                     bundle_id = from_ax_string(ns_bundle_id);
                 }
             }
@@ -179,7 +181,7 @@ pub fn get_focused_text_context() -> Result<FocusedTextContext> {
 
         let mut role_value: id = nil;
         AXUIElementCopyAttributeValue(focused_element, to_ax_string("AXRole"), &mut role_value);
-        let role = if role_value != nil {
+        let role = if !role_value.is_null() {
             from_ax_string(role_value)
         } else {
             String::new()
@@ -198,7 +200,7 @@ pub fn get_focused_text_context() -> Result<FocusedTextContext> {
         AXUIElementCopyAttributeValue(focused_element, to_ax_string("AXValue"), &mut text_value);
 
         // Slack/Electron fallback (AXSelectedText)
-        if text_value == nil {
+        if text_value.is_null() {
             AXUIElementCopyAttributeValue(
                 focused_element,
                 to_ax_string("AXSelectedText"),
@@ -206,9 +208,9 @@ pub fn get_focused_text_context() -> Result<FocusedTextContext> {
             );
         }
 
-        if text_value != nil {
+        if !text_value.is_null() {
             // Verify if the value is actually an NSString
-            let ns_string_class: id = msg_send![objc::class!(NSString), class];
+            let ns_string_class = AnyClass::get("NSString").expect("NSString not found");
             let is_string: bool = msg_send![text_value, isKindOfClass: ns_string_class];
 
             if is_string {
@@ -225,7 +227,7 @@ pub fn get_focused_text_context() -> Result<FocusedTextContext> {
                         location: 0,
                         length: 0,
                     };
-                    if selected_range_value != nil {
+                    if !selected_range_value.is_null() {
                         let _ = AXValueGetValue(
                             selected_range_value,
                             kAXValueCFRangeType,
@@ -292,7 +294,7 @@ pub fn get_focused_range_bounds(range_start: usize, range_len: usize) -> Result<
             &mut focused_element,
         );
 
-        if err != 0 || focused_element == nil {
+        if err != 0 || focused_element.is_null() {
             return Err(AccessibilityError::NoFocusedElement);
         }
 
@@ -322,7 +324,7 @@ pub fn get_focused_range_bounds(range_start: usize, range_len: usize) -> Result<
             );
         }
 
-        if err_bounds == 0 && bounds_value != nil {
+        if err_bounds == 0 && !bounds_value.is_null() {
             let mut rect = CGRect::default();
             if AXValueGetValue(
                 bounds_value,
@@ -356,7 +358,7 @@ pub fn get_focused_caret_bounds() -> Result<CGRect> {
             &mut focused_element,
         );
 
-        if err != 0 || focused_element == nil {
+        if err != 0 || focused_element.is_null() {
             log::warn!("[DIAG] get_focused_caret_bounds: no focused element");
             return Err(AccessibilityError::NoFocusedElement);
         }
@@ -372,7 +374,7 @@ pub fn get_focused_caret_bounds() -> Result<CGRect> {
             location: 0,
             length: 0,
         };
-        if selected_range_value != nil {
+        if !selected_range_value.is_null() {
             let _ = AXValueGetValue(
                 selected_range_value,
                 kAXValueCFRangeType,
@@ -409,7 +411,7 @@ pub fn get_focused_element_bounds() -> Result<CGRect> {
             &mut focused_element,
         );
 
-        if err != 0 || focused_element == nil {
+        if err != 0 || focused_element.is_null() {
             log::warn!("[DIAG] get_focused_element_bounds: no focused element");
             return Err(AccessibilityError::NoFocusedElement);
         }
@@ -418,9 +420,9 @@ pub fn get_focused_element_bounds() -> Result<CGRect> {
         AXUIElementCopyAttributeValue(focused_element, to_ax_string("AXFrame"), &mut frame_value);
         log::info!(
             "[DIAG] get_focused_element_bounds: AXFrame available={}",
-            frame_value != nil
+            !frame_value.is_null()
         );
-        if frame_value != nil {
+        if !frame_value.is_null() {
             let mut rect = CGRect::default();
             if AXValueGetValue(
                 frame_value,
@@ -454,7 +456,7 @@ pub fn get_selected_text() -> Result<String> {
             &mut focused_element,
         );
 
-        if err != 0 || focused_element == nil {
+        if err != 0 || focused_element.is_null() {
             return Err(AccessibilityError::NoFocusedElement);
         }
 
@@ -465,7 +467,7 @@ pub fn get_selected_text() -> Result<String> {
             &mut selected_text,
         );
 
-        if err_selected != 0 || selected_text == nil {
+        if err_selected != 0 || selected_text.is_null() {
             return Err(AccessibilityError::NoTextSelected);
         }
 
@@ -496,7 +498,7 @@ pub fn get_selected_text_bounds() -> Result<(i32, i32, i32, i32)> {
             &mut focused_element,
         );
 
-        if err != 0 || focused_element == nil {
+        if err != 0 || focused_element.is_null() {
             return Err(AccessibilityError::NoFocusedElement);
         }
 
@@ -508,7 +510,7 @@ pub fn get_selected_text_bounds() -> Result<(i32, i32, i32, i32)> {
             &mut selected_range_value,
         );
 
-        if err_range != 0 || selected_range_value == nil {
+        if err_range != 0 || selected_range_value.is_null() {
             return Err(AccessibilityError::NoTextSelected);
         }
 
@@ -539,7 +541,7 @@ pub fn get_selected_text_bounds() -> Result<(i32, i32, i32, i32)> {
                 &mut bounds_value,
             );
 
-            if err_bounds == 0 && bounds_value != nil {
+            if err_bounds == 0 && !bounds_value.is_null() {
                 let mut rect = CGRect::default();
                 if AXValueGetValue(
                     bounds_value,
@@ -609,8 +611,8 @@ fn to_ax_string(s: &str) -> id {
             Ok(v) => v,
             Err(_) => return nil,
         };
-        let ns_string: id =
-            msg_send![objc::class!(NSString), stringWithUTF8String: c_string.as_ptr()];
+        let ns_string_class = AnyClass::get("NSString").expect("NSString not found");
+        let ns_string: id = msg_send![ns_string_class, stringWithUTF8String: c_string.as_ptr()];
         ns_string
     }
 }
@@ -630,11 +632,11 @@ fn from_ax_string(ns_string: id) -> String {
 
 fn from_ax_bool(ns_value: id) -> bool {
     unsafe {
-        if ns_value == nil {
+        if ns_value.is_null() {
             return false;
         }
         // Use isKindOfClass: to verify it's a number/boolean before calling charValue
-        let ns_number_class: id = msg_send![objc::class!(NSNumber), class];
+        let ns_number_class = AnyClass::get("NSNumber").expect("NSNumber not found");
         let is_number: bool = msg_send![ns_value, isKindOfClass: ns_number_class];
         if is_number {
             let val: i8 = msg_send![ns_value, charValue];
@@ -699,7 +701,7 @@ pub fn select_text_range(start: usize, length: usize) -> Result<()> {
             &mut focused_element,
         );
 
-        if err != 0 || focused_element == nil {
+        if err != 0 || focused_element.is_null() {
             return Err(AccessibilityError::NoFocusedElement);
         }
 

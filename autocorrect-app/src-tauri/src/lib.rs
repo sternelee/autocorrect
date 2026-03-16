@@ -3,10 +3,70 @@ mod clipboard;
 mod commands;
 mod hotkey;
 mod macos_text;
+mod objc2_compat;
 mod overlay;
 mod popup;
 mod text_selection;
 mod typocheck;
+
+#[cfg(target_os = "macos")]
+mod geom {
+    use objc2::Encode;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct CGPoint {
+        pub x: f64,
+        pub y: f64,
+    }
+
+    impl CGPoint {
+        pub fn new(x: f64, y: f64) -> Self {
+            Self { x, y }
+        }
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct CGSize {
+        pub width: f64,
+        pub height: f64,
+    }
+
+    impl CGSize {
+        pub fn new(width: f64, height: f64) -> Self {
+            Self { width, height }
+        }
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct CGRect {
+        pub origin: CGPoint,
+        pub size: CGSize,
+    }
+
+    unsafe impl Encode for CGPoint {
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("_CGPoint", &[
+            objc2::Encoding::Double,
+            objc2::Encoding::Double,
+        ]);
+    }
+
+    unsafe impl Encode for CGSize {
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("_CGSize", &[
+            objc2::Encoding::Double,
+            objc2::Encoding::Double,
+        ]);
+    }
+
+    unsafe impl Encode for CGRect {
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("_CGRect", &[
+            <CGPoint>::ENCODING,
+            <CGSize>::ENCODING,
+        ]);
+    }
+}
 
 use ai_popup::{SharedAiPopupState, SharedNativeIconWindow};
 use commands::ai_grammar::{ai_grammar_check, ai_text_transform};
@@ -108,8 +168,11 @@ pub fn run() {
                 let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     #[cfg(target_os = "macos")]
                     unsafe {
-                        use objc::{msg_send, sel, sel_impl};
-                        let pool: cocoa::base::id = msg_send![objc::class!(NSAutoreleasePool), new];
+                        use objc2::msg_send;
+                        use objc2::runtime::AnyClass;
+                        type id = *mut objc2::runtime::AnyObject;
+                        let pool_class = AnyClass::get("NSAutoreleasePool").expect("NSAutoreleasePool not found");
+                        let pool: id = msg_send![pool_class, new];
                         sync_system_typos(&app_handle_for_sync);
                         let _: () = msg_send![pool, drain];
                     }
@@ -199,20 +262,21 @@ pub fn run() {
                     // Get screen bounds for coordinate conversion (similar to overlay.rs)
                     #[cfg(target_os = "macos")]
                     let (desktop_min_x, desktop_top_y, desktop_width, desktop_height) = unsafe {
-                        use cocoa::appkit::NSScreen;
-                        use cocoa::base::{id, nil};
-                        use cocoa::foundation::NSRect;
-                        use objc::{msg_send, sel, sel_impl};
+                        use geom::CGRect;
+                        use objc2::msg_send;
+                        use objc2::runtime::AnyClass;
+
+                        type id = *mut objc2::runtime::AnyObject;
 
                         let mut min_x = f64::MAX;
                         let mut min_y = f64::MAX;
                         let mut max_x = f64::MIN;
                         let mut max_y = f64::MIN;
-                        let screens: id = NSScreen::screens(nil);
+                        let screens: id = msg_send![AnyClass::get("NSScreen").expect("NSScreen not found"), screens];
                         let count: usize = msg_send![screens, count];
                         for idx in 0..count {
                             let screen: id = msg_send![screens, objectAtIndex: idx];
-                            let frame: NSRect = msg_send![screen, frame];
+                            let frame: CGRect = msg_send![screen, frame];
                             min_x = min_x.min(frame.origin.x);
                             min_y = min_y.min(frame.origin.y);
                             max_x = max_x.max(frame.origin.x + frame.size.width);
@@ -951,9 +1015,11 @@ fn check_accessibility_permission() -> bool {
 /// Uses NSEvent.pressedMouseButtons (bit 0 = left button).
 #[cfg(target_os = "macos")]
 fn is_left_button_down() -> bool {
-    use objc::{msg_send, sel, sel_impl};
+    use objc2::msg_send;
+    use objc2::runtime::AnyClass;
     unsafe {
-        let pressed: usize = msg_send![objc::class!(NSEvent), pressedMouseButtons];
+        let event_class = AnyClass::get("NSEvent").expect("NSEvent not found");
+        let pressed: usize = msg_send![event_class, pressedMouseButtons];
         pressed & 1 != 0
     }
 }

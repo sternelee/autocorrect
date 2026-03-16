@@ -6,6 +6,74 @@ use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+#[cfg(target_os = "macos")]
+mod geom {
+    use objc2::Encode;
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct CGPoint {
+        pub x: f64,
+        pub y: f64,
+    }
+
+    impl CGPoint {
+        pub fn new(x: f64, y: f64) -> Self {
+            Self { x, y }
+        }
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct CGSize {
+        pub width: f64,
+        pub height: f64,
+    }
+
+    impl CGSize {
+        pub fn new(width: f64, height: f64) -> Self {
+            Self { width, height }
+        }
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    pub struct CGRect {
+        pub origin: CGPoint,
+        pub size: CGSize,
+    }
+
+    impl CGRect {
+        pub fn new(origin: &CGPoint, size: &CGSize) -> Self {
+            Self {
+                origin: *origin,
+                size: *size,
+            }
+        }
+    }
+
+    unsafe impl Encode for CGPoint {
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("_CGPoint", &[
+            objc2::Encoding::Double,
+            objc2::Encoding::Double,
+        ]);
+    }
+
+    unsafe impl Encode for CGSize {
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("_CGSize", &[
+            objc2::Encoding::Double,
+            objc2::Encoding::Double,
+        ]);
+    }
+
+    unsafe impl Encode for CGRect {
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("_CGRect", &[
+            <CGPoint>::ENCODING,
+            <CGSize>::ENCODING,
+        ]);
+    }
+}
+
 // ── Shared state ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -124,20 +192,22 @@ pub fn hide_ai_icon(app: &AppHandle) {
 
 #[cfg(target_os = "macos")]
 unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
-    use cocoa::appkit::{NSBackingStoreType, NSColor, NSScreen, NSView};
-    use cocoa::base::{id, nil, NO, YES};
-    use cocoa::foundation::{NSPoint, NSRect, NSSize, NSString};
-    use objc::{class, msg_send, sel, sel_impl};
+    use objc2::msg_send;
+    use objc2::runtime::AnyClass;
+    use geom::{CGRect, CGPoint, CGSize};
+
+    type id = *mut objc2::runtime::AnyObject;
+    const nil: id = std::ptr::null_mut();
 
     const ICON_SIZE: f64 = 36.0;
 
     // y is in Quartz top-left coords (from CGEvent); NSWindow uses bottom-left.
     let screen_height: f64 = {
-        let screen: id = NSScreen::mainScreen(nil);
-        if screen == nil {
+        let screen: id = msg_send![AnyClass::get("NSScreen").expect("NSScreen not found"), mainScreen];
+        if screen.is_null() {
             return;
         }
-        let frame: NSRect = msg_send![screen, frame];
+        let frame: CGRect = msg_send![screen, frame];
         frame.size.height
     };
     let mac_y = screen_height - y as f64 - ICON_SIZE;
@@ -145,60 +215,68 @@ unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
     // Create the panel once; reuse on subsequent calls.
     if state.window == 0 {
         let style_mask = 128_u64; // NSBorderlessWindowMask | NSNonactivatingPanelMask
-        let frame = NSRect::new(
-            NSPoint::new(x as f64, mac_y),
-            NSSize::new(ICON_SIZE, ICON_SIZE),
+        let frame = CGRect::new(
+            &CGPoint::new(x as f64, mac_y),
+            &CGSize::new(ICON_SIZE, ICON_SIZE),
         );
-        let window: id = msg_send![class!(NSPanel), alloc];
+        let panel_class = AnyClass::get("NSPanel").expect("NSPanel not found");
+        let window: id = msg_send![panel_class, alloc];
         let window: id = msg_send![
             window,
             initWithContentRect: frame
             styleMask: style_mask
-            backing: NSBackingStoreType::NSBackingStoreBuffered
-            defer: NO
+            backing: 2_u64 // NSBackingStoreBuffered
+            defer: false
         ];
-        if window == nil {
+        if window.is_null() {
             return;
         }
 
-        let _: () = msg_send![window, setOpaque: NO];
-        let clear: id = NSColor::clearColor(nil);
+        let _: () = msg_send![window, setOpaque: false];
+        let clear: id = msg_send![AnyClass::get("NSColor").expect("NSColor not found"), clearColor];
         let _: () = msg_send![window, setBackgroundColor: clear];
-        let _: () = msg_send![window, setIgnoresMouseEvents: NO];
-        let _: () = msg_send![window, setReleasedWhenClosed: NO];
-        let _: () = msg_send![window, setHasShadow: NO];
-        let _: () = msg_send![window, setHidesOnDeactivate: NO];
+        let _: () = msg_send![window, setIgnoresMouseEvents: false];
+        let _: () = msg_send![window, setReleasedWhenClosed: false];
+        let _: () = msg_send![window, setHasShadow: false];
+        let _: () = msg_send![window, setHidesOnDeactivate: false];
         let _: () = msg_send![window, setCollectionBehavior: (1_u64 << 0) | (1_u64 << 7)];
         let _: () = msg_send![window, setLevel: 2002_i64];
-        let _: () = msg_send![window, setAcceptsMouseMovedEvents: YES];
+        let _: () = msg_send![window, setAcceptsMouseMovedEvents: true];
 
         // Clear background view - no background, just emoji
-        let content_frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(ICON_SIZE, ICON_SIZE));
-        let bg_view: id = NSView::alloc(nil).initWithFrame_(content_frame);
-        let _: () = msg_send![bg_view, setWantsLayer: YES];
+        let content_frame = CGRect::new(
+            &CGPoint::new(0.0, 0.0),
+            &CGSize::new(ICON_SIZE, ICON_SIZE),
+        );
+        let view_class = AnyClass::get("NSView").expect("NSView not found");
+        let bg_view: id = msg_send![view_class, alloc];
+        let bg_view: id = msg_send![bg_view, initWithFrame: content_frame];
+        let _: () = msg_send![bg_view, setWantsLayer: true];
         let bg_layer: id = msg_send![bg_view, layer];
         // Transparent background
-        let clear_color: id = msg_send![class!(NSColor), clearColor];
+        let clear_color: id = msg_send![AnyClass::get("NSColor").expect("NSColor not found"), clearColor];
         let cg_clear: id = msg_send![clear_color, CGColor];
         let _: () = msg_send![bg_layer, setBackgroundColor: cg_clear];
 
         // 💡 label - centered vertically
-        let label: id = msg_send![class!(NSTextField), alloc];
-        let label_frame = NSRect::new(
-            NSPoint::new(0.0, (ICON_SIZE - 20.0) / 2.0),
-            NSSize::new(ICON_SIZE, 20.0),
+        let text_field_class = AnyClass::get("NSTextField").expect("NSTextField not found");
+        let label: id = msg_send![text_field_class, alloc];
+        let label_frame = CGRect::new(
+            &CGPoint::new(0.0, (ICON_SIZE - 20.0) / 2.0),
+            &CGSize::new(ICON_SIZE, 20.0),
         );
         let label: id = msg_send![label, initWithFrame: label_frame];
-        let emoji = NSString::alloc(nil).init_str("💡");
+        let emoji = crate::objc2_compat::ns_string("💡");
         let _: () = msg_send![label, setStringValue: emoji];
-        let _: () = msg_send![label, setBezeled: NO];
-        let _: () = msg_send![label, setDrawsBackground: NO];
-        let _: () = msg_send![label, setEditable: NO];
-        let _: () = msg_send![label, setSelectable: NO];
+        let _: () = msg_send![label, setBezeled: false];
+        let _: () = msg_send![label, setDrawsBackground: false];
+        let _: () = msg_send![label, setEditable: false];
+        let _: () = msg_send![label, setSelectable: false];
         // Center the emoji horizontally and vertically
         let _: () = msg_send![label, setAlignment: 1_i64]; // NSTextAlignmentCenter
                                                            // Font size
-        let font: id = msg_send![class!(NSFont), systemFontOfSize: 20.0_f64];
+        let font_class = AnyClass::get("NSFont").expect("NSFont not found");
+        let font: id = msg_send![font_class, systemFontOfSize: 20.0_f64];
         let _: () = msg_send![label, setFont: font];
 
         let _: () = msg_send![bg_view, addSubview: label];
@@ -209,21 +287,22 @@ unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
 
     // Reposition.
     let window = state.window as id;
-    let new_frame = NSRect::new(
-        NSPoint::new(x as f64, mac_y),
-        NSSize::new(ICON_SIZE, ICON_SIZE),
+    let new_frame = CGRect::new(
+        &CGPoint::new(x as f64, mac_y),
+        &CGSize::new(ICON_SIZE, ICON_SIZE),
     );
-    let _: () = msg_send![window, setFrame: new_frame display: YES];
+    let _: () = msg_send![window, setFrame: new_frame display: true];
     let _: () = msg_send![window, orderFrontRegardless];
 }
 
 #[cfg(target_os = "macos")]
 unsafe fn hide_native_icon(state: &NativeIconWindow) {
-    use cocoa::base::id;
-    use objc::{msg_send, sel, sel_impl};
+    use objc2::msg_send;
+    type id = *mut objc2::runtime::AnyObject;
+    const nil: id = std::ptr::null_mut();
     if state.window != 0 {
         let window = state.window as id;
-        let _: () = msg_send![window, orderOut: cocoa::base::nil];
+        let _: () = msg_send![window, orderOut: nil];
     }
 }
 
@@ -290,8 +369,11 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
 
         #[cfg(target_os = "macos")]
         if let Ok(ptr) = win.ns_window() {
-            use cocoa::base::{id, NO, YES};
-            use objc::{msg_send, sel, sel_impl};
+            use objc2::msg_send;
+            use objc2::runtime::AnyClass;
+
+            type id = *mut objc2::runtime::AnyObject;
+            const nil: id = std::ptr::null_mut();
 
             unsafe {
                 let ns = ptr as id;
@@ -300,21 +382,22 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
                 extern "C" {
                     fn object_setClass(obj: id, cls: id) -> id;
                 }
-                let panel_class: id = objc::class!(NSPanel) as *const _ as id;
+                let panel_class: id = AnyClass::get("NSPanel").expect("NSPanel not found") as *const _ as id;
                 object_setClass(ns, panel_class);
                 let cur_mask: usize = msg_send![ns, styleMask];
                 let _: () = msg_send![ns, setStyleMask: cur_mask | 128_usize];
-                let _: () = msg_send![ns, setFloatingPanel: YES];
+                let _: () = msg_send![ns, setFloatingPanel: true];
                 // 移除 setBecomesKeyOnlyIfNeeded，确保窗口能正确获得焦点
-                // let _: () = msg_send![ns, setBecomesKeyOnlyIfNeeded: YES];
+                // let _: () = msg_send![ns, setBecomesKeyOnlyIfNeeded: true];
                 let _: () = msg_send![ns, setLevel: 2001_i64]; // 改为 2001
-                let _: () = msg_send![ns, setHidesOnDeactivate: NO];
-                let _: () = msg_send![ns, setAcceptsMouseMovedEvents: YES];
+                let _: () = msg_send![ns, setHidesOnDeactivate: false];
+                let _: () = msg_send![ns, setAcceptsMouseMovedEvents: true];
 
                 // Activate app so the popup receives mouse events
-                let app_ns: id = msg_send![objc::class!(NSApplication), sharedApplication];
-                let _: () = msg_send![app_ns, activateIgnoringOtherApps: YES];
-                let _: () = msg_send![ns, makeKeyAndOrderFront: cocoa::base::nil];
+                let app_class = AnyClass::get("NSApplication").expect("NSApplication not found");
+                let app_ns: id = msg_send![app_class, sharedApplication];
+                let _: () = msg_send![app_ns, activateIgnoringOtherApps: true];
+                let _: () = msg_send![ns, makeKeyAndOrderFront: nil];
 
                 // Set first responder to enable hover/click events
                 let content_view: id = msg_send![ns, contentView];

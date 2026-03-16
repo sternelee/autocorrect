@@ -89,8 +89,10 @@ pub fn show_popup(
             let popup_window_mt = popup_window.clone();
             let app_mt = app.clone();
             let _ = popup_window.run_on_main_thread(move || {
-                use cocoa::base::{id, NO};
-                use objc::{msg_send, sel, sel_impl};
+                use objc2::msg_send;
+                use objc2::runtime::AnyClass;
+                type id = *mut objc2::runtime::AnyObject;
+                const nil: id = std::ptr::null_mut();
 
                 // Hide the main window using NSWindow directly (synchronous, no
                 // Tauri dispatch queuing) so it is gone before makeKeyAndOrderFront
@@ -99,7 +101,7 @@ pub fn show_popup(
                     if let Ok(main_ptr) = main.ns_window() {
                         unsafe {
                             let main_ns = main_ptr as id;
-                            let _: () = msg_send![main_ns, orderOut: cocoa::base::nil];
+                            let _: () = msg_send![main_ns, orderOut: nil];
                         }
                     }
                 }
@@ -108,18 +110,17 @@ pub fn show_popup(
                     unsafe {
                         let ns_window = ptr as id;
                         let _: () = msg_send![ns_window, setLevel: 2001_i64];
-                        let _: () = msg_send![ns_window, setHidesOnDeactivate: cocoa::base::NO];
-                        let _: () =
-                            msg_send![ns_window, setAcceptsMouseMovedEvents: cocoa::base::YES];
+                        let _: () = msg_send![ns_window, setHidesOnDeactivate: false];
+                        let _: () = msg_send![ns_window, setAcceptsMouseMovedEvents: true];
                         // Activate the app first so makeKeyAndOrderFront actually
                         // grants key-window status.  Without this the popup appears
                         // but remains a non-key window (AutoCorrect is not the
                         // frontmost app), causing WKWebView to skip hover tracking
                         // until the user clicks once.
-                        let app_ns: cocoa::base::id =
-                            msg_send![objc::class!(NSApplication), sharedApplication];
-                        let _: () = msg_send![app_ns, activateIgnoringOtherApps: cocoa::base::YES];
-                        let _: () = msg_send![ns_window, makeKeyAndOrderFront: cocoa::base::nil];
+                        let app_class = AnyClass::get("NSApplication").expect("NSApplication not found");
+                        let app_ns: id = msg_send![app_class, sharedApplication];
+                        let _: () = msg_send![app_ns, activateIgnoringOtherApps: true];
+                        let _: () = msg_send![ns_window, makeKeyAndOrderFront: nil];
                         let content_view: id = msg_send![ns_window, contentView];
                         let _: () = msg_send![ns_window, makeFirstResponder: content_view];
                     }
@@ -385,10 +386,15 @@ fn restore_clipboard(clipboard: &mut arboard::Clipboard, previous_clipboard: Opt
 /// Fast NSWorkspace-based check — no subprocess, returns in microseconds.
 #[cfg(target_os = "macos")]
 pub fn is_app_frontmost_macos_pub(app_name: &str) -> bool {
-    use cocoa::base::id;
-    use objc::{msg_send, sel, sel_impl};
+    use objc2::msg_send;
+    use objc2::runtime::AnyClass;
+    use objc2_foundation::NSString;
+
+    type id = *mut objc2::runtime::AnyObject;
+
     unsafe {
-        let workspace: id = msg_send![objc::class!(NSWorkspace), sharedWorkspace];
+        let workspace_class = AnyClass::get("NSWorkspace").expect("NSWorkspace not found");
+        let workspace: id = msg_send![workspace_class, sharedWorkspace];
         let front_app: id = msg_send![workspace, frontmostApplication];
         if front_app.is_null() {
             return false;
@@ -397,7 +403,7 @@ pub fn is_app_frontmost_macos_pub(app_name: &str) -> bool {
         if name.is_null() {
             return false;
         }
-        let ns_str = cocoa::foundation::NSString::UTF8String(name);
+        let ns_str: *const std::os::raw::c_char = msg_send![name, UTF8String];
         if ns_str.is_null() {
             return false;
         }
