@@ -170,9 +170,9 @@ pub fn run() {
                     unsafe {
                         use objc2::msg_send;
                         use objc2::runtime::AnyClass;
-                        type id = *mut objc2::runtime::AnyObject;
+                        type Id = *mut objc2::runtime::AnyObject;
                         let pool_class = AnyClass::get("NSAutoreleasePool").expect("NSAutoreleasePool not found");
-                        let pool: id = msg_send![pool_class, new];
+                        let pool: Id = msg_send![pool_class, new];
                         sync_system_typos(&app_handle_for_sync);
                         let _: () = msg_send![pool, drain];
                     }
@@ -266,16 +266,16 @@ pub fn run() {
                         use objc2::msg_send;
                         use objc2::runtime::AnyClass;
 
-                        type id = *mut objc2::runtime::AnyObject;
+                        type Id = *mut objc2::runtime::AnyObject;
 
                         let mut min_x = f64::MAX;
                         let mut min_y = f64::MAX;
                         let mut max_x = f64::MIN;
                         let mut max_y = f64::MIN;
-                        let screens: id = msg_send![AnyClass::get("NSScreen").expect("NSScreen not found"), screens];
+                        let screens: Id = msg_send![AnyClass::get("NSScreen").expect("NSScreen not found"), screens];
                         let count: usize = msg_send![screens, count];
                         for idx in 0..count {
-                            let screen: id = msg_send![screens, objectAtIndex: idx];
+                            let screen: Id = msg_send![screens, objectAtIndex: idx];
                             let frame: CGRect = msg_send![screen, frame];
                             min_x = min_x.min(frame.origin.x);
                             min_y = min_y.min(frame.origin.y);

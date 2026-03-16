@@ -91,8 +91,8 @@ pub fn show_popup(
             let _ = popup_window.run_on_main_thread(move || {
                 use objc2::msg_send;
                 use objc2::runtime::AnyClass;
-                type id = *mut objc2::runtime::AnyObject;
-                const NIL: id = std::ptr::null_mut();
+                type Id = *mut objc2::runtime::AnyObject;
+                const NIL: Id = std::ptr::null_mut();
 
                 // Hide the main window using NSWindow directly (synchronous, no
                 // Tauri dispatch queuing) so it is gone before makeKeyAndOrderFront
@@ -100,7 +100,7 @@ pub fn show_popup(
                 if let Some(main) = app_mt.get_webview_window("main") {
                     if let Ok(main_ptr) = main.ns_window() {
                         unsafe {
-                            let main_ns = main_ptr as id;
+                            let main_ns = main_ptr as Id;
                             let _: () = msg_send![main_ns, orderOut: NIL];
                         }
                     }
@@ -108,7 +108,7 @@ pub fn show_popup(
 
                 if let Ok(ptr) = popup_window_mt.ns_window() {
                     unsafe {
-                        let ns_window = ptr as id;
+                        let ns_window = ptr as Id;
                         let _: () = msg_send![ns_window, setLevel: 2001_i64];
                         let _: () = msg_send![ns_window, setHidesOnDeactivate: false];
                         let _: () = msg_send![ns_window, setAcceptsMouseMovedEvents: true];
@@ -118,10 +118,10 @@ pub fn show_popup(
                         // frontmost app), causing WKWebView to skip hover tracking
                         // until the user clicks once.
                         let app_class = AnyClass::get("NSApplication").expect("NSApplication not found");
-                        let app_ns: id = msg_send![app_class, sharedApplication];
+                        let app_ns: Id = msg_send![app_class, sharedApplication];
                         let _: () = msg_send![app_ns, activateIgnoringOtherApps: true];
                         let _: () = msg_send![ns_window, makeKeyAndOrderFront: NIL];
-                        let content_view: id = msg_send![ns_window, contentView];
+                        let content_view: Id = msg_send![ns_window, contentView];
                         let _: () = msg_send![ns_window, makeFirstResponder: content_view];
                     }
                 }
@@ -390,16 +390,16 @@ pub fn is_app_frontmost_macos_pub(app_name: &str) -> bool {
     use objc2::runtime::AnyClass;
     
 
-    type id = *mut objc2::runtime::AnyObject;
+    type Id = *mut objc2::runtime::AnyObject;
 
     unsafe {
         let workspace_class = AnyClass::get("NSWorkspace").expect("NSWorkspace not found");
-        let workspace: id = msg_send![workspace_class, sharedWorkspace];
-        let front_app: id = msg_send![workspace, frontmostApplication];
+        let workspace: Id = msg_send![workspace_class, sharedWorkspace];
+        let front_app: Id = msg_send![workspace, frontmostApplication];
         if front_app.is_null() {
             return false;
         }
-        let name: id = msg_send![front_app, localizedName];
+        let name: Id = msg_send![front_app, localizedName];
         if name.is_null() {
             return false;
         }

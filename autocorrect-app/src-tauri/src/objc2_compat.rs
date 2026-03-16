@@ -9,10 +9,10 @@
 use objc2::runtime::{AnyClass, AnyObject};
 
 /// Type alias for Objective-C object pointers
-pub type id = *mut AnyObject;
+pub type Id = *mut AnyObject;
 
 /// Null pointer constant for id types
-pub const NIL: id = std::ptr::null_mut();
+pub const NIL: Id = std::ptr::null_mut();
 
 /// Boolean constants for Objective-C
 pub const YES: bool = true;
@@ -24,7 +24,7 @@ pub fn class(name: &str) -> &'static AnyClass {
 }
 
 /// Create an NSString from a UTF-8 string
-pub fn ns_string(s: &str) -> id {
+pub fn ns_string(s: &str) -> Id {
     unsafe {
         let c_string = std::ffi::CString::new(s).expect("Invalid string");
         msg_send![class("NSString"), stringWithUTF8String: c_string.as_ptr()]
@@ -32,7 +32,7 @@ pub fn ns_string(s: &str) -> id {
 }
 
 /// Get a Rust String from an NSString
-pub fn from_ns_string(ns_string: id) -> String {
+pub fn from_ns_string(ns_string: Id) -> String {
     if ns_string.is_null() {
         return String::new();
     }

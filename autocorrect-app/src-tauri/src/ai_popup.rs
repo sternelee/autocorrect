@@ -196,14 +196,14 @@ unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
     use objc2::runtime::AnyClass;
     use geom::{CGRect, CGPoint, CGSize};
 
-    type id = *mut objc2::runtime::AnyObject;
-    const NIL: id = std::ptr::null_mut();
+    type Id = *mut objc2::runtime::AnyObject;
+    const NIL: Id = std::ptr::null_mut();
 
     const ICON_SIZE: f64 = 36.0;
 
     // y is in Quartz top-left coords (from CGEvent); NSWindow uses bottom-left.
     let screen_height: f64 = {
-        let screen: id = msg_send![AnyClass::get("NSScreen").expect("NSScreen not found"), mainScreen];
+        let screen: Id = msg_send![AnyClass::get("NSScreen").expect("NSScreen not found"), mainScreen];
         if screen.is_null() {
             return;
         }
@@ -220,8 +220,8 @@ unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
             &CGSize::new(ICON_SIZE, ICON_SIZE),
         );
         let panel_class = AnyClass::get("NSPanel").expect("NSPanel not found");
-        let window: id = msg_send![panel_class, alloc];
-        let window: id = msg_send![
+        let window: Id = msg_send![panel_class, alloc];
+        let window: Id = msg_send![
             window,
             initWithContentRect: frame
             styleMask: style_mask
@@ -233,7 +233,7 @@ unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
         }
 
         let _: () = msg_send![window, setOpaque: false];
-        let clear: id = msg_send![AnyClass::get("NSColor").expect("NSColor not found"), clearColor];
+        let clear: Id = msg_send![AnyClass::get("NSColor").expect("NSColor not found"), clearColor];
         let _: () = msg_send![window, setBackgroundColor: clear];
         let _: () = msg_send![window, setIgnoresMouseEvents: false];
         let _: () = msg_send![window, setReleasedWhenClosed: false];
@@ -249,23 +249,23 @@ unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
             &CGSize::new(ICON_SIZE, ICON_SIZE),
         );
         let view_class = AnyClass::get("NSView").expect("NSView not found");
-        let bg_view: id = msg_send![view_class, alloc];
-        let bg_view: id = msg_send![bg_view, initWithFrame: content_frame];
+        let bg_view: Id = msg_send![view_class, alloc];
+        let bg_view: Id = msg_send![bg_view, initWithFrame: content_frame];
         let _: () = msg_send![bg_view, setWantsLayer: true];
-        let bg_layer: id = msg_send![bg_view, layer];
+        let bg_layer: Id = msg_send![bg_view, layer];
         // Transparent background
-        let clear_color: id = msg_send![AnyClass::get("NSColor").expect("NSColor not found"), clearColor];
-        let cg_clear: id = msg_send![clear_color, CGColor];
+        let clear_color: Id = msg_send![AnyClass::get("NSColor").expect("NSColor not found"), clearColor];
+        let cg_clear: Id = msg_send![clear_color, CGColor];
         let _: () = msg_send![bg_layer, setBackgroundColor: cg_clear];
 
         // 💡 label - centered vertically
         let text_field_class = AnyClass::get("NSTextField").expect("NSTextField not found");
-        let label: id = msg_send![text_field_class, alloc];
+        let label: Id = msg_send![text_field_class, alloc];
         let label_frame = CGRect::new(
             &CGPoint::new(0.0, (ICON_SIZE - 20.0) / 2.0),
             &CGSize::new(ICON_SIZE, 20.0),
         );
-        let label: id = msg_send![label, initWithFrame: label_frame];
+        let label: Id = msg_send![label, initWithFrame: label_frame];
         let emoji = crate::objc2_compat::ns_string("💡");
         let _: () = msg_send![label, setStringValue: emoji];
         let _: () = msg_send![label, setBezeled: false];
@@ -276,7 +276,7 @@ unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
         let _: () = msg_send![label, setAlignment: 1_i64]; // NSTextAlignmentCenter
                                                            // Font size
         let font_class = AnyClass::get("NSFont").expect("NSFont not found");
-        let font: id = msg_send![font_class, systemFontOfSize: 20.0_f64];
+        let font: Id = msg_send![font_class, systemFontOfSize: 20.0_f64];
         let _: () = msg_send![label, setFont: font];
 
         let _: () = msg_send![bg_view, addSubview: label];
@@ -286,7 +286,7 @@ unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
     }
 
     // Reposition.
-    let window = state.window as id;
+    let window = state.window as Id;
     let new_frame = CGRect::new(
         &CGPoint::new(x as f64, mac_y),
         &CGSize::new(ICON_SIZE, ICON_SIZE),
@@ -298,10 +298,10 @@ unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
 #[cfg(target_os = "macos")]
 unsafe fn hide_native_icon(state: &NativeIconWindow) {
     use objc2::msg_send;
-    type id = *mut objc2::runtime::AnyObject;
-    const NIL: id = std::ptr::null_mut();
+    type Id = *mut objc2::runtime::AnyObject;
+    const NIL: Id = std::ptr::null_mut();
     if state.window != 0 {
-        let window = state.window as id;
+        let window = state.window as Id;
         let _: () = msg_send![window, orderOut: NIL];
     }
 }
@@ -372,17 +372,17 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
             use objc2::msg_send;
             use objc2::runtime::AnyClass;
 
-            type id = *mut objc2::runtime::AnyObject;
-            const NIL: id = std::ptr::null_mut();
+            type Id = *mut objc2::runtime::AnyObject;
+            const NIL: Id = std::ptr::null_mut();
 
             unsafe {
-                let ns = ptr as id;
+                let ns = ptr as Id;
                 // Convert to NSNonactivatingPanel — floats above source app
                 // without stealing focus or clearing the text selection.
                 extern "C" {
-                    fn object_setClass(obj: id, cls: id) -> id;
+                    fn object_setClass(obj: Id, cls: Id) -> Id;
                 }
-                let panel_class: id = AnyClass::get("NSPanel").expect("NSPanel not found") as *const _ as id;
+                let panel_class: Id = AnyClass::get("NSPanel").expect("NSPanel not found") as *const _ as Id;
                 object_setClass(ns, panel_class);
                 let cur_mask: usize = msg_send![ns, styleMask];
                 let _: () = msg_send![ns, setStyleMask: cur_mask | 128_usize];
@@ -395,12 +395,12 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
 
                 // Activate app so the popup receives mouse events
                 let app_class = AnyClass::get("NSApplication").expect("NSApplication not found");
-                let app_ns: id = msg_send![app_class, sharedApplication];
+                let app_ns: Id = msg_send![app_class, sharedApplication];
                 let _: () = msg_send![app_ns, activateIgnoringOtherApps: true];
                 let _: () = msg_send![ns, makeKeyAndOrderFront: NIL];
 
                 // Set first responder to enable hover/click events
-                let content_view: id = msg_send![ns, contentView];
+                let content_view: Id = msg_send![ns, contentView];
                 let _: () = msg_send![ns, makeFirstResponder: content_view];
             }
         }

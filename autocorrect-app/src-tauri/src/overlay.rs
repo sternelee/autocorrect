@@ -183,19 +183,19 @@ unsafe fn ensure_native_overlay(state: &mut NativeOverlayState) -> Result<(), St
     use objc2::runtime::AnyClass;
     use geom::{CGRect, CGPoint, CGSize};
 
-    type id = *mut objc2::runtime::AnyObject;
-    const NIL: id = std::ptr::null_mut();
+    type Id = *mut objc2::runtime::AnyObject;
+    const NIL: Id = std::ptr::null_mut();
 
     if state.window != 0 && state.container != 0 {
         return Ok(());
     }
 
-    let app: id = msg_send![AnyClass::get("NSApplication").unwrap(), sharedApplication];
+    let app: Id = msg_send![AnyClass::get("NSApplication").unwrap(), sharedApplication];
     if app.is_null() {
         return Err("NSApp is nil".to_string());
     }
 
-    let screens: id = msg_send![AnyClass::get("NSScreen").expect("NSScreen not found"), screens];
+    let screens: Id = msg_send![AnyClass::get("NSScreen").expect("NSScreen not found"), screens];
     if screens.is_null() {
         return Err("screen list not found".to_string());
     }
@@ -209,7 +209,7 @@ unsafe fn ensure_native_overlay(state: &mut NativeOverlayState) -> Result<(), St
     let mut max_x = f64::MIN;
     let mut max_y = f64::MIN;
     for idx in 0..count {
-        let screen: id = msg_send![screens, objectAtIndex: idx];
+        let screen: Id = msg_send![screens, objectAtIndex: idx];
         if screen.is_null() {
             continue;
         }
@@ -240,8 +240,8 @@ unsafe fn ensure_native_overlay(state: &mut NativeOverlayState) -> Result<(), St
 
     // NSNonactivatingPanelMask (1 << 7) allows the panel to stay on top without taking focus.
     let style_mask = 128_u64; // NSBorderlessWindowMask (0) | NSNonactivatingPanelMask (128)
-    let window: id = msg_send![AnyClass::get("NSPanel").expect("NSPanel not found"), alloc];
-    let window: id = msg_send![
+    let window: Id = msg_send![AnyClass::get("NSPanel").expect("NSPanel not found"), alloc];
+    let window: Id = msg_send![
         window,
         initWithContentRect: frame
         styleMask: style_mask
@@ -254,7 +254,7 @@ unsafe fn ensure_native_overlay(state: &mut NativeOverlayState) -> Result<(), St
     }
 
     let _: () = msg_send![window, setOpaque: false];
-    let clear: id = msg_send![AnyClass::get("NSColor").expect("NSColor not found"), clearColor];
+    let clear: Id = msg_send![AnyClass::get("NSColor").expect("NSColor not found"), clearColor];
     let _: () = msg_send![window, setBackgroundColor: clear];
     let _: () = msg_send![window, setIgnoresMouseEvents: true];
     let _: () = msg_send![window, setReleasedWhenClosed: false];
@@ -264,8 +264,8 @@ unsafe fn ensure_native_overlay(state: &mut NativeOverlayState) -> Result<(), St
     let _: () = msg_send![window, setCollectionBehavior: (1u64 << 0) | (1u64 << 7)];
     let _: () = msg_send![window, setLevel: 2000_i64];
 
-    let content: id = msg_send![AnyClass::get("NSView").expect("NSView not found"), alloc];
-    let content: id = msg_send![content, initWithFrame: frame];
+    let content: Id = msg_send![AnyClass::get("NSView").expect("NSView not found"), alloc];
+    let content: Id = msg_send![content, initWithFrame: frame];
     if content.is_null() {
         return Err("failed to create overlay content view".to_string());
     }
@@ -330,15 +330,15 @@ unsafe fn render_native_markers(
     use objc2::runtime::AnyClass;
     use geom::{CGRect, CGPoint, CGSize};
 
-    type id = *mut objc2::runtime::AnyObject;
-    const NIL: id = std::ptr::null_mut();
+    type Id = *mut objc2::runtime::AnyObject;
+    const NIL: Id = std::ptr::null_mut();
 
     ensure_native_overlay(state)?;
-    let window = state.window as id;
-    let container = state.container as id;
+    let window = state.window as Id;
+    let container = state.container as Id;
 
     for marker_view in state.marker_views.drain(..) {
-        let _: () = msg_send![marker_view as id, removeFromSuperview];
+        let _: () = msg_send![marker_view as Id, removeFromSuperview];
     }
 
     if markers.is_empty() {
@@ -359,9 +359,9 @@ unsafe fn render_native_markers(
     let to_local =
         |x: f64, y_tl: f64| -> (f64, f64) { (x - origin_x, desktop_top_y - y_tl - origin_y) };
 
-    let make_cg_color = |r: f64, g: f64, b: f64, a: f64| -> id {
+    let make_cg_color = |r: f64, g: f64, b: f64, a: f64| -> Id {
         let ns_color_class = AnyClass::get("NSColor").expect("NSColor not found");
-        let ns: id = msg_send![ns_color_class, colorWithCalibratedRed: r green: g blue: b alpha: a];
+        let ns: Id = msg_send![ns_color_class, colorWithCalibratedRed: r green: g blue: b alpha: a];
         msg_send![ns, CGColor]
     };
 
@@ -393,8 +393,8 @@ unsafe fn render_native_markers(
                     &CGSize::new(w, view_h),
                 );
                 let view_class = AnyClass::get("NSView").expect("NSView not found");
-                let view: id = msg_send![view_class, alloc];
-                let view: id = msg_send![view, initWithFrame: rect];
+                let view: Id = msg_send![view_class, alloc];
+                let view: Id = msg_send![view, initWithFrame: rect];
                 let _: () = msg_send![view, setWantsLayer: true];
 
                 // Build the bezier path in view-local coordinates.
@@ -431,18 +431,18 @@ unsafe fn render_native_markers(
 
                 // Create CAShapeLayer and configure it.
                 let shape_class = AnyClass::get("CAShapeLayer").expect("CAShapeLayer not found");
-                let shape: id = msg_send![shape_class, layer];
+                let shape: Id = msg_send![shape_class, layer];
                 let _: () = msg_send![shape, setPath: path];
                 CGPathRelease(path);
 
                 let cg_color = make_cg_color(color.0, color.1, color.2, color.3);
                 let _: () = msg_send![shape, setStrokeColor: cg_color];
-                let clear_ns: id = msg_send![AnyClass::get("NSColor").expect("NSColor not found"), clearColor];
-                let clear_cg: id = msg_send![clear_ns, CGColor];
+                let clear_ns: Id = msg_send![AnyClass::get("NSColor").expect("NSColor not found"), clearColor];
+                let clear_cg: Id = msg_send![clear_ns, CGColor];
                 let _: () = msg_send![shape, setFillColor: clear_cg];
                 let _: () = msg_send![shape, setLineWidth: 1.5_f64];
 
-                let view_layer: id = msg_send![view, layer];
+                let view_layer: Id = msg_send![view, layer];
                 let _: () = msg_send![view_layer, addSublayer: shape];
                 let _: () = msg_send![container, addSubview: view];
                 state.marker_views.push(view as usize);
@@ -460,10 +460,10 @@ unsafe fn render_native_markers(
                             &CGSize::new(seg, 2.0),
                         );
                         let view_class = AnyClass::get("NSView").expect("NSView not found");
-                        let view: id = msg_send![view_class, alloc];
-                        let view: id = msg_send![view, initWithFrame: rect];
+                        let view: Id = msg_send![view_class, alloc];
+                        let view: Id = msg_send![view, initWithFrame: rect];
                         let _: () = msg_send![view, setWantsLayer: true];
-                        let layer: id = msg_send![view, layer];
+                        let layer: Id = msg_send![view, layer];
                         let cg = make_cg_color(color.0, color.1, color.2, color.3);
                         let _: () = msg_send![layer, setBackgroundColor: cg];
                         let _: () = msg_send![layer, setCornerRadius: 1.0_f64];
@@ -486,10 +486,10 @@ unsafe fn render_native_markers(
                             &CGSize::new(seg, 2.0),
                         );
                         let view_class = AnyClass::get("NSView").expect("NSView not found");
-                        let view: id = msg_send![view_class, alloc];
-                        let view: id = msg_send![view, initWithFrame: rect];
+                        let view: Id = msg_send![view_class, alloc];
+                        let view: Id = msg_send![view, initWithFrame: rect];
                         let _: () = msg_send![view, setWantsLayer: true];
-                        let layer: id = msg_send![view, layer];
+                        let layer: Id = msg_send![view, layer];
                         let cg = make_cg_color(color.0, color.1, color.2, color.3);
                         let _: () = msg_send![layer, setBackgroundColor: cg];
                         let _: () = msg_send![layer, setCornerRadius: 1.0_f64];
@@ -507,10 +507,10 @@ unsafe fn render_native_markers(
                     &CGSize::new(w, 2.0),
                 );
                 let view_class = AnyClass::get("NSView").expect("NSView not found");
-                let view: id = msg_send![view_class, alloc];
-                let view: id = msg_send![view, initWithFrame: rect];
+                let view: Id = msg_send![view_class, alloc];
+                let view: Id = msg_send![view, initWithFrame: rect];
                 let _: () = msg_send![view, setWantsLayer: true];
-                let layer: id = msg_send![view, layer];
+                let layer: Id = msg_send![view, layer];
                 let cg = make_cg_color(color.0, color.1, color.2, color.3);
                 let _: () = msg_send![layer, setBackgroundColor: cg];
                 let _: () = msg_send![layer, setCornerRadius: 1.0_f64];

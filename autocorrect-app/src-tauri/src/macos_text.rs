@@ -5,8 +5,8 @@ use objc2::msg_send;
 use objc2::runtime::{AnyClass, AnyObject};
 
 // Type alias for Objective-C object pointers (Accessibility API uses raw pointers)
-type id = *mut AnyObject;
-const NIL: id = std::ptr::null_mut();
+type Id = *mut AnyObject;
+const NIL: Id = std::ptr::null_mut();
 
 /// Accessibility API Error
 #[derive(Debug, thiserror::Error)]
@@ -43,7 +43,7 @@ pub struct FocusedTextContext {
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
-    fn AXUIElementCreateSystemWide() -> id;
+    fn AXUIElementCreateSystemWide() -> Id;
     fn AXIsProcessTrusted() -> bool;
 }
 
@@ -72,7 +72,7 @@ pub fn get_focused_element_data(range_start: usize, range_len: usize) -> Result<
 
     unsafe {
         let system_element = AXUIElementCreateSystemWide();
-        let mut focused_element: id = NIL;
+        let mut focused_element: Id = NIL;
 
         // 1. 获取焦点元素
         let k_ax_focused_ui_element_attribute = "AXFocusedUIElement";
@@ -87,7 +87,7 @@ pub fn get_focused_element_data(range_start: usize, range_len: usize) -> Result<
         }
 
         // 2. 获取全文 (用于校验 offset)
-        let mut text_value: id = NIL;
+        let mut text_value: Id = NIL;
         AXUIElementCopyAttributeValue(focused_element, to_ax_string("AXValue"), &mut text_value);
         let full_text = if !text_value.is_null() {
             from_ax_string(text_value)
@@ -96,7 +96,7 @@ pub fn get_focused_element_data(range_start: usize, range_len: usize) -> Result<
         };
 
         // 3. 获取指定范围的屏幕坐标 (NSRect)
-        let mut bounds_value: id = NIL;
+        let mut bounds_value: Id = NIL;
         let range = CFRange {
             location: range_start as i64,
             length: range_len as i64,
@@ -149,7 +149,7 @@ pub fn get_focused_text_context() -> Result<FocusedTextContext> {
 
     unsafe {
         let system_element = AXUIElementCreateSystemWide();
-        let mut focused_element: id = NIL;
+        let mut focused_element: Id = NIL;
 
         let err = AXUIElementCopyAttributeValue(
             system_element,
@@ -168,16 +168,16 @@ pub fn get_focused_text_context() -> Result<FocusedTextContext> {
         let mut bundle_id = String::new();
         if pid > 0 {
             let app_class = AnyClass::get("NSRunningApplication").expect("NSRunningApplication not found");
-            let app: id = msg_send![app_class, runningApplicationWithProcessIdentifier: pid];
+            let app: Id = msg_send![app_class, runningApplicationWithProcessIdentifier: pid];
             if !app.is_null() {
-                let ns_bundle_id: id = msg_send![app, bundleIdentifier];
+                let ns_bundle_id: Id = msg_send![app, bundleIdentifier];
                 if !ns_bundle_id.is_null() {
                     bundle_id = from_ax_string(ns_bundle_id);
                 }
             }
         }
 
-        let mut role_value: id = NIL;
+        let mut role_value: Id = NIL;
         AXUIElementCopyAttributeValue(focused_element, to_ax_string("AXRole"), &mut role_value);
         let role = if !role_value.is_null() {
             from_ax_string(role_value)
@@ -185,7 +185,7 @@ pub fn get_focused_text_context() -> Result<FocusedTextContext> {
             String::new()
         };
 
-        let mut editable_value: id = NIL;
+        let mut editable_value: Id = NIL;
         AXUIElementCopyAttributeValue(
             focused_element,
             to_ax_string("AXEditable"),
@@ -194,7 +194,7 @@ pub fn get_focused_text_context() -> Result<FocusedTextContext> {
         let editable = from_ax_bool(editable_value);
 
         // 优先全文 (AXValue)
-        let mut text_value: id = NIL;
+        let mut text_value: Id = NIL;
         AXUIElementCopyAttributeValue(focused_element, to_ax_string("AXValue"), &mut text_value);
 
         // Slack/Electron fallback (AXSelectedText)
@@ -214,7 +214,7 @@ pub fn get_focused_text_context() -> Result<FocusedTextContext> {
             if is_string {
                 let full_text = from_ax_string(text_value);
                 if !full_text.is_empty() {
-                    let mut selected_range_value: id = NIL;
+                    let mut selected_range_value: Id = NIL;
                     AXUIElementCopyAttributeValue(
                         focused_element,
                         to_ax_string("AXSelectedTextRange"),
@@ -285,7 +285,7 @@ pub fn get_focused_range_bounds(range_start: usize, range_len: usize) -> Result<
 
     unsafe {
         let system_element = AXUIElementCreateSystemWide();
-        let mut focused_element: id = NIL;
+        let mut focused_element: Id = NIL;
         let err = AXUIElementCopyAttributeValue(
             system_element,
             to_ax_string("AXFocusedUIElement"),
@@ -296,7 +296,7 @@ pub fn get_focused_range_bounds(range_start: usize, range_len: usize) -> Result<
             return Err(AccessibilityError::NoFocusedElement);
         }
 
-        let mut bounds_value: id = NIL;
+        let mut bounds_value: Id = NIL;
         let range = CFRange {
             location: range_start as i64,
             length: range_len as i64,
@@ -349,7 +349,7 @@ pub fn get_focused_caret_bounds() -> Result<CGRect> {
 
     unsafe {
         let system_element = AXUIElementCreateSystemWide();
-        let mut focused_element: id = NIL;
+        let mut focused_element: Id = NIL;
         let err = AXUIElementCopyAttributeValue(
             system_element,
             to_ax_string("AXFocusedUIElement"),
@@ -361,7 +361,7 @@ pub fn get_focused_caret_bounds() -> Result<CGRect> {
             return Err(AccessibilityError::NoFocusedElement);
         }
 
-        let mut selected_range_value: id = NIL;
+        let mut selected_range_value: Id = NIL;
         AXUIElementCopyAttributeValue(
             focused_element,
             to_ax_string("AXSelectedTextRange"),
@@ -402,7 +402,7 @@ pub fn get_focused_element_bounds() -> Result<CGRect> {
 
     unsafe {
         let system_element = AXUIElementCreateSystemWide();
-        let mut focused_element: id = NIL;
+        let mut focused_element: Id = NIL;
         let err = AXUIElementCopyAttributeValue(
             system_element,
             to_ax_string("AXFocusedUIElement"),
@@ -414,7 +414,7 @@ pub fn get_focused_element_bounds() -> Result<CGRect> {
             return Err(AccessibilityError::NoFocusedElement);
         }
 
-        let mut frame_value: id = NIL;
+        let mut frame_value: Id = NIL;
         AXUIElementCopyAttributeValue(focused_element, to_ax_string("AXFrame"), &mut frame_value);
         log::info!(
             "[DIAG] get_focused_element_bounds: AXFrame available={}",
@@ -446,7 +446,7 @@ pub fn get_selected_text() -> Result<String> {
 
     unsafe {
         let system_element = AXUIElementCreateSystemWide();
-        let mut focused_element: id = NIL;
+        let mut focused_element: Id = NIL;
 
         let err = AXUIElementCopyAttributeValue(
             system_element,
@@ -458,7 +458,7 @@ pub fn get_selected_text() -> Result<String> {
             return Err(AccessibilityError::NoFocusedElement);
         }
 
-        let mut selected_text: id = NIL;
+        let mut selected_text: Id = NIL;
         let err_selected = AXUIElementCopyAttributeValue(
             focused_element,
             to_ax_string("AXSelectedText"),
@@ -488,7 +488,7 @@ pub fn get_selected_text_bounds() -> Result<(i32, i32, i32, i32)> {
 
     unsafe {
         let system_element = AXUIElementCreateSystemWide();
-        let mut focused_element: id = NIL;
+        let mut focused_element: Id = NIL;
 
         let err = AXUIElementCopyAttributeValue(
             system_element,
@@ -501,7 +501,7 @@ pub fn get_selected_text_bounds() -> Result<(i32, i32, i32, i32)> {
         }
 
         // 获取选区范围
-        let mut selected_range_value: id = NIL;
+        let mut selected_range_value: Id = NIL;
         let err_range = AXUIElementCopyAttributeValue(
             focused_element,
             to_ax_string("AXSelectedTextRange"),
@@ -531,7 +531,7 @@ pub fn get_selected_text_bounds() -> Result<(i32, i32, i32, i32)> {
                 &selected_range as *const _ as *const std::ffi::c_void,
             );
 
-            let mut bounds_value: id = NIL;
+            let mut bounds_value: Id = NIL;
             let err_bounds = AXUIElementCopyParameterizedAttributeValue(
                 focused_element,
                 to_ax_string("AXBoundsForRange"),
@@ -590,32 +590,32 @@ const K_AXVALUE_CGRECT_TYPE: i32 = 3;
 
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
-    fn AXUIElementCopyAttributeValue(element: id, attribute: id, value: *mut id) -> i32;
-    fn AXUIElementSetAttributeValue(element: id, attribute: id, value: id) -> i32;
-    fn AXUIElementGetPid(element: id, pid: *mut i32) -> i32;
+    fn AXUIElementCopyAttributeValue(element: Id, attribute: Id, value: *mut Id) -> i32;
+    fn AXUIElementSetAttributeValue(element: Id, attribute: Id, value: Id) -> i32;
+    fn AXUIElementGetPid(element: Id, pid: *mut i32) -> i32;
     fn AXUIElementCopyParameterizedAttributeValue(
-        element: id,
-        attribute: id,
-        parameter: id,
-        value: *mut id,
+        element: Id,
+        attribute: Id,
+        parameter: Id,
+        value: *mut Id,
     ) -> i32;
-    fn AXValueCreate(the_type: i32, value_ptr: *const std::ffi::c_void) -> id;
-    fn AXValueGetValue(value: id, the_type: i32, value_ptr: *mut std::ffi::c_void) -> bool;
+    fn AXValueCreate(the_type: i32, value_ptr: *const std::ffi::c_void) -> Id;
+    fn AXValueGetValue(value: Id, the_type: i32, value_ptr: *mut std::ffi::c_void) -> bool;
 }
 
-fn to_ax_string(s: &str) -> id {
+fn to_ax_string(s: &str) -> Id {
     unsafe {
         let c_string = match std::ffi::CString::new(s) {
             Ok(v) => v,
             Err(_) => return NIL,
         };
         let ns_string_class = AnyClass::get("NSString").expect("NSString not found");
-        let ns_string: id = msg_send![ns_string_class, stringWithUTF8String: c_string.as_ptr()];
+        let ns_string: Id = msg_send![ns_string_class, stringWithUTF8String: c_string.as_ptr()];
         ns_string
     }
 }
 
-fn from_ax_string(ns_string: id) -> String {
+fn from_ax_string(ns_string: Id) -> String {
     unsafe {
         let c_str: *const std::os::raw::c_char = msg_send![ns_string, UTF8String];
         if c_str.is_null() {
@@ -628,7 +628,7 @@ fn from_ax_string(ns_string: id) -> String {
     }
 }
 
-fn from_ax_bool(ns_value: id) -> bool {
+fn from_ax_bool(ns_value: Id) -> bool {
     unsafe {
         if ns_value.is_null() {
             return false;
@@ -692,7 +692,7 @@ pub fn select_text_range(start: usize, length: usize) -> Result<()> {
 
     unsafe {
         let system_element = AXUIElementCreateSystemWide();
-        let mut focused_element: id = NIL;
+        let mut focused_element: Id = NIL;
         let err = AXUIElementCopyAttributeValue(
             system_element,
             to_ax_string("AXFocusedUIElement"),
