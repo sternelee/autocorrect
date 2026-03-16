@@ -53,21 +53,21 @@ mod geom {
     }
 
     unsafe impl Encode for CGPoint {
-        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("_CGPoint", &[
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("CGPoint", &[
             objc2::Encoding::Double,
             objc2::Encoding::Double,
         ]);
     }
 
     unsafe impl Encode for CGSize {
-        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("_CGSize", &[
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("CGSize", &[
             objc2::Encoding::Double,
             objc2::Encoding::Double,
         ]);
     }
 
     unsafe impl Encode for CGRect {
-        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("_CGRect", &[
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("CGRect", &[
             <CGPoint>::ENCODING,
             <CGSize>::ENCODING,
         ]);
@@ -199,7 +199,11 @@ unsafe fn ensure_native_overlay(state: &mut NativeOverlayState) -> Result<(), St
     if screens.is_null() {
         return Err("screen list not found".to_string());
     }
-    let count: u64 = msg_send![screens, count];
+    // NSScreen.screens returns a Swift Array on modern macOS, which is toll-free bridged to CFArray
+    // Use CFArrayGetCount to safely get the count without type encoding issues
+    let count = unsafe {
+        core_foundation::array::CFArrayGetCount(screens as core_foundation::array::CFArrayRef)
+    };
     if count == 0 {
         return Err("no screens found".to_string());
     }
@@ -245,7 +249,7 @@ unsafe fn ensure_native_overlay(state: &mut NativeOverlayState) -> Result<(), St
         window,
         initWithContentRect: frame
         styleMask: style_mask
-        backing: 2 // NSBackingStoreBuffered
+        backing: 2_u64 // NSBackingStoreBuffered
         defer: false
     ];
 
@@ -359,7 +363,7 @@ unsafe fn render_native_markers(
     let to_local =
         |x: f64, y_tl: f64| -> (f64, f64) { (x - origin_x, desktop_top_y - y_tl - origin_y) };
 
-    let make_cg_color = |r: f64, g: f64, b: f64, a: f64| -> Id {
+    let make_cg_color = |r: f64, g: f64, b: f64, a: f64| -> *mut std::ffi::c_void {
         let ns_color_class = AnyClass::get("NSColor").expect("NSColor not found");
         let ns: Id = msg_send![ns_color_class, colorWithCalibratedRed: r green: g blue: b alpha: a];
         msg_send![ns, CGColor]
@@ -438,7 +442,7 @@ unsafe fn render_native_markers(
                 let cg_color = make_cg_color(color.0, color.1, color.2, color.3);
                 let _: () = msg_send![shape, setStrokeColor: cg_color];
                 let clear_ns: Id = msg_send![AnyClass::get("NSColor").expect("NSColor not found"), clearColor];
-                let clear_cg: Id = msg_send![clear_ns, CGColor];
+                let clear_cg: *mut std::ffi::c_void = msg_send![clear_ns, CGColor];
                 let _: () = msg_send![shape, setFillColor: clear_cg];
                 let _: () = msg_send![shape, setLineWidth: 1.5_f64];
 

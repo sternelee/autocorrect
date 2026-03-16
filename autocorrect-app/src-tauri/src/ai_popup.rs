@@ -53,21 +53,21 @@ mod geom {
     }
 
     unsafe impl Encode for CGPoint {
-        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("_CGPoint", &[
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("CGPoint", &[
             objc2::Encoding::Double,
             objc2::Encoding::Double,
         ]);
     }
 
     unsafe impl Encode for CGSize {
-        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("_CGSize", &[
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("CGSize", &[
             objc2::Encoding::Double,
             objc2::Encoding::Double,
         ]);
     }
 
     unsafe impl Encode for CGRect {
-        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("_CGRect", &[
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("CGRect", &[
             <CGPoint>::ENCODING,
             <CGSize>::ENCODING,
         ]);
@@ -255,7 +255,8 @@ unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
         let bg_layer: Id = msg_send![bg_view, layer];
         // Transparent background
         let clear_color: Id = msg_send![AnyClass::get("NSColor").expect("NSColor not found"), clearColor];
-        let cg_clear: Id = msg_send![clear_color, CGColor];
+        // CGColor returns a Core Foundation pointer, not an Objective-C object
+        let cg_clear: *mut std::ffi::c_void = msg_send![clear_color, CGColor];
         let _: () = msg_send![bg_layer, setBackgroundColor: cg_clear];
 
         // 💡 label - centered vertically

@@ -47,21 +47,21 @@ mod geom {
     }
 
     unsafe impl Encode for CGPoint {
-        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("_CGPoint", &[
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("CGPoint", &[
             objc2::Encoding::Double,
             objc2::Encoding::Double,
         ]);
     }
 
     unsafe impl Encode for CGSize {
-        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("_CGSize", &[
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("CGSize", &[
             objc2::Encoding::Double,
             objc2::Encoding::Double,
         ]);
     }
 
     unsafe impl Encode for CGRect {
-        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("_CGRect", &[
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("CGRect", &[
             <CGPoint>::ENCODING,
             <CGSize>::ENCODING,
         ]);
@@ -273,7 +273,9 @@ pub fn run() {
                         let mut max_x = f64::MIN;
                         let mut max_y = f64::MIN;
                         let screens: Id = msg_send![AnyClass::get("NSScreen").expect("NSScreen not found"), screens];
-                        let count: u64 = msg_send![screens, count];
+                        // NSScreen.screens returns a Swift Array on modern macOS, which is toll-free bridged to CFArray
+                        // Use CFArrayGetCount to safely get the count without type encoding issues
+                        let count = core_foundation::array::CFArrayGetCount(screens as core_foundation::array::CFArrayRef);
                         for idx in 0..count {
                             let screen: Id = msg_send![screens, objectAtIndex: idx];
                             let frame: CGRect = msg_send![screen, frame];
