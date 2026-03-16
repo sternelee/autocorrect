@@ -1,4 +1,5 @@
 use super::errors::Error;
+use super::ignored_apps::IgnoredApp;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
@@ -39,6 +40,8 @@ pub struct AppSettings {
     pub underline_color: String,
     #[serde(default = "default_ui_language")]
     pub ui_language: String,
+    #[serde(default)]
+    pub ignored_apps: Vec<IgnoredApp>,
 }
 
 impl Default for AppSettings {
@@ -57,6 +60,7 @@ impl Default for AppSettings {
             underline_style: default_underline_style(),
             underline_color: default_underline_color(),
             ui_language: default_ui_language(),
+            ignored_apps: Vec::new(),
         }
     }
 }

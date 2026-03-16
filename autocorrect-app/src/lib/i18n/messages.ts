@@ -119,6 +119,12 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
       "Activate spell check with keyboard shortcut from any application",
     "settings.currentHotkey": "Current Hotkey",
     "settings.loading": "Loading...",
+    "common.loading": "Loading...",
+    "common.save": "Save",
+    "common.cancel": "Cancel",
+    "common.confirm": "Confirm",
+    "common.delete": "Delete",
+    "common.edit": "Edit",
     "settings.changeHotkey": "Change Hotkey",
     "settings.resetDefault": "Reset to Default",
     "settings.changeHotkeyTitle": "Change Hotkey",
@@ -144,7 +150,8 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
     "settings.configError": "Configuration Error",
 
     "customCorr.title": "Custom Typo Corrections",
-    "customCorr.desc": "Define your own typo → correction mappings. Changes take effect immediately.",
+    "customCorr.desc":
+      "Define your own typo → correction mappings. Changes take effect immediately.",
     "customCorr.addNew": "Add New",
     "customCorr.addTitle": "Add New Correction",
     "customCorr.typo": "Typo",
@@ -155,9 +162,11 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
     "customCorr.edit": "Edit",
     "customCorr.delete": "Delete",
     "customCorr.deleteTitle": "Delete correction?",
-    "customCorr.deleteDesc": "Remove \"{typo}\" → \"{correction}\" from custom corrections. This cannot be undone.",
-    "customCorr.empty": "No custom corrections yet. Add one above to get started!",
-    "customCorr.example": "Example: \"whts\" → \"what's\", \"teh\" → \"the\"",
+    "customCorr.deleteDesc":
+      'Remove "{typo}" → "{correction}" from custom corrections. This cannot be undone.',
+    "customCorr.empty":
+      "No custom corrections yet. Add one above to get started!",
+    "customCorr.example": 'Example: "whts" → "what\'s", "teh" → "the"',
     "customCorr.total": "Total: {count} custom corrections",
     "customCorr.required": "Both typo and correction are required",
     "customCorr.loadError": "Failed to load corrections",
@@ -168,11 +177,26 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
     "customCorr.deleted": "Deleted: {typo}",
     "customCorr.updated": "Updated: {typo} → {correction}",
 
+    "settings.ignoredApps": "Ignored Apps",
+    "settings.ignoredAppsDesc":
+      "Apps where corrections and AI features are suppressed.",
+    "settings.ignoredApps.disablePopup": "Disable Popup",
+    "settings.ignoredApps.disableOverlay": "Disable Overlay",
+    "settings.ignoredApps.empty":
+      "No ignored apps yet. Use the Ignore button in the correction popup to add apps here.",
+    "settings.ignoredApps.deleteTitle": "Remove ignored app?",
+    "settings.ignoredApps.deleteDesc": '"{name}" will show corrections again.',
+
     "popup.correct": "Correct spelling",
     "popup.title": "AutoCorrect",
     "popup.close": "Close (Esc)",
     "popup.saved": "Saved",
     "popup.saveDict": "Save to dictionary",
+    "popup.ignore": "Ignore",
+    "popup.ignoreTooltip":
+      "Ignore this app — won't show corrections here again",
+    "popup.ignored": "Ignored {name}",
+    "popup.ignoreError": "Could not get app info",
 
     "aipopup.tools": "✦ AI Tools",
     "aipopup.close": "Close",
@@ -296,6 +320,12 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
     "settings.hotkeyDesc": "在任意应用中通过快捷键触发拼写检查",
     "settings.currentHotkey": "当前快捷键",
     "settings.loading": "加载中...",
+    "common.loading": "加载中...",
+    "common.save": "保存",
+    "common.cancel": "取消",
+    "common.confirm": "确认",
+    "common.delete": "删除",
+    "common.edit": "编辑",
     "settings.changeHotkey": "修改快捷键",
     "settings.resetDefault": "恢复默认",
     "settings.changeHotkeyTitle": "修改快捷键",
@@ -331,7 +361,8 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
     "customCorr.edit": "编辑",
     "customCorr.delete": "删除",
     "customCorr.deleteTitle": "确定删除？",
-    "customCorr.deleteDesc": "从自定义纠错中移除「{typo}」→「{correction}」。此操作无法撤销。",
+    "customCorr.deleteDesc":
+      "从自定义纠错中移除「{typo}」→「{correction}」。此操作无法撤销。",
     "customCorr.empty": "暂无自定义纠错。在上方添加一个以开始使用！",
     "customCorr.example": "示例：「whts」→「what's」，「teh」→「the」",
     "customCorr.total": "共计：{count} 条自定义纠错",
@@ -344,11 +375,24 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
     "customCorr.deleted": "已删除：{typo}",
     "customCorr.updated": "已更新：{typo} → {correction}",
 
+    "settings.ignoredApps": "忽略的应用",
+    "settings.ignoredAppsDesc": "不启用校验和 AI 功能的应用列表。",
+    "settings.ignoredApps.disablePopup": "禁用弹窗",
+    "settings.ignoredApps.disableOverlay": "禁用下划线",
+    "settings.ignoredApps.empty":
+      "暂无忽略的应用。通过弹窗中的「忽略」按钮添加。",
+    "settings.ignoredApps.deleteTitle": "移除忽略的应用？",
+    "settings.ignoredApps.deleteDesc": "{name} 将重新启用校验和 AI 功能。",
+
     "popup.correct": "修正拼写",
     "popup.title": "AutoCorrect",
     "popup.close": "关闭（Esc）",
     "popup.saved": "已保存",
     "popup.saveDict": "保存到词典",
+    "popup.ignore": "忽略",
+    "popup.ignoreTooltip": "忽略该应用，不再对其启用校验和 AI 功能",
+    "popup.ignored": "已忽略 {name}",
+    "popup.ignoreError": "无法获取应用信息",
 
     "aipopup.tools": "✦ AI 工具",
     "aipopup.close": "关闭",

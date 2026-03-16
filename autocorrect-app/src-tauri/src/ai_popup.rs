@@ -84,6 +84,7 @@ pub struct AiPopupState {
     pub icon_size: (i32, i32),
     pub selected_text: String,
     pub source_app_name: Option<String>,
+    pub source_bundle_id: Option<String>,
 }
 
 impl AiPopupState {
@@ -95,6 +96,7 @@ impl AiPopupState {
             icon_size: (36, 36),
             selected_text: String::new(),
             source_app_name: None,
+            source_bundle_id: None,
         }
     }
 }
@@ -143,6 +145,7 @@ pub fn show_ai_icon(app: &AppHandle, x: i32, y: i32, selected_text: String) {
             #[cfg(target_os = "macos")]
             {
                 s.source_app_name = crate::popup::get_frontmost_app_name_macos();
+                s.source_bundle_id = crate::popup::get_frontmost_app_bundle_id_macos();
             }
         }
     }
@@ -515,6 +518,7 @@ pub fn get_ai_popup_state(state: State<SharedAiPopupState>) -> Result<serde_json
         "popupVisible": s.popup_visible,
         "selectedText": s.selected_text,
         "sourceAppName": s.source_app_name,
+        "sourceBundleId": s.source_bundle_id,
     }))
 }
 

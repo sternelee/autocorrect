@@ -1,4 +1,5 @@
 <script lang="ts">
+  $locale;
   import { invoke } from "@tauri-apps/api/core";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -15,7 +16,6 @@
   } from "$lib/components/ui/alert-dialog";
   import { AlertCircle, Plus, Trash2, Edit, Save, X } from "lucide-svelte";
   import { locale, t } from "$lib/i18n";
-  $locale;
 
   // Reactive translation helper
   const tr = $derived((key: string, params?: Record<string, string | number>) => {
@@ -381,7 +381,7 @@
                           <AlertDialogCancel>{tr('customCorr.cancel')}</AlertDialogCancel>
                           <AlertDialogAction
                             onclick={() => deleteCorrection(correction.typo)}
-                            class="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                            class="bg-destructive/80 text-white hover:bg-destructive"
                           >
                             {tr('customCorr.delete')}
                           </AlertDialogAction>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  $locale;
   import { invoke } from "@tauri-apps/api/core";
   import { Button } from "$lib/components/ui/button";
   import {
@@ -20,8 +21,8 @@
     Keyboard,
   } from "lucide-svelte";
   import CustomCorrectionsManager from "./CustomCorrectionsManager.svelte";
+  import IgnoredAppsManager from "./IgnoredAppsManager.svelte";
   import { locale, t, setLocale } from "$lib/i18n";
-  $locale;
 
   // Reactive translation helper - use in template with {tr("key")}
   const tr = $derived((key: string, params?: Record<string, string | number>) => {
@@ -508,7 +509,7 @@
 
     // Function keys - use key as it's more reliable
     if (key.startsWith("F") && key.length <= 3) {
-      const num = parseIntr(key.substring(1));
+      const num = parseInt(key.substring(1));
       if (num >= 1 && num <= 12) return key;
     }
 
@@ -518,12 +519,12 @@
     }
 
     // Fallback: try using key for letters
-    if (/^[a-zA-Z]$/.testr(key)) {
+    if (/^[a-zA-Z]$/.test(key)) {
       return "Key" + key.toUpperCase();
     }
 
     // Number keys
-    if (/^[0-9]$/.testr(key)) {
+    if (/^[0-9]$/.test(key)) {
       return "Num" + key;
     }
     if (code.startsWith("Digit")) {
@@ -556,7 +557,7 @@
     return parts.join("+");
   }
 
-  async function saveRecordedShortcutr() {
+  async function saveRecordedShortcut() {
     if (!recordedShortcut) return;
 
     try {
@@ -978,6 +979,11 @@
         <!-- Custom Typo Corrections Manager -->
         <div class="rounded-lg border p-4">
           <CustomCorrectionsManager />
+        </div>
+
+        <!-- Ignored Apps Manager -->
+        <div class="rounded-lg border p-4">
+          <IgnoredAppsManager />
         </div>
       </div>
 

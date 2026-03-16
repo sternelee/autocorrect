@@ -81,6 +81,10 @@ use commands::default::{read, write};
 use commands::hotkey_config::{
     get_available_keys, get_hotkey_config, reset_hotkey_config, update_hotkey_config,
 };
+use commands::ignored_apps::{
+    add_ignored_app, get_frontmost_app_info, get_ignored_apps, is_app_ignored,
+    remove_ignored_app, update_ignored_app,
+};
 use commands::spellcheck::{
     get_clipboard_text, load_config, save_config, set_clipboard_text, spell_check,
 };
@@ -417,6 +421,18 @@ pub fn run() {
                         Ok(HotkeyEvent::SpellCheckTriggered) => {
                             log::info!("Hotkey triggered, starting spell check workflow");
 
+                            // Check if frontmost app is ignored for popup
+                            let should_trigger = match commands::ignored_apps::get_frontmost_bundle_id_macos()
+                            {
+                                Some(bundle_id) => !is_app_ignored(&app_handle, &bundle_id, true, false),
+                                None => true, // Trigger if we can't get bundle ID
+                            };
+
+                            if !should_trigger {
+                                log::info!("App is ignored for popup, skipping hotkey trigger");
+                                continue;
+                            }
+
                             // Catch any panics to prevent app crashes
                             let result =
                                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -531,6 +547,12 @@ pub fn run() {
             get_custom_corrections_path_cmd,
             ai_grammar_check,
             ai_text_transform,
+            // Ignored apps commands
+            get_ignored_apps,
+            add_ignored_app,
+            update_ignored_app,
+            remove_ignored_app,
+            get_frontmost_app_info,
             // Popup commands
             show_popup,
             hide_popup,
@@ -623,6 +645,13 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                     //     ctx.bundle_id,
                     //     is_terminal
                     // );
+                    overlay_manager.update_markers(vec![]);
+                    return;
+                }
+
+                // Check if app is ignored for overlay
+                if is_app_ignored(app, &ctx.bundle_id, false, true) {
+                    log::info!("[DIAG] App {} is ignored for overlay, skipping", ctx.bundle_id);
                     overlay_manager.update_markers(vec![]);
                     return;
                 }
@@ -830,29 +859,37 @@ fn sync_system_typos(app: &tauri::AppHandle) {
         let mut icon_triggered = false;
         match macos_text::get_selected_text() {
             Ok(sel) if sel.chars().count() >= MIN_SELECTION_CHARS => {
-                // 使用选区 bounds 定位图标到选中文本右上角
-                let (icon_x, icon_y) = match macos_text::get_selected_text_bounds() {
-                    Ok((sx, sy, sw, sh)) => {
-                        log::info!("[AI] selection bounds: x={} y={} w={} h={}", sx, sy, sw, sh);
-                        // 右上角位置: x = 左上角 x + 宽度, y = 左上角 y
-                        (sx + sw + 8, sy - 18)
-                    }
-                    Err(e) => {
-                        log::warn!("[AI] get_selected_text_bounds error: {:?}", e);
-                        // 回退方案：获取鼠标位置
-                        let (cx, cy) = get_cursor_position();
-                        // 图标显示在鼠标位置上方偏右处
-                        (cx + 20, cy - 18)
-                    }
+                // Check if frontmost app is ignored for popup
+                let should_show_icon = match commands::ignored_apps::get_frontmost_bundle_id_macos() {
+                    Some(bundle_id) => !is_app_ignored(app, &bundle_id, true, false),
+                    None => true, // Show if we can't get bundle ID
                 };
-                log::info!(
-                    "[AI] selection={} chars, icon=({},{})",
-                    sel.chars().count(),
-                    icon_x,
-                    icon_y
-                );
-                ai_popup::show_ai_icon(app, icon_x, icon_y as i32, sel);
-                icon_triggered = true;
+
+                if should_show_icon {
+                    // 使用选区 bounds 定位图标到选中文本右上角
+                    let (icon_x, icon_y) = match macos_text::get_selected_text_bounds() {
+                        Ok((sx, sy, sw, sh)) => {
+                            log::info!("[AI] selection bounds: x={} y={} w={} h={}", sx, sy, sw, sh);
+                            // 右上角位置: x = 左上角 x + 宽度, y = 左上角 y
+                            (sx + sw + 8, sy - 18)
+                        }
+                        Err(e) => {
+                            log::warn!("[AI] get_selected_text_bounds error: {:?}", e);
+                            // 回退方案：获取鼠标位置
+                            let (cx, cy) = get_cursor_position();
+                            // 图标显示在鼠标位置上方偏右处
+                            (cx + 20, cy - 18)
+                        }
+                    };
+                    log::info!(
+                        "[AI] selection={} chars, icon=({},{})",
+                        sel.chars().count(),
+                        icon_x,
+                        icon_y
+                    );
+                    ai_popup::show_ai_icon(app, icon_x, icon_y as i32, sel);
+                    icon_triggered = true;
+                }
             }
             Ok(sel) => {
                 log::debug!("[AI] selection too short: {} chars", sel.chars().count());

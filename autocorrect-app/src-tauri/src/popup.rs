@@ -12,9 +12,10 @@ use tauri::{AppHandle, Emitter, Manager, State};
 pub struct PopupState {
     pub is_visible: bool,
     pub position: (i32, i32),
-    original_text: String,
-    suggestion: String,
-    source_app_name: Option<String>,
+    pub original_text: String,
+    pub suggestion: String,
+    pub source_app_name: Option<String>,
+    pub source_bundle_id: Option<String>,
 }
 
 impl PopupState {
@@ -25,6 +26,7 @@ impl PopupState {
             original_text: String::new(),
             suggestion: String::new(),
             source_app_name: None,
+            source_bundle_id: None,
         }
     }
 }
@@ -69,6 +71,7 @@ pub fn show_popup(
             #[cfg(target_os = "macos")]
             {
                 state.source_app_name = get_frontmost_app_name_macos();
+                state.source_bundle_id = get_frontmost_app_bundle_id_macos();
             }
         }
 
@@ -228,7 +231,8 @@ pub fn get_popup_state(state: State<SharedPopupState>) -> Result<serde_json::Val
         "y": state.position.1,
         "originalText": state.original_text,
         "suggestion": state.suggestion,
-        "sourceAppName": state.source_app_name
+        "sourceAppName": state.source_app_name,
+        "sourceBundleId": state.source_bundle_id
     }))
 }
 
@@ -427,6 +431,24 @@ pub fn get_frontmost_app_name_macos() -> Option<String> {
         None
     } else {
         Some(name)
+    }
+}
+
+#[cfg(target_os = "macos")]
+pub fn get_frontmost_app_bundle_id_macos() -> Option<String> {
+    let output = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg("tell application \"System Events\" to get bundle identifier of first application process whose frontmost is true")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let bundle_id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if bundle_id.is_empty() {
+        None
+    } else {
+        Some(bundle_id)
     }
 }
 

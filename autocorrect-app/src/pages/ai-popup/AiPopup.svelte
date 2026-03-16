@@ -35,6 +35,12 @@
   let error = $state("");
   let activeTool = $state<Tool | null>(null);
   let translateLang = $state("English");
+  let ignoreMessage = $state("");
+  let ignoreError = $state(false);
+
+  // Source app info (captured when popup shows)
+  let sourceAppName = $state("");
+  let sourceBundleId = $state("");
 
   const tools: { id: Tool; label: () => string; icon: string }[] = [
     { id: "translate", label: () => tr("aipopup.translate"), icon: "🌐" },
@@ -99,15 +105,75 @@
     await invoke("hide_ai_popup");
   }
 
+  async function ignoreApp() {
+    if (!sourceAppName || !sourceBundleId) {
+      ignoreError = true;
+      ignoreMessage = tr("popup.ignoreError");
+      setTimeout(() => {
+        ignoreMessage = "";
+        ignoreError = false;
+      }, 2000);
+      return;
+    }
+
+    try {
+      await invoke("add_ignored_app", {
+        name: sourceAppName,
+        bundleId: sourceBundleId,
+        ignorePopup: true,
+        ignoreOverlay: true,
+      });
+
+      ignoreMessage = tr("popup.ignored", { name: sourceAppName });
+      setTimeout(() => {
+        close();
+      }, 800);
+    } catch (error) {
+      console.error("Failed to ignore app:", error);
+      ignoreError = true;
+      ignoreMessage = tr("popup.ignoreError");
+      setTimeout(() => {
+        ignoreMessage = "";
+        ignoreError = false;
+      }, 2000);
+    }
+  }
+
   onMount(() => {
+    // Get initial ai popup state (contains source app info)
+    (async () => {
+      try {
+        const state = await invoke<{
+          sourceAppName?: string;
+          sourceBundleId?: string;
+        }>("get_ai_popup_state");
+        sourceAppName = state.sourceAppName || "";
+        sourceBundleId = state.sourceBundleId || "";
+      } catch (e) {
+        console.error("Failed to get ai popup state:", e);
+      }
+    })();
+
     const unlistenPromise = listen<{ selectedText: string }>(
       "ai-popup-show",
-      (e) => {
+      async (e) => {
         selectedText = e.payload.selectedText;
         result = "";
         error = "";
         activeTool = null;
         loading = false;
+
+        // Refresh source app info when popup shows
+        try {
+          const state = await invoke<{
+            sourceAppName?: string;
+            sourceBundleId?: string;
+          }>("get_ai_popup_state");
+          sourceAppName = state.sourceAppName || "";
+          sourceBundleId = state.sourceBundleId || "";
+        } catch (e) {
+          console.error("Failed to get ai popup state:", e);
+        }
       },
     );
 
@@ -151,6 +217,31 @@
     </span>
     <span class="title">{tr("aipopup.tools")}</span>
     <div class="header-actions">
+      {#if ignoreMessage}
+        <span class="ignore-message" class:error={ignoreError}>{ignoreMessage}</span>
+      {/if}
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger>
+            <button class="icon-btn ignore" onclick={ignoreApp}>
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+              </svg>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top">{tr("popup.ignoreTooltip")}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
       <button class="icon-btn close" title={tr("aipopup.close")} onclick={close}>
         <svg
           width="13"
@@ -296,7 +387,35 @@
   .header-actions {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 6px;
+    margin-left: auto;
+  }
+
+  .ignore-message {
+    font-size: 11px;
+    font-weight: 500;
+    color: #059669;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(5, 150, 105, 0.1);
+    white-space: nowrap;
+    animation: fadeIn 0.2s ease;
+  }
+
+  .ignore-message.error {
+    color: #dc2626;
+    background: rgba(220, 38, 38, 0.1);
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
   }
 
   .icon-btn {
@@ -312,6 +431,11 @@
     color: #6b7280;
     transition: background 0.12s, color 0.12s;
     padding: 0;
+  }
+
+  .icon-btn.ignore:hover {
+    background: #fef3c7;
+    color: #f59e0b;
   }
 
   .icon-btn.close:hover {

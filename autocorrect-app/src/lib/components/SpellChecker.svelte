@@ -1,4 +1,5 @@
 <script lang="ts">
+  $locale;
   import { invoke } from "@tauri-apps/api/core";
   import { Button } from "$lib/components/ui/button";
   import {
@@ -12,7 +13,6 @@
   import { Textarea } from "$lib/components/ui/textarea";
   import { Check, RefreshCw, Copy } from "lucide-svelte";
   import { locale, t } from "$lib/i18n";
-  $locale;
 
   // Reactive translation helper
   const tr = $derived((key: string, params?: Record<string, string | number>) => {

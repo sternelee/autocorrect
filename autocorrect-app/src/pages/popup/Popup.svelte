@@ -41,6 +41,12 @@
   let offset = $state<number | null>(null);
   let charLength = $state<number | null>(null);
   let addedToCustom = $state(false);
+  let ignoreMessage = $state("");
+  let ignoreError = $state(false);
+
+  // Source app info (captured when popup shows)
+  let sourceAppName = $state("");
+  let sourceBundleId = $state("");
 
   // For a typo-only popup triggered by hover, we surface the first typo's suggestions as chips.
   // For a full spell-check popup, we show the whole corrected suggestion.
@@ -67,22 +73,48 @@
   );
 
   onMount(() => {
-    const unlistenShow = listen<PopupData>("popup-show", (event) => {
+    // Get initial popup state (contains source app info)
+    (async () => {
+      try {
+        const state = await invoke<{
+          sourceAppName?: string;
+          sourceBundleId?: string;
+        }>("get_popup_state");
+        sourceAppName = state.sourceAppName || "";
+        sourceBundleId = state.sourceBundleId || "";
+      } catch (e) {
+        console.error("Failed to get popup state:", e);
+      }
+    })();
+
+    const unlistenShowPromise = listen<PopupData>("popup-show", async (event) => {
       const data = event.payload;
       originalText = data.originalText;
       suggestion = data.suggestion;
       typos = data.typos || [];
       offset = data.offset ?? null;
       charLength = data.charLength ?? null;
+
+      // Refresh source app info when popup shows
+      try {
+        const state = await invoke<{
+          sourceAppName?: string;
+          sourceBundleId?: string;
+        }>("get_popup_state");
+        sourceAppName = state.sourceAppName || "";
+        sourceBundleId = state.sourceBundleId || "";
+      } catch (e) {
+        console.error("Failed to get popup state:", e);
+      }
     });
 
-    const unlistenHide = listen("popup-hide", () => {
+    const unlistenHidePromise = listen("popup-hide", () => {
       hidePopup();
     });
 
     return () => {
-      unlistenShow.then((fn) => fn());
-      unlistenHide.then((fn) => fn());
+      unlistenShowPromise.then((fn) => fn());
+      unlistenHidePromise.then((fn) => fn());
     };
   });
 
@@ -115,6 +147,8 @@
     suggestion = "";
     typos = [];
     addedToCustom = false;
+    ignoreMessage = "";
+    ignoreError = false;
   }
 
   async function addToCustom() {
@@ -127,6 +161,40 @@
       addedToCustom = true;
     } catch (error) {
       console.error("Failed to add custom correction:", error);
+    }
+  }
+
+  async function ignoreApp() {
+    if (!sourceAppName || !sourceBundleId) {
+      ignoreError = true;
+      ignoreMessage = tr("popup.ignoreError");
+      setTimeout(() => {
+        ignoreMessage = "";
+        ignoreError = false;
+      }, 2000);
+      return;
+    }
+
+    try {
+      await invoke("add_ignored_app", {
+        name: sourceAppName,
+        bundleId: sourceBundleId,
+        ignorePopup: true,
+        ignoreOverlay: true,
+      });
+
+      ignoreMessage = tr("popup.ignored", { name: sourceAppName });
+      setTimeout(() => {
+        reject();
+      }, 800);
+    } catch (error) {
+      console.error("Failed to ignore app:", error);
+      ignoreError = true;
+      ignoreMessage = tr("popup.ignoreError");
+      setTimeout(() => {
+        ignoreMessage = "";
+        ignoreError = false;
+      }, 2000);
     }
   }
 
@@ -163,6 +231,31 @@
     </span>
     <span class="title">{title}</span>
     <div class="header-actions">
+      {#if ignoreMessage}
+        <span class="ignore-message" class:error={ignoreError}>{ignoreMessage}</span>
+      {/if}
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger>
+            <button class="icon-btn ignore" onclick={ignoreApp}>
+              <svg
+                width="13"
+                height="13"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
+              </svg>
+            </button>
+          </TooltipTrigger>
+          <TooltipContent side="top">{tr("popup.ignoreTooltip")}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
       <button class="icon-btn close" title={tr("popup.close")} onclick={reject}>
         <svg
           width="13"
@@ -301,8 +394,36 @@
   .header-actions {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 6px;
+    margin-left: auto;
     -webkit-app-region: no-drag;
+  }
+
+  .ignore-message {
+    font-size: 11px;
+    font-weight: 500;
+    color: #059669;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: rgba(5, 150, 105, 0.1);
+    white-space: nowrap;
+    animation: fadeIn 0.2s ease;
+  }
+
+  .ignore-message.error {
+    color: #dc2626;
+    background: rgba(220, 38, 38, 0.1);
+  }
+
+  @keyframes fadeIn {
+    from {
+      opacity: 0;
+      transform: scale(0.95);
+    }
+    to {
+      opacity: 1;
+      transform: scale(1);
+    }
   }
 
   .icon-btn {
@@ -321,6 +442,11 @@
       color 0.12s;
     padding: 0;
     -webkit-app-region: no-drag;
+  }
+
+  .icon-btn.ignore:hover {
+    background: #fef3c7;
+    color: #f59e0b;
   }
 
   .icon-btn.close:hover {
