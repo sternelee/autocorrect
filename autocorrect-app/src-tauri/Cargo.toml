@@ -45,7 +45,6 @@ unexpected_cfgs = "allow"
 core-foundation = "0.10"
 core-foundation-sys = "0.8"
 core-graphics = "0.24"
-objc = "0.2"
 objc2 = "0.5"
 objc2-foundation = "0.3"
 objc2-app-kit = { version = "0.3", features = ["objc2-core-graphics"] }

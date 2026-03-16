@@ -53,24 +53,22 @@ mod geom {
     }
 
     unsafe impl Encode for CGPoint {
-        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("CGPoint", &[
-            objc2::Encoding::Double,
-            objc2::Encoding::Double,
-        ]);
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct(
+            "CGPoint",
+            &[objc2::Encoding::Double, objc2::Encoding::Double],
+        );
     }
 
     unsafe impl Encode for CGSize {
-        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("CGSize", &[
-            objc2::Encoding::Double,
-            objc2::Encoding::Double,
-        ]);
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct(
+            "CGSize",
+            &[objc2::Encoding::Double, objc2::Encoding::Double],
+        );
     }
 
     unsafe impl Encode for CGRect {
-        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("CGRect", &[
-            <CGPoint>::ENCODING,
-            <CGSize>::ENCODING,
-        ]);
+        const ENCODING: objc2::Encoding =
+            objc2::Encoding::Struct("CGRect", &[<CGPoint>::ENCODING, <CGSize>::ENCODING]);
     }
 }
 
@@ -161,6 +159,7 @@ pub fn show_ai_icon(app: &AppHandle, x: i32, y: i32, selected_text: String) {
 }
 
 /// Hide the native icon (and the popup if visible).
+/// This is the full teardown: clears icon_visible so hover detection stops.
 pub fn hide_ai_icon(app: &AppHandle) {
     let was_visible = app
         .try_state::<SharedAiPopupState>()
@@ -177,6 +176,15 @@ pub fn hide_ai_icon(app: &AppHandle) {
         }
     }
 
+    hide_native_icon_visual(app);
+    hide_ai_popup_internal(app);
+}
+
+/// Hide only the native icon's visual window, without changing `icon_visible`.
+/// Used when the popup opens so that the icon disappears visually, but hover
+/// detection state is preserved — if the popup is later dismissed, the icon
+/// can re-appear without needing a new text selection event.
+fn hide_native_icon_visual(app: &AppHandle) {
     #[cfg(target_os = "macos")]
     if let Some(native) = app.try_state::<SharedNativeIconWindow>() {
         let native = Arc::clone(&native.0);
@@ -186,15 +194,35 @@ pub fn hide_ai_icon(app: &AppHandle) {
             }
         });
     }
+}
 
-    hide_ai_popup_internal(app);
+/// Re-show the native icon NSPanel at its last recorded position.
+/// Called when the popup is dismissed while `icon_visible` is still true,
+/// so the user can hover the icon again to re-open the popup.
+fn show_native_icon_visual(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        let pos = app
+            .try_state::<SharedAiPopupState>()
+            .and_then(|s| s.0.lock().ok().map(|g| g.icon_position));
+        if let Some((x, y)) = pos {
+            if let Some(native) = app.try_state::<SharedNativeIconWindow>() {
+                let native = Arc::clone(&native.0);
+                let _ = app.run_on_main_thread(move || unsafe {
+                    if let Ok(mut guard) = native.lock() {
+                        render_native_icon(&mut guard, x, y);
+                    }
+                });
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
 unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
+    use geom::{CGPoint, CGRect, CGSize};
     use objc2::msg_send;
     use objc2::runtime::AnyClass;
-    use geom::{CGRect, CGPoint, CGSize};
 
     type Id = *mut objc2::runtime::AnyObject;
     const NIL: Id = std::ptr::null_mut();
@@ -203,7 +231,10 @@ unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
 
     // y is in Quartz top-left coords (from CGEvent); NSWindow uses bottom-left.
     let screen_height: f64 = {
-        let screen: Id = msg_send![AnyClass::get("NSScreen").expect("NSScreen not found"), mainScreen];
+        let screen: Id = msg_send![
+            AnyClass::get("NSScreen").expect("NSScreen not found"),
+            mainScreen
+        ];
         if screen.is_null() {
             return;
         }
@@ -233,7 +264,10 @@ unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
         }
 
         let _: () = msg_send![window, setOpaque: false];
-        let clear: Id = msg_send![AnyClass::get("NSColor").expect("NSColor not found"), clearColor];
+        let clear: Id = msg_send![
+            AnyClass::get("NSColor").expect("NSColor not found"),
+            clearColor
+        ];
         let _: () = msg_send![window, setBackgroundColor: clear];
         let _: () = msg_send![window, setIgnoresMouseEvents: false];
         let _: () = msg_send![window, setReleasedWhenClosed: false];
@@ -244,17 +278,18 @@ unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
         let _: () = msg_send![window, setAcceptsMouseMovedEvents: true];
 
         // Clear background view - no background, just emoji
-        let content_frame = CGRect::new(
-            &CGPoint::new(0.0, 0.0),
-            &CGSize::new(ICON_SIZE, ICON_SIZE),
-        );
+        let content_frame =
+            CGRect::new(&CGPoint::new(0.0, 0.0), &CGSize::new(ICON_SIZE, ICON_SIZE));
         let view_class = AnyClass::get("NSView").expect("NSView not found");
         let bg_view: Id = msg_send![view_class, alloc];
         let bg_view: Id = msg_send![bg_view, initWithFrame: content_frame];
         let _: () = msg_send![bg_view, setWantsLayer: true];
         let bg_layer: Id = msg_send![bg_view, layer];
         // Transparent background
-        let clear_color: Id = msg_send![AnyClass::get("NSColor").expect("NSColor not found"), clearColor];
+        let clear_color: Id = msg_send![
+            AnyClass::get("NSColor").expect("NSColor not found"),
+            clearColor
+        ];
         // CGColor returns a Core Foundation pointer, not an Objective-C object
         let cg_clear: *mut std::ffi::c_void = msg_send![clear_color, CGColor];
         let _: () = msg_send![bg_layer, setBackgroundColor: cg_clear];
@@ -310,13 +345,42 @@ unsafe fn hide_native_icon(state: &NativeIconWindow) {
 // ── Popup show / hide (WebView window) ───────────────────────────────────────
 
 fn hide_ai_popup_internal(app: &AppHandle) {
+    let icon_visible = app
+        .try_state::<SharedAiPopupState>()
+        .and_then(|s| s.0.lock().ok().map(|g| g.icon_visible))
+        .unwrap_or(false);
+
     if let Some(state) = app.try_state::<SharedAiPopupState>() {
         if let Ok(mut s) = state.0.lock() {
             s.popup_visible = false;
         }
     }
     if let Some(w) = app.get_webview_window("ai-popup") {
-        let _ = w.hide();
+        #[cfg(target_os = "macos")]
+        {
+            let win = w.clone();
+            let _ = w.run_on_main_thread(move || {
+                if let Ok(ptr) = win.ns_window() {
+                    use objc2::msg_send;
+                    type Id = *mut objc2::runtime::AnyObject;
+                    const NIL: Id = std::ptr::null_mut();
+                    unsafe {
+                        let ns = ptr as Id;
+                        let _: () = msg_send![ns, orderOut: NIL];
+                    }
+                }
+            });
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = w.hide();
+        }
+    }
+
+    // If the icon was still logically visible (popup opened via hover), bring
+    // it back so the user can hover again to re-open the popup.
+    if icon_visible {
+        show_native_icon_visual(app);
     }
 }
 
@@ -349,8 +413,10 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
         None => return Ok(()),
     };
 
-    // Hide the floating icon when popup shows
-    hide_ai_icon(app);
+    // Hide the native icon visually when popup opens, but preserve icon_visible
+    // so that if the popup is dismissed, hover detection can re-trigger the
+    // popup without needing a new text selection event.
+    hide_native_icon_visual(app);
 
     if let Some(state) = app.try_state::<SharedAiPopupState>() {
         if let Ok(mut s) = state.0.lock() {
@@ -361,12 +427,12 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
     // All UI operations (set_position, show, NSWindow tweaks) MUST run on the
     // main thread. Calling them from a background thread silently fails on macOS.
     let win = popup_window.clone();
+    let app_mt = app.clone();
     let _ = popup_window.run_on_main_thread(move || {
         let _ = win.set_position(tauri::Position::Logical(tauri::LogicalPosition {
             x: x as f64,
             y: y as f64,
         }));
-        let _ = win.show();
 
         #[cfg(target_os = "macos")]
         if let Ok(ptr) = win.ns_window() {
@@ -376,25 +442,25 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
             type Id = *mut objc2::runtime::AnyObject;
             const NIL: Id = std::ptr::null_mut();
 
+            // Hide the main window synchronously (same as popup.rs) so it
+            // doesn't flash when activateIgnoringOtherApps: brings us to front.
+            if let Some(main) = app_mt.get_webview_window("main") {
+                if let Ok(main_ptr) = main.ns_window() {
+                    unsafe {
+                        let main_ns = main_ptr as Id;
+                        let _: () = msg_send![main_ns, orderOut: NIL];
+                    }
+                }
+            }
+
             unsafe {
                 let ns = ptr as Id;
-                // Convert to NSNonactivatingPanel — floats above source app
-                // without stealing focus or clearing the text selection.
-                extern "C" {
-                    fn object_setClass(obj: Id, cls: Id) -> Id;
-                }
-                let panel_class: Id = AnyClass::get("NSPanel").expect("NSPanel not found") as *const _ as Id;
-                object_setClass(ns, panel_class);
-                let cur_mask: usize = msg_send![ns, styleMask];
-                let _: () = msg_send![ns, setStyleMask: cur_mask | 128_usize];
-                let _: () = msg_send![ns, setFloatingPanel: true];
-                // 移除 setBecomesKeyOnlyIfNeeded，确保窗口能正确获得焦点
-                // let _: () = msg_send![ns, setBecomesKeyOnlyIfNeeded: true];
-                let _: () = msg_send![ns, setLevel: 2001_i64]; // 改为 2001
+                let _: () = msg_send![ns, setLevel: 2001_i64];
                 let _: () = msg_send![ns, setHidesOnDeactivate: false];
                 let _: () = msg_send![ns, setAcceptsMouseMovedEvents: true];
 
-                // Activate app so the popup receives mouse events
+                // Activate the app first so makeKeyAndOrderFront actually
+                // grants key-window status (mirrors popup.rs exactly).
                 let app_class = AnyClass::get("NSApplication").expect("NSApplication not found");
                 let app_ns: Id = msg_send![app_class, sharedApplication];
                 let _: () = msg_send![app_ns, activateIgnoringOtherApps: true];
@@ -404,6 +470,12 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
                 let content_view: Id = msg_send![ns, contentView];
                 let _: bool = msg_send![ns, makeFirstResponder: content_view];
             }
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = win.show();
+            let _ = win.set_always_on_top(true);
         }
     });
 
