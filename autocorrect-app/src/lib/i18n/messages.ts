@@ -90,10 +90,14 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
     "settings.underlineColor.green": "Green",
     "settings.preview": "Preview",
     "settings.sampleTypo": "Sample typo text",
+    "settings.general": "General",
     "settings.spellConfig": "Spell Check Configuration",
     "settings.typoToggle": "Enable Advanced Typo Detection",
     "settings.typoToggleDesc":
       "Use the typos library to detect and suggest fixes for English spelling errors",
+    "settings.autostart": "Launch at Login",
+    "settings.autostartDesc":
+      "Automatically start AutoCorrect when you log in to your computer",
     "settings.aiToggle": "Enable AI Grammar Check (OpenAI)",
     "settings.aiToggleDesc":
       "Use OpenAI to improve grammar and phrasing after local autocorrect rules.",
@@ -268,9 +272,12 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
     "settings.underlineColor.green": "绿色",
     "settings.preview": "预览",
     "settings.sampleTypo": "示例错词文本",
+    "settings.general": "通用",
     "settings.spellConfig": "拼写检查配置",
     "settings.typoToggle": "启用高级拼写错误检测",
     "settings.typoToggleDesc": "使用 typos 库检测并建议英文拼写错误修复。",
+    "settings.autostart": "开机自启动",
+    "settings.autostartDesc": "登录时自动启动 AutoCorrect",
     "settings.aiToggle": "启用 AI 语法检查（OpenAI）",
     "settings.aiToggleDesc":
       "在本地 autocorrect 规则后，使用 OpenAI 改进语法和表达。",

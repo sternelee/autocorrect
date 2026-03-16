@@ -45,6 +45,7 @@ pub fn run() {
     let (_clipboard_tx, clipboard_rx) = std::sync::mpsc::channel();
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_store::Builder::new().build())
         .setup(move |app| {
             app.handle().plugin(tauri_plugin_http::init())?;
@@ -448,6 +449,9 @@ pub fn run() {
             // Accessibility permission commands
             check_accessibility_permission,
             request_accessibility_permission,
+            // Autostart commands
+            get_autostart_enabled,
+            set_autostart_enabled,
             // Hotkey config commands
             get_hotkey_config,
             update_hotkey_config,
@@ -968,5 +972,55 @@ fn request_accessibility_permission() -> bool {
     #[cfg(not(target_os = "macos"))]
     {
         true
+    }
+}
+
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn get_auto_launch() -> auto_launch::AutoLaunch {
+    let app_name = "AutoCorrect";
+    // Get the current executable path
+    let exec_path = std::env::current_exe()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_default();
+    // macOS signature: new(app_name, app_path, hidden, args)
+    auto_launch::AutoLaunch::new(&app_name, &exec_path, false, &[""] as &[&str])
+}
+
+/// Get the current autostart state
+#[tauri::command]
+fn get_autostart_enabled() -> bool {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        get_auto_launch().is_enabled().unwrap_or(false)
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        false
+    }
+}
+
+/// Enable or disable autostart
+#[tauri::command]
+fn set_autostart_enabled(enabled: bool) -> Result<bool, String> {
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    {
+        let autolaunch = get_auto_launch();
+        if enabled {
+            autolaunch
+                .enable()
+                .map_err(|e| format!("Failed to enable autostart: {}", e))?;
+            log::info!("Autostart enabled");
+        } else {
+            autolaunch
+                .disable()
+                .map_err(|e| format!("Failed to disable autostart: {}", e))?;
+            log::info!("Autostart disabled");
+        }
+        Ok(enabled)
+    }
+    #[cfg(any(target_os = "android", target_os = "ios"))]
+    {
+        let _ = enabled;
+        Err("Autostart is not supported on this platform".to_string())
     }
 }

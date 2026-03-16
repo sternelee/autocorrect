@@ -1,7 +1,7 @@
 #![allow(unexpected_cfgs)]
 
-use cocoa::base::{id, nil};
 use cocoa::appkit::NSScreen;
+use cocoa::base::{id, nil};
 use cocoa::foundation::NSRect;
 use core_graphics::display::CGRect;
 use objc::{msg_send, sel, sel_impl};
@@ -512,7 +512,10 @@ pub fn get_selected_text_bounds() -> Result<(i32, i32, i32, i32)> {
             return Err(AccessibilityError::NoTextSelected);
         }
 
-        let mut selected_range = CFRange { location: 0, length: 0 };
+        let mut selected_range = CFRange {
+            location: 0,
+            length: 0,
+        };
         let range_size = std::mem::size_of::<CFRange>();
         if AXValueGetValue(
             selected_range_value,
@@ -546,7 +549,10 @@ pub fn get_selected_text_bounds() -> Result<(i32, i32, i32, i32)> {
                     // 添加调试日志查看原始值
                     log::info!(
                         "[DIAG] get_selected_text_bounds: rect origin=({},{}) size=({},{})",
-                        rect.origin.x, rect.origin.y, rect.size.width, rect.size.height
+                        rect.origin.x,
+                        rect.origin.y,
+                        rect.size.width,
+                        rect.size.height
                     );
 
                     // 返回原始值，不做转换（AXBoundsForRange 可能已经返回屏幕坐标）
@@ -555,7 +561,13 @@ pub fn get_selected_text_bounds() -> Result<(i32, i32, i32, i32)> {
                     let sw = rect.size.width as i32;
                     let sh = rect.size.height as i32;
 
-                    log::info!("[DIAG] get_selected_text_bounds returning: ({},{},{},{})", sx, sy, sw, sh);
+                    log::info!(
+                        "[DIAG] get_selected_text_bounds returning: ({},{},{},{})",
+                        sx,
+                        sy,
+                        sw,
+                        sh
+                    );
                     return Ok((sx, sy, sw, sh));
                 }
             }

@@ -173,8 +173,7 @@ unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
         let _: () = msg_send![window, setAcceptsMouseMovedEvents: YES];
 
         // Clear background view - no background, just emoji
-        let content_frame =
-            NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(ICON_SIZE, ICON_SIZE));
+        let content_frame = NSRect::new(NSPoint::new(0.0, 0.0), NSSize::new(ICON_SIZE, ICON_SIZE));
         let bg_view: id = NSView::alloc(nil).initWithFrame_(content_frame);
         let _: () = msg_send![bg_view, setWantsLayer: YES];
         let bg_layer: id = msg_send![bg_view, layer];
@@ -198,7 +197,7 @@ unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
         let _: () = msg_send![label, setSelectable: NO];
         // Center the emoji horizontally and vertically
         let _: () = msg_send![label, setAlignment: 1_i64]; // NSTextAlignmentCenter
-        // Font size
+                                                           // Font size
         let font: id = msg_send![class!(NSFont), systemFontOfSize: 20.0_f64];
         let _: () = msg_send![label, setFont: font];
 
@@ -259,8 +258,8 @@ pub fn show_ai_popup_from_hover(app: &AppHandle) {
     };
 
     // Place popup to the right of the icon, similar to popup positioning
-    let popup_x = icon_pos.0 + 46;  // icon size 36 + 10px gap
-    let popup_y = icon_pos.1 - 100;  // vertically centered on icon
+    let popup_x = icon_pos.0 + 46; // icon size 36 + 10px gap
+    let popup_y = icon_pos.1 - 100; // vertically centered on icon
     let _ = show_ai_popup_at(app, popup_x, popup_y, selected_text);
 }
 
@@ -292,7 +291,7 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
         #[cfg(target_os = "macos")]
         if let Ok(ptr) = win.ns_window() {
             use cocoa::base::{id, NO, YES};
-        use objc::{msg_send, sel, sel_impl};
+            use objc::{msg_send, sel, sel_impl};
 
             unsafe {
                 let ns = ptr as id;
@@ -308,7 +307,7 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
                 let _: () = msg_send![ns, setFloatingPanel: YES];
                 // 移除 setBecomesKeyOnlyIfNeeded，确保窗口能正确获得焦点
                 // let _: () = msg_send![ns, setBecomesKeyOnlyIfNeeded: YES];
-                let _: () = msg_send![ns, setLevel: 2001_i64];  // 改为 2001
+                let _: () = msg_send![ns, setLevel: 2001_i64]; // 改为 2001
                 let _: () = msg_send![ns, setHidesOnDeactivate: NO];
                 let _: () = msg_send![ns, setAcceptsMouseMovedEvents: YES];
 

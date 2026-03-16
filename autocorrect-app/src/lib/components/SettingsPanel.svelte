@@ -86,6 +86,9 @@
   // Typo checking configuration
   let typoCheckingEnabled = $state(true);
 
+  // Autostart configuration
+  let autostartEnabled = $state(false);
+
   // AI grammar configuration
   let aiGrammarEnabled = $state(false);
   let openaiApiKey = $state("");
@@ -190,6 +193,13 @@
       // Load typo checking setting (default to true if not present)
       typoCheckingEnabled = config.typoCheckingEnabled ?? true;
 
+      // Load autostart setting
+      try {
+        autostartEnabled = await invoke<boolean>("get_autostart_enabled");
+      } catch (e) {
+        console.error("Failed to load autostart setting:", e);
+      }
+
       // Load AI grammar settings
       aiGrammarEnabled = config.aiGrammarEnabled ?? false;
       openaiApiKey = config.openaiApiKey ?? "";
@@ -212,6 +222,15 @@
         error instanceof Error ? error.message : tr("settings.configError");
     } finally {
       isLoading = false;
+    }
+  }
+
+  // Save autostart setting when toggled
+  async function toggleAutostart() {
+    try {
+      await invoke("set_autostart_enabled", { enabled: autostartEnabled });
+    } catch (e) {
+      console.error("Failed to toggle autostart:", e);
     }
   }
 
@@ -780,6 +799,28 @@
               {tr("settings.sampleTypo")}
             </span>
           </div>
+        </div>
+      </div>
+
+      <!-- General Settings -->
+      <div class="space-y-3">
+        <h3 class="text-sm font-semibold">{tr("settings.general") || "General"}</h3>
+
+        <!-- Launch at Login -->
+        <div class="flex items-center justify-between rounded-lg border p-3">
+          <div class="space-y-0.5">
+            <label class="text-sm font-medium" for="autostart-enabled"
+              >{tr("settings.autostart")}</label
+            >
+            <p class="text-xs text-muted-foreground">
+              {tr("settings.autostartDesc")}
+            </p>
+          </div>
+          <Switch
+            bind:checked={autostartEnabled}
+            id="autostart-enabled"
+            onchange={() => toggleAutostart()}
+          />
         </div>
       </div>
 

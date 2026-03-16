@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 AutoCorrect Desktop App is a Tauri 2 + Svelte 5 desktop client for system-wide text correction on macOS. It combines:
 
-- local formatting/linting from the Rust `autocorrect` crate,
+- local formatting/linting from the Rust `autocorrect` crate (parent project at `../autocorrect/`),
 - typo detection via `typos`,
 - optional AI transforms via OpenAI-compatible chat-completions APIs,
 - macOS Accessibility-based selection/replacement,
@@ -86,10 +86,10 @@ This file is the control plane: if behavior spans selection → checking → ove
 
 Primary spellcheck path is in `src-tauri/src/commands/spellcheck.rs`:
 
-1. `autocorrect::format_for` (correction output)
-2. `autocorrect::lint_for` (structured line-level diffs)
+1. `autocorrect::format_for` (correction output) - from parent `autocorrect` crate
+2. `autocorrect::lint_for` (structured line-level diffs) - from parent crate
 3. `typos` detection (optional via settings)
-4. optional AI post-processing when enabled.
+4. optional AI post-processing when enabled via OpenAI-compatible APIs.
 
 Config is split intentionally:
 
@@ -137,6 +137,18 @@ High-level runtime path:
 If this chain breaks, inspect `hotkey.rs` + `popup.rs` + `text_selection.rs` + `macos_text.rs` together.
 
 ## Notes for future edits
+
+### Tauri Capabilities
+
+The app uses Tauri 2's capability system for permissions. Capabilities are defined in `src-tauri/capabilities/`. When adding new native features, you may need to add new capability permissions.
+
+### Internationalization (i18n)
+
+The app uses `@internationalized/date` for date handling and has a custom i18n setup in `src/lib/i18n/`. UI strings are defined in `src/lib/i18n/messages.ts`.
+
+### AI Integration
+
+AI features use OpenAI-compatible chat-completions APIs. Configure the endpoint and API key in settings. The AI grammar/spell enhancement is optional and disabled by default.
 
 - Keep command names and payload shapes aligned between Rust `#[tauri::command]` functions and Svelte `invoke()` calls.
 - Underline style/color settings are persisted in app settings and pushed live via `underline-config-update`; update both persistence and event emission when changing appearance behavior.

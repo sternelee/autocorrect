@@ -13,6 +13,8 @@ pub const DEFAULT_UNDERLINE_COLOR: &str = "#ff3b30";
 /// Custom app-specific settings stored separately from autocorrect config
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AppSettings {
+    #[serde(default = "default_autostart_enabled")]
+    pub autostart_enabled: bool,
     #[serde(default = "default_typo_checking")]
     pub typo_checking_enabled: bool,
     #[serde(default)]
@@ -42,6 +44,7 @@ pub struct AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
+            autostart_enabled: default_autostart_enabled(),
             typo_checking_enabled: default_typo_checking(),
             ai_grammar_enabled: false,
             openai_api_key: String::new(),
@@ -56,6 +59,10 @@ impl Default for AppSettings {
             ui_language: default_ui_language(),
         }
     }
+}
+
+fn default_autostart_enabled() -> bool {
+    false
 }
 
 fn default_typo_checking() -> bool {
