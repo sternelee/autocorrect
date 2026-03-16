@@ -122,7 +122,7 @@ pub fn show_popup(
                         let _: () = msg_send![app_ns, activateIgnoringOtherApps: true];
                         let _: () = msg_send![ns_window, makeKeyAndOrderFront: NIL];
                         let content_view: Id = msg_send![ns_window, contentView];
-                        let _: () = msg_send![ns_window, makeFirstResponder: content_view];
+                        let _: bool = msg_send![ns_window, makeFirstResponder: content_view];
                     }
                 }
             });

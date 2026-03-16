@@ -402,7 +402,7 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
 
                 // Set first responder to enable hover/click events
                 let content_view: Id = msg_send![ns, contentView];
-                let _: () = msg_send![ns, makeFirstResponder: content_view];
+                let _: bool = msg_send![ns, makeFirstResponder: content_view];
             }
         }
     });
