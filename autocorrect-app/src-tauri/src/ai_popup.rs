@@ -197,7 +197,7 @@ unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
     use geom::{CGRect, CGPoint, CGSize};
 
     type id = *mut objc2::runtime::AnyObject;
-    const nil: id = std::ptr::null_mut();
+    const NIL: id = std::ptr::null_mut();
 
     const ICON_SIZE: f64 = 36.0;
 
@@ -299,10 +299,10 @@ unsafe fn render_native_icon(state: &mut NativeIconWindow, x: i32, y: i32) {
 unsafe fn hide_native_icon(state: &NativeIconWindow) {
     use objc2::msg_send;
     type id = *mut objc2::runtime::AnyObject;
-    const nil: id = std::ptr::null_mut();
+    const NIL: id = std::ptr::null_mut();
     if state.window != 0 {
         let window = state.window as id;
-        let _: () = msg_send![window, orderOut: nil];
+        let _: () = msg_send![window, orderOut: NIL];
     }
 }
 
@@ -373,7 +373,7 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
             use objc2::runtime::AnyClass;
 
             type id = *mut objc2::runtime::AnyObject;
-            const nil: id = std::ptr::null_mut();
+            const NIL: id = std::ptr::null_mut();
 
             unsafe {
                 let ns = ptr as id;
@@ -397,7 +397,7 @@ fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> R
                 let app_class = AnyClass::get("NSApplication").expect("NSApplication not found");
                 let app_ns: id = msg_send![app_class, sharedApplication];
                 let _: () = msg_send![app_ns, activateIgnoringOtherApps: true];
-                let _: () = msg_send![ns, makeKeyAndOrderFront: nil];
+                let _: () = msg_send![ns, makeKeyAndOrderFront: NIL];
 
                 // Set first responder to enable hover/click events
                 let content_view: id = msg_send![ns, contentView];

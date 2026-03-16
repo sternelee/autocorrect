@@ -12,7 +12,7 @@ use objc2::runtime::{AnyClass, AnyObject};
 pub type id = *mut AnyObject;
 
 /// Null pointer constant for id types
-pub const nil: id = std::ptr::null_mut();
+pub const NIL: id = std::ptr::null_mut();
 
 /// Boolean constants for Objective-C
 pub const YES: bool = true;

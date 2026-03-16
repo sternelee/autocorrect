@@ -1,11 +1,11 @@
 #![allow(unexpected_cfgs)]
 
 use crate::commands::errors::Error;
-use crate::commands::spellcheck::{SpellCheckResult, TypoSuggestion};
+use crate::commands::spellcheck::TypoSuggestion;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
-use tauri::{AppHandle, Emitter, Manager, State, Window};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 /// Popup state shared across the application
 #[derive(Debug, Clone)]
@@ -92,7 +92,7 @@ pub fn show_popup(
                 use objc2::msg_send;
                 use objc2::runtime::AnyClass;
                 type id = *mut objc2::runtime::AnyObject;
-                const nil: id = std::ptr::null_mut();
+                const NIL: id = std::ptr::null_mut();
 
                 // Hide the main window using NSWindow directly (synchronous, no
                 // Tauri dispatch queuing) so it is gone before makeKeyAndOrderFront
@@ -101,7 +101,7 @@ pub fn show_popup(
                     if let Ok(main_ptr) = main.ns_window() {
                         unsafe {
                             let main_ns = main_ptr as id;
-                            let _: () = msg_send![main_ns, orderOut: nil];
+                            let _: () = msg_send![main_ns, orderOut: NIL];
                         }
                     }
                 }
@@ -120,7 +120,7 @@ pub fn show_popup(
                         let app_class = AnyClass::get("NSApplication").expect("NSApplication not found");
                         let app_ns: id = msg_send![app_class, sharedApplication];
                         let _: () = msg_send![app_ns, activateIgnoringOtherApps: true];
-                        let _: () = msg_send![ns_window, makeKeyAndOrderFront: nil];
+                        let _: () = msg_send![ns_window, makeKeyAndOrderFront: NIL];
                         let content_view: id = msg_send![ns_window, contentView];
                         let _: () = msg_send![ns_window, makeFirstResponder: content_view];
                     }
@@ -388,7 +388,7 @@ fn restore_clipboard(clipboard: &mut arboard::Clipboard, previous_clipboard: Opt
 pub fn is_app_frontmost_macos_pub(app_name: &str) -> bool {
     use objc2::msg_send;
     use objc2::runtime::AnyClass;
-    use objc2_foundation::NSString;
+    
 
     type id = *mut objc2::runtime::AnyObject;
 

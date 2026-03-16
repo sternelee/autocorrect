@@ -3,7 +3,7 @@
 use serde::Serialize;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use tauri::AppHandle;
 
 #[cfg(target_os = "macos")]
@@ -184,13 +184,13 @@ unsafe fn ensure_native_overlay(state: &mut NativeOverlayState) -> Result<(), St
     use geom::{CGRect, CGPoint, CGSize};
 
     type id = *mut objc2::runtime::AnyObject;
-    const nil: id = std::ptr::null_mut();
+    const NIL: id = std::ptr::null_mut();
 
     if state.window != 0 && state.container != 0 {
         return Ok(());
     }
 
-    let app: id = msg_send![objc2::runtime::Class::get("NSApplication").unwrap(), sharedApplication];
+    let app: id = msg_send![AnyClass::get("NSApplication").unwrap(), sharedApplication];
     if app.is_null() {
         return Err("NSApp is nil".to_string());
     }
@@ -331,7 +331,7 @@ unsafe fn render_native_markers(
     use geom::{CGRect, CGPoint, CGSize};
 
     type id = *mut objc2::runtime::AnyObject;
-    const nil: id = std::ptr::null_mut();
+    const NIL: id = std::ptr::null_mut();
 
     ensure_native_overlay(state)?;
     let window = state.window as id;

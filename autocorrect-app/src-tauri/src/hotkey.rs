@@ -54,7 +54,7 @@ impl<'de> Deserialize<'de> for HotkeyConfig {
     where
         D: Deserializer<'de>,
     {
-        use serde::de::Error;
+        
 
         #[derive(Deserialize)]
         struct HotkeyConfigRaw {

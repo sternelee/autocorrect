@@ -5,7 +5,6 @@ use crate::typocheck;
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use serde::{Deserialize, Serialize};
 use std::env;
-use std::fs;
 
 #[derive(Clone, Serialize)]
 pub struct SpellCheckResult {
