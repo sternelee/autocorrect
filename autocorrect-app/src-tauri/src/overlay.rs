@@ -199,7 +199,7 @@ unsafe fn ensure_native_overlay(state: &mut NativeOverlayState) -> Result<(), St
     if screens.is_null() {
         return Err("screen list not found".to_string());
     }
-    let count: usize = msg_send![screens, count];
+    let count: u64 = msg_send![screens, count];
     if count == 0 {
         return Err("no screens found".to_string());
     }

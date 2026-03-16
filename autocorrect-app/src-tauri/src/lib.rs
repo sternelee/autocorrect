@@ -273,7 +273,7 @@ pub fn run() {
                         let mut max_x = f64::MIN;
                         let mut max_y = f64::MIN;
                         let screens: Id = msg_send![AnyClass::get("NSScreen").expect("NSScreen not found"), screens];
-                        let count: usize = msg_send![screens, count];
+                        let count: u64 = msg_send![screens, count];
                         for idx in 0..count {
                             let screen: Id = msg_send![screens, objectAtIndex: idx];
                             let frame: CGRect = msg_send![screen, frame];
