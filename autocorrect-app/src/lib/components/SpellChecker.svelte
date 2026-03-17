@@ -1,6 +1,8 @@
 <script lang="ts">
   $locale;
   import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
+  import { onMount, onDestroy } from "svelte";
   import { Button } from "$lib/components/ui/button";
   import {
     Card,
@@ -43,6 +45,10 @@
   let aiRunningOperation: "grammar" | "translate" | "polish" | null = $state(null);
   let aiTargetLanguage = $state("English");
   let aiPolishStyle = $state("professional");
+  let unlistenChunk: (() => void) | null = null;
+  let unlistenComplete: (() => void) | null = null;
+  let unlistenError: (() => void) | null = null;
+  
   const translateLanguageOptions = [
     "简体中文",
     "English",
@@ -179,6 +185,11 @@
   async function runAiTransform(operation: "grammar" | "translate" | "polish") {
     if (!currentText.trim() || aiBusy) {
       return;
+    } 
+
+    if (operation !== "grammar") {
+      await runAiTransformStream(operation);
+      return;
     }
 
     aiBusy = true;
@@ -236,6 +247,74 @@
       aiRunningOperation = null;
     }
   }
+
+  async function runAiTransformStream(operation: "grammar" | "translate" | "polish") {
+    if (!currentText.trim() || aiBusy) {
+      return;
+    }
+
+    aiBusy = true;
+    aiError = null;
+    aiRunningOperation = operation;
+    
+    try {
+      const config = await invoke<AppConfig>("get_config");
+      if (!config.aiGrammarEnabled) {
+        throw new Error(tr("spell.aiEnableHint"));
+      }
+
+      typos = [];
+      correctedText = "";
+      
+      await invoke("ai_text_transform_stream", {
+        request: {
+          text: currentText,
+          operation,
+          targetLanguage: aiTargetLanguage,
+          polishStyle: aiPolishStyle,
+        },
+      });
+    } catch (error) {
+      console.error("AI stream transform failed:", error);
+      aiError = error instanceof Error ? error.message : String(error);
+    } finally {
+      aiBusy = false;
+      aiRunningOperation = null;
+    }
+  }
+
+  onMount(async () => {
+    unlistenChunk = await listen<string>("ai-stream-chunk", (event) => {
+      correctedText += event.payload;
+    });
+
+    unlistenComplete = await listen("ai-stream-complete", () => {
+      if (aiRunningOperation !== "grammar") {
+        hasChanges = correctedText !== currentText;
+        lineChanges = hasChanges
+          ? [
+              {
+                line: 1,
+                col: 1,
+                original: currentText,
+                corrected: correctedText,
+                severity: 2,
+              },
+            ]
+          : [];
+      }
+    });
+
+    unlistenError = await listen<string>("ai-stream-error", (event) => {
+      aiError = event.payload;
+    });
+  });
+
+  onDestroy(() => {
+    if (unlistenChunk) unlistenChunk();
+    if (unlistenComplete) unlistenComplete();
+    if (unlistenError) unlistenError();
+  });
 
   loadAiDefaults();
 </script>
@@ -463,8 +542,8 @@
               </div>
             {/each}
           </div>
-        </div>
-      {/if}
-    </CardContent>
-  </Card>
-</div>
+         </div>
+       {/if}
+     </CardContent>
+   </Card>
+ </div>

@@ -2,6 +2,8 @@ use super::config::load_app_settings;
 use super::errors::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::time::Duration;
+use tauri::Emitter;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
@@ -300,4 +302,140 @@ pub async fn ai_text_transform(
         output_text: Some(content),
         typos: Vec::new(),
     })
+}
+
+/// Parse SSE chunk and extract delta content from OpenAI streaming response
+fn parse_sse_chunk(chunk: &[u8]) -> Option<String> {
+    let chunk_str = String::from_utf8_lossy(chunk);
+    
+    for line in chunk_str.lines() {
+        if line.starts_with("data: ") {
+            let data = &line[6..];
+            if data == "[DONE]" {
+                continue;
+            }
+            
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(data) {
+                if let Some(content) = value
+                    .get("choices")
+                    .and_then(|c| c.get(0))
+                    .and_then(|d| d.get("delta"))
+                    .and_then(|d| d.get("content"))
+                    .and_then(|c| c.as_str())
+                {
+                    if !content.is_empty() {
+                        return Some(content.to_string());
+                    }
+                }
+            }
+        }
+    }
+    
+    None
+}
+
+#[tauri::command]
+pub async fn ai_text_transform_stream(
+    app: tauri::AppHandle,
+    request: AiTextTransformRequest,
+) -> Result<(), Error> {
+    let settings = load_app_settings(&app)?;
+    let api_key = settings.openai_api_key.trim().to_string();
+    if api_key.is_empty() {
+        return Err(Error::Api("API key is required".to_string()));
+    }
+
+    let model = normalize_model(Some(settings.openai_model));
+    let timeout_ms = settings.ai_timeout_ms;
+    let api_base_url = normalize_endpoint(Some(settings.ai_api_base_url));
+    let operation = request.operation.trim().to_lowercase();
+    let system_prompt = build_system_prompt(
+        &operation,
+        request.target_language.as_deref(),
+        request.polish_style.as_deref(),
+    )?;
+
+    let payload = json!({
+        "model": model,
+        "temperature": 0,
+        "stream": true,
+        "messages": [
+            { "role": "system", "content": system_prompt },
+            { "role": "user", "content": request.text }
+        ]
+    });
+
+    let client = tauri_plugin_http::reqwest::Client::builder()
+        .timeout(Duration::from_millis(timeout_ms))
+        .build()
+        .map_err(|e| Error::Api(format!("Failed to build HTTP client: {}", e)))?;
+    
+    let mut response = client
+        .post(api_base_url)
+        .header("Content-Type", "application/json")
+        .bearer_auth(api_key)
+        .body(payload.to_string())
+        .send()
+        .await
+        .map_err(|e| Error::Api(format!("HTTP request failed: {}", e)))?;
+    
+    let status = response.status();
+    if !status.is_success() {
+        let body = response
+            .text()
+            .await
+            .map_err(|e| Error::Api(format!("Failed to read HTTP response body: {}", e)))?;
+        return Err(Error::Api(format!(
+            "AI request failed with status {}: {}",
+            status, body
+        )));
+    }
+
+    let mut buffer = Vec::new();
+    
+    loop {
+        match response.chunk().await {
+            Ok(Some(bytes)) => {
+                buffer.extend_from_slice(&bytes);
+                
+                let buffer_str = String::from_utf8_lossy(&buffer);
+                
+                for line in buffer_str.lines() {
+                    if line.starts_with("data: ") {
+                        let data = &line[6..];
+                        if data == "[DONE]" {
+                            continue;
+                        }
+                        
+                        if let Ok(value) = serde_json::from_str::<serde_json::Value>(data) {
+                            if let Some(choices) = value.get("choices").and_then(|c| c.as_array()) {
+                                if let Some(first_choice) = choices.first() {
+                                    if let Some(delta) = first_choice.get("delta") {
+                                        if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
+                                            if !content.is_empty() {
+                                                let _ = app.emit("ai-stream-chunk", content);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                
+                buffer.clear();
+            }
+            Ok(None) => {
+                break;
+            }
+            Err(e) => {
+                let _ = app.emit("ai-stream-error", format!("Stream error: {}", e));
+                return Err(Error::Api(format!("Stream error: {}", e)));
+            }
+        }
+    }
+
+    let _ = app.emit("ai-stream-complete", ());
+    
+    Ok(())
 }

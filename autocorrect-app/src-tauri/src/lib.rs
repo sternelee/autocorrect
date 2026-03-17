@@ -69,7 +69,7 @@ mod geom {
 }
 
 use ai_popup::{SharedAiPopupState, SharedNativeIconWindow};
-use commands::ai_grammar::{ai_grammar_check, ai_text_transform};
+use commands::ai_grammar::{ai_grammar_check, ai_text_transform, ai_text_transform_stream};
 use commands::config::{
     ensure_app_settings_initialized, get_config, get_default_config, get_rules, update_config,
 };
@@ -348,11 +348,11 @@ pub fn run() {
 
                                 let suggestion_text = marker.suggestions.first().cloned().unwrap_or_default();
 
-                                // Position popup from mouse cursor with a small offset.
+                                // Position popup from mouse cursor - offset to place corner at cursor
                                 let popup_width = 300.0;
                                 let popup_height = 120.0;
-                                let offset_x = 0.0;
-                                let offset_y = 0.0;
+                                let offset_x = 10.0;
+                                let offset_y = 10.0;
 
                                 // Use the PRIMARY display height in CG coordinates
                                 // (y=0 at top, increases down — same system as mouse_x/y).
@@ -547,6 +547,7 @@ pub fn run() {
             get_custom_corrections_path_cmd,
             ai_grammar_check,
             ai_text_transform,
+            ai_text_transform_stream,
             // Ignored apps commands
             get_ignored_apps,
             add_ignored_app,

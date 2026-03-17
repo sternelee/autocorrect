@@ -26,6 +26,7 @@ tauri-plugin-log = "2"
 tauri-plugin-http = "2"
 thiserror = "2.0.12"
 tokio = { version = "1", features = ["time"] }
+futures-util = "0.3"
 autocorrect = { path = "../../autocorrect" }
 enigo = "0.2"
 # Use forked rdev that fixes macOS crash issue (see Tauri discussion #7839)
