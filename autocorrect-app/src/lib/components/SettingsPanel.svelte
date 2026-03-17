@@ -813,6 +813,25 @@
         <h3 class="text-sm font-semibold">{tr("settings.appearance")}</h3>
 
         <div class="rounded-lg border p-3 space-y-4">
+          <!-- Theme Selector -->
+          <div class="space-y-2">
+            <p class="text-sm font-medium">{tr("settings.theme")}</p>
+            <select
+              bind:value={theme}
+              onchange={() => applyTheme(theme)}
+              class="border-input bg-background ring-offset-background focus-visible:border-ring focus-visible:ring-ring/50 flex h-9 w-full max-w-xs min-w-0 rounded-md border px-3 py-1 text-sm outline-none focus-visible:ring-[3px]"
+            >
+              <option value="light">{tr("settings.theme.light")}</option>
+              <option value="dark">{tr("settings.theme.dark")}</option>
+              <option value="auto">{tr("settings.theme.auto")}</option>
+            </select>
+            {#if theme === 'auto'}
+              <p class="text-xs text-muted-foreground">
+                {tr("settings.theme.autoDesc")}
+              </p>
+            {/if}
+          </div>
+
           <!-- Underline Style -->
           <div class="space-y-2">
             <p class="text-sm font-medium">{tr("settings.underlineStyle")}</p>
