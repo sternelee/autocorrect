@@ -12,21 +12,51 @@
 
 ## File Structure
 
-- **Create:** `src-tauri/src/commands/theme.rs`, `src-tauri/src/commands/theme_errors.rs`
+- **Create:** `src-tauri/src/commands/theme.rs`, `src-tauri/src/commands/theme_errors.rs`, `src/lib/types/theme.ts`
 - **Modify:**
   - `src-tauri/Cargo.toml` - Add tauri-plugin-store dependency
-  - `src-tauri/src/lib.rs` - Register theme commands
+  - `src-tauri/src/lib.rs` - Register theme commands and store plugin
   - `src/App.svelte` - Add theme management logic and event handling
   - `src/lib/components/SettingsPanel.svelte` - Refactor to UI-only theme selector
-  - `src/lib/i18n/messages.ts` - Add theme translation keys
   - `src/pages/popup/Popup.svelte` - Add theme support
   - `src/pages/ai-popup/AiPopup.svelte` - Add theme support
 
 ---
 
-## Chunk 1: Backend - Add Tauri Store Dependency
+## Chunk 1: Create Shared Type Definitions
 
-### Task 1: Update Cargo.toml
+### Task 1: Create theme type definitions file
+
+**Files:**
+
+- Create: `src/lib/types/theme.ts`
+
+- [ ] **Step 1: Create ThemeMode type**
+
+```typescript
+export type ThemeMode = "light" | "dark" | "auto";
+```
+
+- [ ] **Step 2: Run TypeScript check**
+
+```bash
+npm run check
+```
+
+Expected: No type errors
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add src/lib/types/theme.ts
+git commit -m "feat(types): add ThemeMode type definition"
+```
+
+---
+
+## Chunk 2: Backend - Add Tauri Store Dependency
+
+### Task 2: Update Cargo.toml
 
 **Files:**
 
@@ -56,9 +86,9 @@ git commit -m "chore(rust): add tauri-plugin-store dependency for theme manageme
 
 ---
 
-## Chunk 2: Backend - Create Theme Commands Module
+## Chunk 3: Backend - Create Theme Commands Module
 
-### Task 2: Create theme.rs module with get_theme command
+### Task 3: Create theme.rs module with get_theme command
 
 **Files:**
 
@@ -68,40 +98,17 @@ git commit -m "chore(rust): add tauri-plugin-store dependency for theme manageme
 
 ```rust
 use tauri::Manager;
+use crate::types::theme::ThemeMode;
 
 /// Get current theme from Tauri store
 #[tauri::command]
-pub async fn get_theme() -> Result<String, String> {
-    let app = app_handle();
+pub async fn get_theme(app: tauri::AppHandle) -> Result<String, String> {
     let store = app.store()?;
 
     // Try to read from Tauri store first
     if let Ok(Some(stored_theme)) = store.get("theme") {
         if let Ok(theme_str) = stored_theme.as_string() {
             return Ok(theme_str);
-        }
-    }
-
-    // Fallback to localStorage
-    #[cfg(target_os = "macos")]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        use std::fs::read_to_string;
-        use std::path::PathBuf;
-
-        let config_path = dirs::config_localdata()
-            .unwrap()
-            .join("AutoCorrect")
-            .join("app-settings.json");
-
-        if let Ok(content) = read_to_string(&config_path, OpenOptions::read()) {
-            if let Ok(config) = serde_json::from_str::<serde_json::Value>(&content) {
-                if let Some(theme_obj) = config.get("theme") {
-                    if let Ok(theme_str) = theme_obj.as_str() {
-                        return Ok(theme_str);
-                    }
-                }
-            }
         }
     }
 
@@ -126,9 +133,9 @@ git commit -m "feat(rust): add theme.rs module with get_theme command"
 
 ---
 
-## Chunk 3: Backend - Add set_theme Command and Validation
+## Chunk 4: Backend - Add set_theme Command
 
-### Task 3: Implement set_theme command with validation
+### Task 4: Implement set_theme command with validation
 
 **Files:**
 
@@ -137,10 +144,7 @@ git commit -m "feat(rust): add theme.rs module with get_theme command"
 
 - [ ] **Step 1: Add ThemeError type**
 
-Create error type module:
-
 ```rust
-// src-tauri/src/commands/theme_errors.rs
 use thiserror::Error;
 
 #[derive(Debug, thiserror::Error)]
@@ -150,11 +154,12 @@ pub enum ThemeError {
 }
 ```
 
-- [ ] **Step 2: Add set_theme function with validation**
+- [ ] **Step 2: Add set_theme function**
 
 ```rust
 use serde::{Deserialize, Serialize};
 use super::theme_errors::ThemeError;
+use crate::types::theme::ThemeMode;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -164,12 +169,11 @@ pub struct ThemeChangePayload {
 
 /// Set theme in Tauri store and emit change event
 #[tauri::command]
-pub async fn set_theme(theme: String) -> Result<(), ThemeError> {
-    let app = app_handle();
+pub async fn set_theme(app: tauri::AppHandle, theme: ThemeMode) -> Result<(), ThemeError> {
     let store = app.store()?;
 
     // Validate theme value
-    if !["light", "dark", "auto"].contains(&theme) {
+    if !matches!(theme.as_str(), "light" | "dark" | "auto") {
         return Err(ThemeError::InvalidValue(format!(
             "Theme '{}' is not valid. Must be 'light', 'dark', or 'auto'",
             theme
@@ -177,9 +181,7 @@ pub async fn set_theme(theme: String) -> Result<(), ThemeError> {
     }
 
     // Save to Tauri store
-    store.set("theme", &theme).map_err(|e| {
-        ThemeError::from(e)
-    })?;
+    store.set("theme", &theme).map_err(|e| ThemeError::from(e))?;
 
     // Emit event to all windows
     app.emit("theme-changed", Some(&theme));
@@ -205,53 +207,66 @@ git commit -m "feat(rust): add set_theme command with validation and error handl
 
 ---
 
-## Chunk 4: Backend - Register Theme Commands
+## Chunk 5: Backend - Initialize Tauri Store and Register Commands
 
-### Task 4: Register theme commands in lib.rs
+### Task 5: Register theme commands and initialize store plugin
 
 **Files:**
 
 - Modify: `src-tauri/src/lib.rs`
 
-- [ ] **Step 1: Add theme module declaration**
+- [ ] **Step 1: Add theme module and types module declarations**
 
 ```rust
 mod theme;
 mod theme_errors;
+mod types;
 ```
 
-- [ ] **Step 2: Register theme commands in invoke_handler**
+- [ ] **Step 2: Initialize Tauri store plugin in run() function**
+
+Find the `.setup(move |app| {` section (around line 112) and add store plugin initialization:
+
+```rust
+tauri::Builder::default()
+    .plugin(tauri_plugin_store::Builder::new().build())
+    .setup(move |app| {
+        // ... existing plugins
+    })
+```
+
+- [ ] **Step 3: Register theme commands in invoke_handler**
 
 Find the `invoke_handler` call (around line 516) and add theme commands:
 
 ```rust
 .invoke_handler(tauri::generate_handler![
     // ... existing commands
-    get_theme,
-    set_theme,
+    get_theme(app),
+    set_theme(app, theme),
 ])
 ```
 
-- [ ] **Step 3: Run cargo check**
+- [ ] **Step 4: Run cargo check**
 
 ```bash
-cd src-tauri && cargo check --message="Register theme commands"
+cd src-tauri && cargo check --message="Register theme commands and store plugin"
 ```
 
 Expected: No errors
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src-tauri/src/lib.rs
-git commit -m "chore(rust): register theme commands in lib.rs"
+git commit -m "chore(rust): register theme commands and initialize Tauri store plugin"
 ```
 
 ---
 
-## Chunk 5: Frontend - Add i18n Translation Keys
+## Chunk 6: Frontend - Add i18n Translation Keys
 
-### Task 5: Add theme translation keys
+### Task 6: Add theme translation keys
 
 **Files:**
 
@@ -297,9 +312,9 @@ git commit -m "feat(i18n): add theme translation keys"
 
 ---
 
-## Chunk 6: Frontend - Refactor App.svelte
+## Chunk 7: Frontend - Refactor App.svelte
 
-### Task 6: Add theme management and IPC to App.svelte
+### Task 7: Add theme management to App.svelte
 
 **Files:**
 
@@ -314,6 +329,7 @@ Replace the entire `<script>` section with:
   import { onMount, onDestroy } from "svelte";
   import { listen, invoke } from "@tauri-apps/api/event";
   import { locale, t } from "$lib/i18n";
+  import { ThemeMode } from "$lib/types/theme";
   $locale;
 
   // Reactive translation helper
@@ -322,16 +338,13 @@ Replace the entire `<script>` section with:
     return t(key, params);
   });
 
-  // Theme type definition
-  type ThemeMode = "light" | "dark" | "auto";
-
   // Theme state
   let theme: ThemeMode = $state("auto");
 
   // System theme listener
   let mediaQuery: MediaQueryList | null = null;
 
-  // Theme management functions
+  // Load theme from store
   async function loadThemeFromStore(): Promise<ThemeMode> {
     try {
       const stored = await invoke<ThemeMode>("get_theme");
@@ -341,16 +354,9 @@ Replace the entire `<script>` section with:
     } catch (e) {
       console.warn("Failed to load theme from store:", e);
     }
-
-    // Fallback to localStorage
-    const localTheme = localStorage.getItem("autocorrect-theme");
-    if (localTheme === "light" || localTheme === "dark" || localTheme === "auto") {
-      return localTheme;
-    }
-
-    return "auto";
   }
 
+  // Apply theme to DOM
   function applyThemeToDom(mode: ThemeMode) {
     const html = document.documentElement;
 
@@ -369,6 +375,7 @@ Replace the entire `<script>` section with:
     theme = mode;
   }
 
+  // Setup system theme listener
   function setupSystemThemeListener() {
     if (mediaQuery) {
       mediaQuery.removeEventListener("change", handleSystemThemeChange);
@@ -404,7 +411,7 @@ Replace the entire `<script>` section with:
     // Setup system listener
     setupSystemThemeListener();
 
-    // Listen for theme changes from other windows
+    // Listen for theme changes
     try {
       unlistenThemeChanged = await listen<ThemeMode>("theme-changed", (event) => {
         const newTheme = event.payload;
@@ -427,7 +434,7 @@ Replace the entire `<script>` section with:
 </script>
 ```
 
-- [ ] **Step 2: Add theme prop to SettingsPanel invocation**
+- [ ] **Step 2: Pass theme prop to SettingsPanel**
 
 Find the SettingsPanel invocation (around line 100) and add theme prop:
 
@@ -454,9 +461,9 @@ git commit -m "refactor(app): add unified theme management with Tauri store and 
 
 ---
 
-## Chunk 7: Frontend - Refactor SettingsPanel.svelte
+## Chunk 8: Frontend - Refactor SettingsPanel.svelte
 
-### Task 7: Simplify SettingsPanel to UI-only component
+### Task 8: Simplify SettingsPanel to UI-only component
 
 **Files:**
 
@@ -482,12 +489,13 @@ Add at top of script section:
   // Keep existing imports
   import { invoke } from "@tauri-apps/api/core";
   import { locale, t } from "$lib/i18n";
+  import { ThemeMode } from "$lib/types/theme";
   $locale;
 
   const tr = $derived((key: string, params?: Record<string, string | number>) => {
     const _ = $locale;
     return t(key, params);
-  });
+  };
 
   // Props received from parent
   export let theme: ThemeMode;
@@ -502,7 +510,7 @@ Add at top of script section:
 </script>
 ```
 
-- [ ] **Step 2: Update theme selector UI**
+- [ ] **Step 2: Keep theme selector UI**
 
 Ensure theme selector uses theme prop:
 
@@ -544,30 +552,30 @@ git commit -m "refactor(app): simplify SettingsPanel to theme UI component"
 
 ---
 
-## Chunk 8: Frontend - Update Popup.svelte
+## Chunk 9: Frontend - Update Popup.svelte
 
-### Task 8: Add theme support to Popup.svelte
+### Task 9: Add theme support to Popup.svelte
 
 **Files:**
 
 - Modify: `src/pages/popup/Popup.svelte`
 
-- [ ] **Step 1: Add theme prop and apply logic**
+- [ ] **Step 1: Add theme prop, import types, and apply logic**
 
 Add at top of script section:
 
 ```svelte
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy, listen } from "svelte";
   // Keep existing imports
-  // Add import for i18n (not present)
   import { locale, t } from "$lib/i18n";
+  import { ThemeMode } from "$lib/types/theme";
   $locale;
 
   const tr = $derived((key: string, params?: Record<string, string | number>) => {
     const _ = $locale;
     return t(key, params);
-  });
+  };
 
   // Theme prop received from App.svelte
   export let theme: ThemeMode;
@@ -591,45 +599,6 @@ Add at top of script section:
   onMount(() => {
     applyThemeToDom();
   });
-</script>
-```
-
-- [ ] **Step 2: Add theme-changed event listener**
-
-Add event listener to listen for theme changes:
-
-```svelte
-<script lang="ts">
-  import { onMount, onDestroy, listen } from "svelte";
-  // ... existing imports and theme prop
-  import { locale, t } from "$lib/i18n";
-  $locale;
-
-  const tr = $derived((key: string, params?: Record<string, string | number>) => {
-    const _ = $locale;
-    return t(key, params);
-  });
-
-  export let theme: ThemeMode;
-
-  function applyThemeToDom() {
-    const html = document.documentElement;
-
-    if (theme === "dark") {
-      html.classList.add("dark");
-    } else if (theme === "auto") {
-      const prefersDark = window.matchMedia(
-        "(prefers-color-scheme: dark)",
-      ).matches;
-      html.classList.toggle("dark", prefersDark);
-    } else {
-      html.classList.remove("dark");
-    }
-  }
-
-  onMount(() => {
-    applyThemeToDom();
-  });
 
   // Listen for theme changes
   let unlistenThemeChanged = null;
@@ -654,7 +623,7 @@ Add event listener to listen for theme changes:
 </script>
 ```
 
-- [ ] **Step 3: Verify TypeScript compilation**
+- [ ] **Step 2: Verify TypeScript compilation**
 
 ```bash
 npm run check
@@ -662,7 +631,7 @@ npm run check
 
 Expected: No type errors
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add src/pages/popup/Popup.svelte
@@ -671,24 +640,24 @@ git commit -m "feat(app): add theme support and event listening to Popup.svelte"
 
 ---
 
-## Chunk 9: Frontend - Update AiPopup.svelte
+## Chunk 10: Frontend - Update AiPopup.svelte
 
-### Task 9: Add theme support to AiPopup.svelte
+### Task 10: Add theme support to AiPopup.svelte
 
 **Files:**
 
 - Modify: `src/pages/ai-popup/AiPopup.svelte`
 
-- [ ] **Step 1: Add theme prop and apply logic**
+- [ ] **Step 1: Add theme prop, import types, and apply logic**
 
 Same approach as Popup.svelte:
 
 ```svelte
 <script lang="ts">
-  import { onMount } from "svelte";
+  import { onMount, onDestroy, listen } from "svelte";
   // Keep existing imports
-  // Add import for i18n (not present)
   import { locale, t } from "$lib/i18n";
+  import { ThemeMode } from "$lib/types/theme";
   $locale;
 
   const tr = $derived((key: string, params?: Record<string, string | number>) => {
@@ -714,45 +683,7 @@ Same approach as Popup.svelte:
     }
   }
 
-  onMount(() => {
-    applyThemeToDom();
-  });
-</script>
-```
-
-- [ ] **Step 2: Add theme-changed event listener**
-
-Same as Popup.svelte:
-
-```svelte
-<script lang="ts">
-  import { onMount, onDestroy, listen } from "svelte";
-  // ... existing imports and theme prop
-  import { locale, t } from "$lib/i18n";
-  $locale;
-
-  const tr = $derived((key: string, params?: Record<string, string | number>) => {
-    const _ = $locale;
-    return t(key, params);
-  };
-
-  export let theme: ThemeMode;
-
-  function applyThemeToDom() {
-    const html = document.documentElement;
-
-    if (theme === "dark") {
-      html.classList.add("dark");
-    } else if (theme === "auto") {
-      const prefersDark = window.matchMedia(
-        "(prefers-color-scheme: dark)",
-      ).matches;
-      html.classList.toggle("dark", prefersDark);
-    } else {
-      html.classList.remove("dark");
-    }
-  }
-
+  // Apply theme on mount
   onMount(() => {
     applyThemeToDom();
   });
@@ -780,7 +711,7 @@ Same as Popup.svelte:
 </script>
 ```
 
-- [ ] **Step 3: Verify TypeScript compilation**
+- [ ] **Step 2: Verify TypeScript compilation**
 
 ```bash
 npm run check
@@ -788,7 +719,7 @@ npm run check
 
 Expected: No type errors
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add src/pages/ai-popup/AiPopup.svelte
@@ -797,9 +728,9 @@ git commit -m "feat(app): add theme support and event listening to AiPopup.svelt
 
 ---
 
-## Chunk 10: Testing
+## Chunk 11: Testing
 
-### Task 10: Test unified theme management
+### Task 11: Test unified theme management
 
 **Files:**
 
@@ -813,49 +744,73 @@ cd src-tauri && cargo test --lib theme
 
 Expected: All tests pass
 
-- [ ] **Step 2: Test theme commands manually**
+- [ ] **Step 2: Test theme commands and store functionality**
 
-```bash
+````bash
 # Start Tauri dev
 npm run tauri:dev
 
-# In Settings panel:
-# 1. Verify theme persists across restart
-# 2. Switch themes and verify all windows update
-# 3. Test auto mode follows system preference
-# 4. Change system theme and verify auto mode updates
-# 5. Verify popup windows respect theme
-# 6. Verify AI popup respects theme
-```
+# Manual testing checklist:
+# [ ] Test get_theme command returns stored theme from Tauri store
+# [ ] Test get_theme command falls back to "auto" when store is empty/unavailable
+# [ ] Test set_theme command saves to Tauri store
+# [ ] Test set_theme emits theme-changed event
+# [ ] Test App.svelte initializes theme from store on mount
+# [ ] Test App.svelte applies theme to DOM correctly (light/dark/auto)
+# [ ] Test App.svelte listens for theme-changed events
+# [ ] Test SettingsPanel displays theme selector
+# [ ] Test SettingsPanel theme selector triggers set_theme
+# [ ] Test theme changes sync to all windows
+# [ ] Test Popup.svelte receives theme from App.svelte
+# [ ] Test Popup.svelte applies theme correctly
+# [ ] Test AiPopup.svelte receives theme from App.svelte
+# [ ] Test AiPopup.svelte applies theme correctly
+# [ ] Test auto mode follows system preference
+# [ ] Test system theme changes update UI in real-time
+# [ ] Test theme persists across app restarts
 
 - [ ] **Step 3: Commit test results**
 
 ```bash
-git commit --allow-empty -m "test(app): verify unified theme management works"
-```
+git commit --allow-empty -m "test(app): verify unified theme management works end-to-end"
+````
 
 ---
 
 ## Testing Checklist
 
-- [ ] Tauri store dependency added successfully
+Backend:
+
+- [ ] Shared ThemeMode type created
+- [ ] Tauri store dependency added to Cargo.toml
 - [ ] Theme commands compile without errors
 - [ ] Theme commands registered in lib.rs
-- [ ] get_theme reads from store correctly
-- [ ] get_theme falls back to localStorage
-- [ ] get_theme returns correct type
-- [ ] set_theme validates theme value
-- [ ] set_theme saves to store correctly
+- [ ] get_theme command receives app_handle parameter correctly
+- [ ] get_theme reads from Tauri store correctly
+- [ ] get_theme returns "auto" as default
+- [ ] get_theme handles store unavailability gracefully
+- [ ] set_theme command receives app_handle parameter correctly
+- [ ] set_theme validates theme value using matches! macro
+- [ ] set_theme returns ThemeError::InvalidValue for invalid theme
+- [ ] set_theme saves to Tauri store correctly
 - [ ] set_theme emits theme-changed event
+- [ ] Tauri store plugin initialized in lib.rs run() function
+
+Frontend:
+
+- [ ] Shared ThemeMode type created and imported in App.svelte
+- [ ] Shared ThemeMode type imported in SettingsPanel.svelte
+- [ ] Shared ThemeMode type imported in Popup.svelte
+- [ ] Shared ThemeMode type imported in AiPopup.svelte
+- [ ] i18n translation keys added for theme
 - [ ] App.svelte initializes theme from store on mount
-- [ ] App.svelte applies theme to DOM immediately
+- [ ] App.svelte uses invoke to call get_theme and set_theme
+- [ ] App.svelte applies theme to DOM immediately on mount and changes
 - [ ] App.svelte listens for theme-changed events
-- [ ] App.svelte broadcasts theme to child windows
-- [ ] App.svelte cleans up listeners on destroy
 - [ ] App.svelte passes theme to SettingsPanel as prop
 - [ ] SettingsPanel receives theme as prop
-- [ ] SettingsPanel displays theme selector correctly
-- [ ] SettingsPanel calls set_theme on change
+- [ ] SettingsPanel displays theme selector UI correctly
+- [ ] SettingsPanel calls set_theme on theme change
 - [ ] Popup.svelte receives theme as prop
 - [ ] Popup.svelte applies theme on mount
 - [ ] Popup.svelte listens for theme-changed events
@@ -864,23 +819,22 @@ git commit --allow-empty -m "test(app): verify unified theme management works"
 - [ ] AiPopup.svelte applies theme on mount
 - [ ] AiPopup.svelte listens for theme-changed events
 - [ ] AiPopup.svelte applies theme on prop changes
+- [ ] All windows (App, Settings, Popup, AiPopup) respect theme setting
 - [ ] Theme persists across app restarts
-- [ ] Theme changes sync to all windows (App, Settings, Popup, AiPopup)
+- [ ] Theme changes sync to all windows via theme-changed event
 - [ ] Auto mode follows system preference
 - [ ] System theme changes update UI in real-time
-- [ ] No console errors related to theme management
 - [ ] TypeScript compilation passes (npm run check)
-- [ ] Build succeeds (npm run build)
+- [ ] No console errors related to theme management
 
 ## Edge Cases Handled
 
-- **Store unavailable:** Gracefully fallback to localStorage in get_theme
-- **Invalid theme value:** Validate in set_theme before saving, return ThemeError::InvalidValue
+- **Store unavailable:** get_theme returns "auto" as default, no manual fallback to localStorage
+- **Invalid theme value:** set_theme returns ThemeError::InvalidValue
 - **Race conditions:** Last write wins for store, applyThemeToDom handles concurrent calls
 - **Memory leaks:** Proper cleanup of event listeners (MediaQuery and Tauri)
-- **Corrupted store data:** Return "auto" as safe default in get_theme
-- **Popup/AiPopup open during theme change:** Windows listen for theme-changed events and apply immediately when props update
+- **Popup/AiPopup open:** Windows listen for theme-changed events and apply immediately when props update from theme changes
 
 ## Data Migration Notes
 
-No explicit data migration needed. New installations use Tauri store exclusively. Both localStorage and Tauri store can coexist - get_theme checks store first, falls back to localStorage if unavailable. Users migrating from previous versions will have their theme automatically picked up by the fallback logic.
+No explicit data migration needed. New installations use Tauri store exclusively. Existing installations with localStorage theme will continue to work (get_theme checks store first, then localStorage). Both systems can coexist during transition.
