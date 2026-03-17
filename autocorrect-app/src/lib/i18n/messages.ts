@@ -148,6 +148,11 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
     "settings.exportDefault": "Export Default Config",
     "settings.importConfig": "Import Config",
     "settings.configError": "Configuration Error",
+    "settings.theme": "Theme",
+    "settings.theme.light": "Light",
+    "settings.theme.dark": "Dark",
+    "settings.theme.auto": "Auto",
+    "settings.theme.autoDesc": "Follows system preference",
 
     "customCorr.title": "Custom Typo Corrections",
     "customCorr.desc":
@@ -348,6 +353,11 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
     "settings.exportDefault": "导出默认配置",
     "settings.importConfig": "导入配置",
     "settings.configError": "配置错误",
+    "settings.theme": "主题",
+    "settings.theme.light": "浅色",
+    "settings.theme.dark": "深色",
+    "settings.theme.auto": "自动",
+    "settings.theme.autoDesc": "跟随系统偏好",
 
     "customCorr.title": "自定义纠错",
     "customCorr.desc": "定义您自己的错词 → 纠错映射。更改立即生效。",
