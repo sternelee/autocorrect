@@ -27,6 +27,7 @@
 
   let currentTab: "spellchecker" | "settings" | "about" =
     $state("spellchecker");
+  let settingsPanelMounted = $state(false);
   let isEnabled = $state(true);
   let correctionCount = $state(0);
   let theme: ThemeMode = $state("auto");
@@ -35,6 +36,7 @@
   let unlistenThemeChanged: (() => void) | null = null;
   let unlistenAccepted: (() => void) | null = null;
   let unlistenNoChanges: (() => void) | null = null;
+  let settingsWarmupTimer: number | null = null;
 
   async function loadThemeFromStore(): Promise<ThemeMode> {
     try {
@@ -82,7 +84,17 @@
     isEnabled = enabled;
   }
 
+  function openSettingsTab() {
+    settingsPanelMounted = true;
+    currentTab = "settings";
+  }
+
   onMount(async () => {
+    // Warm up Settings panel in background to reduce first-switch jank.
+    settingsWarmupTimer = window.setTimeout(() => {
+      settingsPanelMounted = true;
+    }, 120);
+
     applyTheme(await loadThemeFromStore());
     setupSystemThemeListener();
 
@@ -110,6 +122,10 @@
   });
 
   onDestroy(() => {
+    if (settingsWarmupTimer !== null) {
+      window.clearTimeout(settingsWarmupTimer);
+      settingsWarmupTimer = null;
+    }
     cleanupThemeListener();
     unlistenThemeChanged?.();
     unlistenThemeChanged = null;
@@ -143,7 +159,7 @@
           {tr("app.tab.spellchecker")}
         </Button>
         <Button
-          onclick={() => (currentTab = "settings")}
+          onclick={openSettingsTab}
           variant={currentTab === "settings" ? "default" : "ghost"}
           size="sm"
         >
@@ -171,11 +187,17 @@
 
   <!-- Main Content Area -->
   <main class="flex-1 overflow-auto">
-    {#if currentTab === "spellchecker"}
+    <div class={currentTab === "spellchecker" ? "block h-full" : "hidden"}>
       <SpellChecker />
-    {:else if currentTab === "settings"}
-      <SettingsPanel {theme} />
-    {:else if currentTab === "about"}
+    </div>
+
+    {#if settingsPanelMounted}
+      <div class={currentTab === "settings" ? "block h-full" : "hidden"}>
+        <SettingsPanel {theme} />
+      </div>
+    {/if}
+
+    {#if currentTab === "about"}
       <div class="flex h-full items-center justify-center p-6">
         <div class="max-w-md space-y-4 text-center">
           <div

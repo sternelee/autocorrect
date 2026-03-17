@@ -28,8 +28,14 @@
   let loading = $state(false);
   let error = $state("");
 
-  onMount(async () => {
-    await loadIgnoredApps();
+  onMount(() => {
+    const frameId = requestAnimationFrame(() => {
+      void loadIgnoredApps();
+    });
+
+    return () => {
+      cancelAnimationFrame(frameId);
+    };
   });
 
   async function loadIgnoredApps() {

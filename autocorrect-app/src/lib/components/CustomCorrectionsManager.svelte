@@ -1,5 +1,6 @@
 <script lang="ts">
   $locale;
+  import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { Button } from "$lib/components/ui/button";
   import { Input } from "$lib/components/ui/input";
@@ -171,8 +172,16 @@
     newCorrection = "";
   }
 
-  // Load on mount
-  loadCorrections();
+  onMount(() => {
+    // Defer the request to the next frame so Settings panel can render first.
+    const frameId = requestAnimationFrame(() => {
+      void loadCorrections();
+    });
+
+    return () => {
+      cancelAnimationFrame(frameId);
+    };
+  });
 </script>
 
 <div class="space-y-4">

@@ -193,10 +193,14 @@
     isLoading = true;
     loadError = null;
     try {
-      // Load current config and all available rules
-      const [config, allRules] = await Promise.all([
+      // Load critical settings in parallel to reduce wait time.
+      const [config, allRules, autostart] = await Promise.all([
         invoke<AppConfig>("get_config"),
         invoke<RuleInfo[]>("get_rules"),
+        invoke<boolean>("get_autostart_enabled").catch((e) => {
+          console.error("Failed to load autostart setting:", e);
+          return null;
+        }),
       ]);
 
       configPath = config.configPath;
@@ -208,11 +212,8 @@
       // Load typo checking setting (default to true if not present)
       typoCheckingEnabled = config.typoCheckingEnabled ?? true;
 
-      // Load autostart setting
-      try {
-        autostartEnabled = await invoke<boolean>("get_autostart_enabled");
-      } catch (e) {
-        console.error("Failed to load autostart setting:", e);
+      if (autostart !== null) {
+        autostartEnabled = autostart;
       }
 
       // Load AI grammar settings
@@ -403,8 +404,14 @@
 
   // Load configuration on mount
   onMount(() => {
-    loadConfiguration();
-    loadHotkeyConfiguration();
+    const frameId = requestAnimationFrame(() => {
+      void loadConfiguration();
+      void loadHotkeyConfiguration();
+    });
+
+    return () => {
+      cancelAnimationFrame(frameId);
+    };
   });
 
   async function loadHotkeyConfiguration() {
