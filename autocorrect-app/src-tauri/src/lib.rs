@@ -7,6 +7,8 @@ mod objc2_compat;
 mod overlay;
 mod popup;
 mod text_selection;
+mod theme;
+mod theme_errors;
 mod typocheck;
 
 #[cfg(target_os = "macos")]
@@ -95,6 +97,7 @@ use std::sync::mpsc::TryRecvError;
 use std::thread;
 use tauri::{Emitter, Manager};
 use text_selection::get_cursor_position;
+use theme::{get_theme, set_theme};
 
 // Import popup commands for the invoke handler
 use popup::{
@@ -567,6 +570,9 @@ pub fn run() {
             ai_popup::hide_ai_popup,
             ai_popup::get_ai_popup_state,
             ai_popup::accept_ai_result,
+            // Theme commands
+            get_theme,
+            set_theme,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

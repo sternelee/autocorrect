@@ -10,6 +10,13 @@
     TooltipProvider,
   } from "$lib/components/ui/tooltip";
   import { locale, t } from "$lib/i18n";
+  import type { ThemeMode } from "$lib/types/theme";
+  import {
+    applyThemeToDom,
+    isThemeMode,
+    loadThemeFromLocalStorage,
+    saveThemeToLocalStorage,
+  } from "$lib/theme";
   $locale;
 
   // Reactive translation helper
@@ -47,6 +54,47 @@
   // Source app info (captured when popup shows)
   let sourceAppName = $state("");
   let sourceBundleId = $state("");
+  let theme: ThemeMode = $state("auto");
+  let mediaQuery: MediaQueryList | null = null;
+
+  async function loadThemeFromStore(): Promise<ThemeMode> {
+    try {
+      const stored = await invoke<string>("get_theme");
+      if (isThemeMode(stored)) {
+        return stored;
+      }
+    } catch (error) {
+      console.warn("Failed to load popup theme from store, fallback to localStorage:", error);
+    }
+    return loadThemeFromLocalStorage();
+  }
+
+  function applyTheme(mode: ThemeMode) {
+    theme = mode;
+    applyThemeToDom(mode);
+    saveThemeToLocalStorage(mode);
+  }
+
+  function handleSystemThemeChange(event: MediaQueryListEvent) {
+    if (theme === "auto") {
+      document.documentElement.classList.toggle("dark", event.matches);
+    }
+  }
+
+  function setupSystemThemeListener() {
+    if (mediaQuery) {
+      mediaQuery.removeEventListener("change", handleSystemThemeChange);
+    }
+    mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    mediaQuery.addEventListener("change", handleSystemThemeChange);
+  }
+
+  function cleanupThemeListener() {
+    if (mediaQuery) {
+      mediaQuery.removeEventListener("change", handleSystemThemeChange);
+      mediaQuery = null;
+    }
+  }
 
   // For a typo-only popup triggered by hover, we surface the first typo's suggestions as chips.
   // For a full spell-check popup, we show the whole corrected suggestion.
@@ -73,6 +121,18 @@
   );
 
   onMount(() => {
+    const unlistenThemePromise = listen<ThemeMode>("theme-changed", (event) => {
+      const mode = event.payload;
+      if (isThemeMode(mode)) {
+        applyTheme(mode);
+      }
+    });
+
+    loadThemeFromStore().then((mode) => {
+      applyTheme(mode);
+      setupSystemThemeListener();
+    });
+
     // Get initial popup state (contains source app info)
     (async () => {
       try {
@@ -113,8 +173,10 @@
     });
 
     return () => {
+      unlistenThemePromise.then((fn) => fn());
       unlistenShowPromise.then((fn) => fn());
       unlistenHidePromise.then((fn) => fn());
+      cleanupThemeListener();
     };
   });
 
@@ -237,7 +299,11 @@
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger>
-            <button class="icon-btn ignore" onclick={ignoreApp}>
+            <button
+              class="icon-btn ignore"
+              aria-label={tr("popup.ignoreTooltip")}
+              onclick={ignoreApp}
+            >
               <svg
                 width="13"
                 height="13"
@@ -356,17 +422,15 @@
     display: inline-flex;
     flex-direction: column;
     gap: 8px;
-    background: rgba(255, 255, 255, 0.97);
+    background: var(--popup-surface);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     border-radius: 10px;
-    box-shadow:
-      0 4px 20px rgba(0, 0, 0, 0.14),
-      0 0 0 1px rgba(0, 0, 0, 0.06);
+    box-shadow: var(--popup-shadow);
     padding: 8px 10px 10px;
     min-width: 180px;
     max-width: 100vw;
-    border-bottom: 3px solid #f59e0b;
+    border-bottom: 3px solid var(--popup-spell-border-accent);
   }
 
   .header {
@@ -377,7 +441,7 @@
   }
 
   .header-icon {
-    color: #dc2626;
+    color: var(--popup-spell-icon-accent);
     display: flex;
     align-items: center;
     flex-shrink: 0;
@@ -386,7 +450,7 @@
   .title {
     font-size: 13px;
     font-weight: 600;
-    color: #111827;
+    color: var(--popup-title);
     flex: 1;
     white-space: nowrap;
   }
@@ -402,17 +466,17 @@
   .ignore-message {
     font-size: 11px;
     font-weight: 500;
-    color: #059669;
+    color: var(--popup-inline-success-fg);
     padding: 2px 8px;
     border-radius: 4px;
-    background: rgba(5, 150, 105, 0.1);
+    background: var(--popup-inline-success-bg);
     white-space: nowrap;
     animation: fadeIn 0.2s ease;
   }
 
   .ignore-message.error {
-    color: #dc2626;
-    background: rgba(220, 38, 38, 0.1);
+    color: var(--popup-inline-error-fg);
+    background: var(--popup-inline-error-bg);
   }
 
   @keyframes fadeIn {
@@ -436,7 +500,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #6b7280;
+    color: var(--popup-icon);
     transition:
       background 0.12s,
       color 0.12s;
@@ -445,13 +509,13 @@
   }
 
   .icon-btn.ignore:hover {
-    background: #fef3c7;
-    color: #f59e0b;
+    background: var(--popup-hover-ignore-bg);
+    color: var(--popup-hover-ignore-fg);
   }
 
   .icon-btn.close:hover {
-    background: #fee2e2;
-    color: #dc2626;
+    background: var(--popup-hover-close-bg);
+    color: var(--popup-hover-close-fg);
   }
 
   .chips {
@@ -463,40 +527,40 @@
 
   .chip {
     padding: 3px 10px;
-    border: 1.5px solid #d1d5db;
-    background: #f9fafb;
+    border: 1.5px solid var(--popup-chip-border);
+    background: var(--popup-chip-bg);
     border-radius: 6px;
     font-size: 13px;
     font-weight: 500;
-    color: #374151;
+    color: var(--popup-chip-fg);
     cursor: pointer;
     transition: all 0.12s ease;
     -webkit-app-region: no-drag;
   }
 
   .chip:hover {
-    border-color: #16a34a;
-    background: #f0fdf4;
-    color: #16a34a;
+    border-color: var(--popup-chip-hover-border);
+    background: var(--popup-chip-hover-bg);
+    color: var(--popup-chip-hover-fg);
   }
 
   .chip:active {
-    background: #dcfce7;
+    background: var(--popup-chip-active-bg);
   }
 
   .add-custom {
-    color: #9ca3af;
+    color: var(--popup-muted-icon);
     flex-shrink: 0;
     align-self: center;
   }
 
-  .add-custom:hover:notr(:disabled) {
-    background: #f3f4f6;
-    color: #6b7280;
+  .add-custom.added {
+    color: var(--popup-added-fg);
+    cursor: default;
   }
 
-  .add-custom.added {
-    color: #16a34a;
-    cursor: default;
+  .add-custom:hover:notr(:disabled) {
+    background: var(--popup-chip-bg);
+    color: var(--popup-chip-fg);
   }
 </style>

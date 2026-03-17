@@ -1,21 +1,8 @@
-<script lang="ts" module>
+<script lang="ts" context="module">
 	import type { HTMLButtonAttributes } from "svelte/elements";
-	import { cn, type WithElementRef } from "$lib/utils.js";
-	import { tv } from "tailwind-variants";
-	import type { VariantProps } from "tailwind-variants";
+	import type { WithElementRef } from "$lib/utils.js";
 
-	const switchVariants = tv({
-		base: "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-[color,box-shadow] outline-none focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 [&_svg:not([class*=size-])]:size-4 [&_svg]:pointer-events-none [&_svg]:shrink-0",
-		variants: {
-			variant: {
-				default: "bg-primary text-primary-foreground shadow-xs hover:bg-primary/90",
-				outline: "border border-input bg-background shadow-xs hover:bg-accent hover:text-accent-foreground"
-			}
-		}
-	});
-
-	export type SwitchVariant = VariantProps<typeof switchVariants>["variant"];
-
+	export type SwitchVariant = "default" | "outline";
 	export type SwitchProps = WithElementRef<HTMLButtonAttributes> & {
 		checked?: boolean;
 		variant?: SwitchVariant;
@@ -28,6 +15,8 @@
 </script>
 
 <script lang="ts">
+	import { cn } from "$lib/utils.js";
+
 	export let ref: HTMLButtonElement | undefined = undefined;
 	export let checked = false;
 	export let variant: SwitchVariant = "default";
@@ -48,6 +37,11 @@
 			}
 		}
 	}
+
+	const variantClassMap: Record<SwitchVariant, string> = {
+		default: "",
+		outline: "border-input"
+	};
 </script>
 
 <button
@@ -61,6 +55,7 @@
 	onclick={toggle}
 	class={cn(
 		"relative inline-flex h-5 w-9 shrink-0 cursor-pointer items-center rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+		variantClassMap[variant],
 		checked ? "bg-primary" : "bg-input",
 		disabled && "cursor-not-allowed opacity-50",
 		className

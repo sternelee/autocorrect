@@ -1,112 +1,114 @@
 <script lang="ts">
-	$locale;
-	import SpellChecker from '$lib/components/SpellChecker.svelte';
-	import SettingsPanel from '$lib/components/SettingsPanel.svelte';
-	import StatusIndicator from '$lib/components/StatusIndicator.svelte';
-	import { Button } from '$lib/components/ui/button';
-	import { Settings, Home, Info } from 'lucide-svelte';
-	import { listen } from '@tauri-apps/api/event';
-	import { onMount, onDestroy } from 'svelte';
-	import { locale, t } from '$lib/i18n';
-	$locale;
+  $locale;
+  import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
+  import { Home, Info, Settings } from "lucide-svelte";
+  import { onDestroy, onMount } from "svelte";
+  import SettingsPanel from "$lib/components/SettingsPanel.svelte";
+  import SpellChecker from "$lib/components/SpellChecker.svelte";
+  import StatusIndicator from "$lib/components/StatusIndicator.svelte";
+  import { Button } from "$lib/components/ui/button";
+  import { locale, t } from "$lib/i18n";
+  import type { ThemeMode } from "$lib/types/theme";
+  import {
+    applyThemeToDom,
+    isThemeMode,
+    loadThemeFromLocalStorage,
+    saveThemeToLocalStorage,
+  } from "$lib/theme";
+  $locale;
 
-	// Reactive translation helper
-	const tr = $derived((key: string, params?: Record<string, string | number>) => {
-		const _ = $locale;
-		return t(key, params);
-	});
+  const tr = $derived((key: string, params?: Record<string, string | number>) => {
+    const _ = $locale;
+    return t(key, params);
+  });
 
-	// App state
-	let currentTab: 'spellchecker' | 'settings' | 'about' = $state('spellchecker');
-	let isEnabled = $state(true);
-	let correctionCount = $state(0);
+  let currentTab: "spellchecker" | "settings" | "about" = $state("spellchecker");
+  let isEnabled = $state(true);
+  let correctionCount = $state(0);
+  let theme: ThemeMode = $state("auto");
 
-	// Theme management
-	type ThemeMode = 'light' | 'dark' | 'auto';
-	const THEME_STORAGE_KEY = 'autocorrect-theme';
-	let theme: ThemeMode = $state('auto');
-	let mediaQuery: MediaQueryList | null = null;
+  let mediaQuery: MediaQueryList | null = null;
+  let unlistenThemeChanged: (() => void) | null = null;
+  let unlistenAccepted: (() => void) | null = null;
+  let unlistenNoChanges: (() => void) | null = null;
 
-	function loadTheme(): ThemeMode {
-		const stored = localStorage.getItem(THEME_STORAGE_KEY);
-		if (stored === 'light' || stored === 'dark' || stored === 'auto') {
-			return stored;
-		}
-		return 'auto';
-	}
+  async function loadThemeFromStore(): Promise<ThemeMode> {
+    try {
+      const stored = await invoke<string>("get_theme");
+      if (isThemeMode(stored)) {
+        return stored;
+      }
+    } catch (error) {
+      console.warn("Failed to load theme from store, fallback to localStorage:", error);
+    }
+    return loadThemeFromLocalStorage();
+  }
 
-	function applyTheme(mode: ThemeMode) {
-		const html = document.documentElement;
-		if (mode === 'dark') {
-			html.classList.add('dark');
-		} else if (mode === 'auto') {
-			const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-			html.classList.toggle('dark', prefersDark);
-		} else {
-			html.classList.remove('dark');
-		}
-		localStorage.setItem(THEME_STORAGE_KEY, mode);
-	}
+  function applyTheme(mode: ThemeMode) {
+    theme = mode;
+    applyThemeToDom(mode);
+    saveThemeToLocalStorage(mode);
+  }
 
-	function setupSystemThemeListener() {
-		if (mediaQuery) {
-			mediaQuery.removeEventListener('change', handleSystemThemeChange);
-		}
-		mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
-		mediaQuery.addEventListener('change', handleSystemThemeChange);
-	}
+  function handleSystemThemeChange(event: MediaQueryListEvent) {
+    if (theme === "auto") {
+      document.documentElement.classList.toggle("dark", event.matches);
+    }
+  }
 
-	function handleSystemThemeChange(e: MediaQueryListEvent) {
-		if (theme === 'auto') {
-			const html = document.documentElement;
-			html.classList.toggle('dark', e.matches);
-		}
-	}
+  function setupSystemThemeListener() {
+    if (mediaQuery) {
+      mediaQuery.removeEventListener("change", handleSystemThemeChange);
+    }
+    mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    mediaQuery.addEventListener("change", handleSystemThemeChange);
+  }
 
-	function cleanupThemeListener() {
-		if (mediaQuery) {
-			mediaQuery.removeEventListener('change', handleSystemThemeChange);
-			mediaQuery = null;
-		}
-	}
+  function cleanupThemeListener() {
+    if (mediaQuery) {
+      mediaQuery.removeEventListener("change", handleSystemThemeChange);
+      mediaQuery = null;
+    }
+  }
 
-	function handleToggleEnabled(enabled: boolean) {
-		isEnabled = enabled;
-	}
+  function handleToggleEnabled(enabled: boolean) {
+    isEnabled = enabled;
+  }
 
-	// Apply theme when it changes
-	$effect(() => {
-		applyTheme(theme);
-	});
+  onMount(async () => {
+    applyTheme(await loadThemeFromStore());
+    setupSystemThemeListener();
 
-	// Listen for Tauri events from the Rust backend
-	onMount(() => {
-		// Initialize theme
-		theme = loadTheme();
-		applyTheme(theme);
-		setupSystemThemeListener();
+    try {
+      unlistenThemeChanged = await listen<ThemeMode>("theme-changed", (event) => {
+        const mode = event.payload;
+        if (isThemeMode(mode)) {
+          applyTheme(mode);
+        }
+      });
+    } catch (error) {
+      console.error("Failed to listen for theme changes:", error);
+    }
 
-		// Listen for suggestion-accepted event (from popup window)
-		const unlistenAccepted = listen('suggestion-accepted', () => {
-			correctionCount++;
-		});
+    unlistenAccepted = await listen("suggestion-accepted", () => {
+      correctionCount++;
+    });
 
-		// Listen for no-changes-needed notification
-		const unlistenNoChanges = listen('no-changes-needed', () => {
-			console.log(tr('spell.noSuggestions'));
-			// Could show a small toast notification here
-		});
+    unlistenNoChanges = await listen("no-changes-needed", () => {
+      console.log(tr("spell.noSuggestions"));
+    });
+  });
 
-		// Cleanup on destroy
-		return () => {
-			unlistenAccepted.then((unlisten) => unlisten());
-			unlistenNoChanges.then((unlisten) => unlisten());
-		};
-	});
-
-	onDestroy(() => {
-		cleanupThemeListener();
-	});
+  onDestroy(() => {
+    cleanupThemeListener();
+    unlistenThemeChanged?.();
+    unlistenThemeChanged = null;
+    unlistenAccepted?.();
+    unlistenAccepted = null;
+    unlistenNoChanges?.();
+    unlistenNoChanges = null;
+  });
 </script>
 
 <div class="flex h-screen flex-col bg-background" data-locale={$locale}>
@@ -161,7 +163,7 @@
 		{#if currentTab === 'spellchecker'}
 			<SpellChecker />
 		{:else if currentTab === 'settings'}
-			<SettingsPanel {theme} onThemeChange={(mode) => (theme = mode)} />
+			<SettingsPanel {theme} />
 		{:else if currentTab === 'about'}
 			<div class="flex h-full items-center justify-center p-6">
 				<div class="max-w-md space-y-4 text-center">

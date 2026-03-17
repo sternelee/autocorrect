@@ -10,8 +10,14 @@
     TooltipProvider,
   } from "$lib/components/ui/tooltip";
   import { Button } from "$lib/components/ui/button";
-  import { Input } from "$lib/components/ui/input";
   import { Textarea } from "$lib/components/ui/textarea";
+  import type { ThemeMode } from "$lib/types/theme";
+  import {
+    applyThemeToDom,
+    isThemeMode,
+    loadThemeFromLocalStorage,
+    saveThemeToLocalStorage,
+  } from "$lib/theme";
   $locale;
 
   // Reactive translation helper
@@ -41,6 +47,47 @@
   // Source app info (captured when popup shows)
   let sourceAppName = $state("");
   let sourceBundleId = $state("");
+  let theme: ThemeMode = $state("auto");
+  let mediaQuery: MediaQueryList | null = null;
+
+  async function loadThemeFromStore(): Promise<ThemeMode> {
+    try {
+      const stored = await invoke<string>("get_theme");
+      if (isThemeMode(stored)) {
+        return stored;
+      }
+    } catch (error) {
+      console.warn("Failed to load AI popup theme from store, fallback to localStorage:", error);
+    }
+    return loadThemeFromLocalStorage();
+  }
+
+  function applyTheme(mode: ThemeMode) {
+    theme = mode;
+    applyThemeToDom(mode);
+    saveThemeToLocalStorage(mode);
+  }
+
+  function handleSystemThemeChange(event: MediaQueryListEvent) {
+    if (theme === "auto") {
+      document.documentElement.classList.toggle("dark", event.matches);
+    }
+  }
+
+  function setupSystemThemeListener() {
+    if (mediaQuery) {
+      mediaQuery.removeEventListener("change", handleSystemThemeChange);
+    }
+    mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    mediaQuery.addEventListener("change", handleSystemThemeChange);
+  }
+
+  function cleanupThemeListener() {
+    if (mediaQuery) {
+      mediaQuery.removeEventListener("change", handleSystemThemeChange);
+      mediaQuery = null;
+    }
+  }
 
   const tools: { id: Tool; label: () => string; icon: string }[] = [
     { id: "translate", label: () => tr("aipopup.translate"), icon: "🌐" },
@@ -140,6 +187,18 @@
   }
 
   onMount(() => {
+    const unlistenThemePromise = listen<ThemeMode>("theme-changed", (event) => {
+      const mode = event.payload;
+      if (isThemeMode(mode)) {
+        applyTheme(mode);
+      }
+    });
+
+    loadThemeFromStore().then((mode) => {
+      applyTheme(mode);
+      setupSystemThemeListener();
+    });
+
     // Get initial ai popup state (contains source app info)
     (async () => {
       try {
@@ -184,7 +243,9 @@
       .catch(() => {});
 
     return () => {
+      unlistenThemePromise.then((fn) => fn());
       unlistenPromise.then((fn) => fn());
+      cleanupThemeListener();
     };
   });
 
@@ -223,7 +284,11 @@
       <TooltipProvider>
         <Tooltip>
           <TooltipTrigger>
-            <button class="icon-btn ignore" onclick={ignoreApp}>
+            <button
+              class="icon-btn ignore"
+              aria-label={tr("popup.ignoreTooltip")}
+              onclick={ignoreApp}
+            >
               <svg
                 width="13"
                 height="13"
@@ -352,15 +417,15 @@
     display: inline-flex;
     flex-direction: column;
     gap: 8px;
-    background: rgba(255, 255, 255, 0.97);
+    background: var(--popup-surface);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
     border-radius: 10px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.14), 0 0 0 1px rgba(0, 0, 0, 0.06);
+    box-shadow: var(--popup-shadow);
     padding: 8px 10px 10px;
     min-width: 280px;
     max-width: 100vw;
-    border-bottom: 3px solid #7c3aed;
+    border-bottom: 3px solid var(--popup-ai-border-accent);
   }
 
   .header {
@@ -370,7 +435,7 @@
   }
 
   .header-icon {
-    color: #7c3aed;
+    color: var(--popup-ai-icon-accent);
     display: flex;
     align-items: center;
     flex-shrink: 0;
@@ -379,7 +444,7 @@
   .title {
     font-size: 13px;
     font-weight: 600;
-    color: #111827;
+    color: var(--popup-title);
     flex: 1;
     white-space: nowrap;
   }
@@ -394,17 +459,17 @@
   .ignore-message {
     font-size: 11px;
     font-weight: 500;
-    color: #059669;
+    color: var(--popup-inline-success-fg);
     padding: 2px 8px;
     border-radius: 4px;
-    background: rgba(5, 150, 105, 0.1);
+    background: var(--popup-inline-success-bg);
     white-space: nowrap;
     animation: fadeIn 0.2s ease;
   }
 
   .ignore-message.error {
-    color: #dc2626;
-    background: rgba(220, 38, 38, 0.1);
+    color: var(--popup-inline-error-fg);
+    background: var(--popup-inline-error-bg);
   }
 
   @keyframes fadeIn {
@@ -428,24 +493,24 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    color: #6b7280;
+    color: var(--popup-icon);
     transition: background 0.12s, color 0.12s;
     padding: 0;
   }
 
   .icon-btn.ignore:hover {
-    background: #fef3c7;
-    color: #f59e0b;
+    background: var(--popup-hover-ignore-bg);
+    color: var(--popup-hover-ignore-fg);
   }
 
   .icon-btn.close:hover {
-    background: #fee2e2;
-    color: #dc2626;
+    background: var(--popup-hover-close-bg);
+    color: var(--popup-hover-close-fg);
   }
 
   .preview {
     padding: 8px 10px;
-    background: #f9fafb;
+    background: var(--popup-muted-surface);
     border-radius: 6px;
   }
 
@@ -453,7 +518,7 @@
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: #6b7280;
+    color: var(--popup-muted-label);
     display: block;
     margin-bottom: 3px;
   }
@@ -461,7 +526,7 @@
   .preview-text {
     margin: 0;
     font-size: 12px;
-    color: #374151;
+    color: var(--popup-muted-text);
     line-height: 1.4;
     white-space: pre-wrap;
     word-break: break-word;
@@ -479,25 +544,25 @@
     align-items: center;
     gap: 3px;
     padding: 8px 4px;
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
+    background: var(--popup-muted-surface);
+    border: 1px solid var(--popup-border);
     border-radius: 6px;
-    color: #374151;
+    color: var(--popup-muted-text);
     cursor: pointer;
     font-size: 11px;
     transition: all 0.12s ease;
   }
 
   .tool-btn:hover:not(:disabled) {
-    background: #f3f4f6;
-    border-color: #7c3aed;
-    color: #7c3aed;
+    background: var(--popup-ai-hover-bg);
+    border-color: var(--popup-ai-hover-border);
+    color: var(--popup-ai-hover-fg);
   }
 
   .tool-btn.active {
-    background: #ede9fe;
-    border-color: #7c3aed;
-    color: #7c3aed;
+    background: var(--popup-ai-active-bg);
+    border-color: var(--popup-ai-active-border);
+    color: var(--popup-ai-active-fg);
   }
 
   .tool-btn:disabled {
@@ -524,23 +589,23 @@
 
   .lang-label {
     font-size: 11px;
-    color: #6b7280;
+    color: var(--popup-muted-label);
   }
 
   .lang-btn {
     font-size: 11px;
     padding: 2px 8px;
     border-radius: 10px;
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
-    color: #6b7280;
+    background: var(--popup-muted-surface);
+    border: 1px solid var(--popup-border);
+    color: var(--popup-muted-label);
     cursor: pointer;
   }
 
   .lang-btn.selected {
-    background: #ede9fe;
-    border-color: #7c3aed;
-    color: #7c3aed;
+    background: var(--popup-ai-active-bg);
+    border-color: var(--popup-ai-active-border);
+    color: var(--popup-ai-active-fg);
   }
 
   .loading {
@@ -548,15 +613,15 @@
     align-items: center;
     gap: 8px;
     padding: 12px 14px;
-    color: #6b7280;
+    color: var(--popup-muted-label);
     font-size: 12px;
   }
 
   .spinner {
     width: 14px;
     height: 14px;
-    border: 2px solid #e5e7eb;
-    border-top-color: #7c3aed;
+    border: 2px solid var(--popup-border);
+    border-top-color: var(--popup-ai-spinner-top);
     border-radius: 50%;
     animation: spin 0.6s linear infinite;
   }
@@ -570,10 +635,10 @@
   .error {
     margin: 0 4px;
     padding: 8px 10px;
-    background: #fef2f2;
-    border: 1px solid #fecaca;
+    background: var(--popup-error-bg);
+    border: 1px solid var(--popup-error-border);
     border-radius: 6px;
-    color: #dc2626;
+    color: var(--popup-error-fg);
     font-size: 12px;
     line-height: 1.4;
   }
@@ -585,10 +650,10 @@
   :global(.result-area) {
     width: 100%;
     box-sizing: border-box;
-    background: #f9fafb;
-    border: 1px solid #e5e7eb;
+    background: var(--popup-input-bg);
+    border: 1px solid var(--popup-input-border);
     border-radius: 6px;
-    color: #111827;
+    color: var(--popup-input-fg);
     font-size: 12px;
     line-height: 1.5;
     padding: 8px 10px;
@@ -598,7 +663,7 @@
   }
 
   :global(.result-area:focus) {
-    border-color: #7c3aed;
+    border-color: var(--popup-ai-focus-border);
   }
 
   .result-actions {
@@ -606,4 +671,5 @@
     gap: 8px;
     margin-top: 8px;
   }
+
 </style>

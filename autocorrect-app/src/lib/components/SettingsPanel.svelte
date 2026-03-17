@@ -23,9 +23,10 @@
   } from "lucide-svelte";
   import CustomCorrectionsManager from "./CustomCorrectionsManager.svelte";
   import IgnoredAppsManager from "./IgnoredAppsManager.svelte";
+  import type { ThemeMode } from "$lib/types/theme";
   import { locale, t, setLocale } from "$lib/i18n";
 
-  let { theme, onThemeChange }: { theme: "light" | "dark" | "auto"; onThemeChange: (mode: "light" | "dark" | "auto") => void } = $props();
+  let { theme }: { theme: ThemeMode } = $props();
 
   // Reactive translation helper - use in template with {tr("key")}
   const tr = $derived((key: string, params?: Record<string, string | number>) => {
@@ -179,6 +180,14 @@
 
   // Track unsaved changes
   let hasUnsavedChanges = $state(false);
+
+  async function onThemeChange(selectedTheme: ThemeMode) {
+    try {
+      await invoke("set_theme", { theme: selectedTheme });
+    } catch (e) {
+      console.error("Failed to set theme:", e);
+    }
+  }
 
   async function loadConfiguration() {
     isLoading = true;
@@ -390,12 +399,6 @@
       default:
         return "text-gray-500";
     }
-  }
-
-  function cycleSeverity(rule: RuleInfo) {
-    // Cycle: Off (0) -> Error (1) -> Warning (2) -> Off (0)
-    rule.severity = (rule.severity + 1) % 3;
-    hasUnsavedChanges = true;
   }
 
   // Load configuration on mount
@@ -762,7 +765,7 @@
               value={theme}
               onchange={(e) => {
                 const target = e.currentTarget;
-                onThemeChange(target.value as "light" | "dark" | "auto");
+                onThemeChange(target.value as ThemeMode);
               }}
               class="border-input bg-background ring-offset-background focus-visible:border-ring focus-visible:ring-ring/50 flex h-9 w-full max-w-xs min-w-0 rounded-md border px-3 py-1 text-sm outline-none focus-visible:ring-[3px]"
             >
