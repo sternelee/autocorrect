@@ -499,11 +499,13 @@ pub async fn ai_text_transform_stream(
                         if let Ok(value) = serde_json::from_str::<serde_json::Value>(data) {
                             if let Some(choices) = value.get("choices").and_then(|c| c.as_array()) {
                                 if let Some(first_choice) = choices.first() {
+                                    let mut has_finish_reason = false;
                                     if let Some(reason) = first_choice
                                         .get("finish_reason")
                                         .and_then(|r| r.as_str())
                                     {
                                         if !reason.is_empty() && reason != "null" {
+                                            has_finish_reason = true;
                                             log::info!(
                                                 "[AI_STREAM][{}] finish_reason={} chunk_count={} emitted_chars={}",
                                                 request_id,
@@ -516,24 +518,26 @@ pub async fn ai_text_transform_stream(
                                     }
                                     let contents = collect_stream_content(first_choice);
                                     if contents.is_empty() {
-                                        non_content_events += 1;
-                                        let has_reasoning = first_choice
-                                            .get("delta")
-                                            .and_then(|d| d.get("reasoning"))
-                                            .and_then(|r| r.as_str())
-                                            .map(|s| !s.is_empty())
-                                            .unwrap_or(false);
-                                        if has_reasoning {
-                                            reasoning_only_events += 1;
-                                        }
-                                        if sample_non_content_logs < 3 {
-                                            log::warn!(
-                                                "[AI_STREAM][{}] non-content event sample={} payload_prefix={}",
-                                                request_id,
-                                                sample_non_content_logs + 1,
-                                                data.chars().take(400).collect::<String>()
-                                            );
-                                            sample_non_content_logs += 1;
+                                        if !has_finish_reason {
+                                            non_content_events += 1;
+                                            let has_reasoning = first_choice
+                                                .get("delta")
+                                                .and_then(|d| d.get("reasoning"))
+                                                .and_then(|r| r.as_str())
+                                                .map(|s| !s.is_empty())
+                                                .unwrap_or(false);
+                                            if has_reasoning {
+                                                reasoning_only_events += 1;
+                                            }
+                                            if sample_non_content_logs < 3 {
+                                                log::warn!(
+                                                    "[AI_STREAM][{}] non-content event sample={} payload_prefix={}",
+                                                    request_id,
+                                                    sample_non_content_logs + 1,
+                                                    data.chars().take(400).collect::<String>()
+                                                );
+                                                sample_non_content_logs += 1;
+                                            }
                                         }
                                     } else {
                                         for content in contents {
@@ -638,6 +642,19 @@ pub async fn ai_text_transform_stream(
     }
 
     if emitted_chars == 0 {
+        if operation == "grammar" {
+            log::info!(
+                "[AI_STREAM][{}] grammar stream completed with no issues (zero content): chunk_count={} total_bytes={} non_content_events={} reasoning_only_events={} parse_error_events={}",
+                request_id,
+                chunk_count,
+                total_bytes,
+                non_content_events,
+                reasoning_only_events,
+                parse_error_events
+            );
+            let _ = app.emit("ai-stream-complete", ());
+            return Ok(());
+        }
         let message = format!(
             "Stream ended without content (chunk_count={} total_bytes={} non_content_events={} reasoning_only_events={} parse_error_events={})",
             chunk_count, total_bytes, non_content_events, reasoning_only_events, parse_error_events
