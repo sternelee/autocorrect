@@ -42,7 +42,12 @@
   }> = $state([]);
   let aiBusy = $state(false);
   let aiError: string | null = $state(null);
-  let aiRunningOperation: "grammar" | "translate" | "polish" | null = $state(null);
+  let aiRunningOperation:
+    | "grammar"
+    | "translate"
+    | "polish"
+    | "summarize"
+    | null = $state(null);
   let aiTargetLanguage = $state("English");
   let aiPolishStyle = $state("professional");
   let unlistenChunk: (() => void) | null = null;
@@ -182,7 +187,26 @@
     }
   }
 
-  async function runAiTransform(operation: "grammar" | "translate" | "polish") {
+  function buildAiRequest(operation: "grammar" | "translate" | "polish" | "summarize") {
+    const polishStyleMap: Record<"polish" | "summarize", string> = {
+      polish: aiPolishStyle,
+      summarize: "summarize concisely in the same language as the input",
+    };
+
+    return {
+      text: currentText,
+      operation: operation === "summarize" ? "polish" : operation,
+      targetLanguage: aiTargetLanguage,
+      polishStyle:
+        operation === "polish" || operation === "summarize"
+          ? polishStyleMap[operation]
+          : aiPolishStyle,
+    };
+  }
+
+  async function runAiTransform(
+    operation: "grammar" | "translate" | "polish" | "summarize",
+  ) {
     if (!currentText.trim() || aiBusy) {
       return;
     } 
@@ -210,12 +234,7 @@
           col: number;
         }>;
       }>("ai_text_transform", {
-        request: {
-          text: currentText,
-          operation,
-          targetLanguage: aiTargetLanguage,
-          polishStyle: aiPolishStyle,
-        },
+        request: buildAiRequest(operation),
       });
 
       if (operation === "grammar") {
@@ -248,7 +267,9 @@
     }
   }
 
-  async function runAiTransformStream(operation: "grammar" | "translate" | "polish") {
+  async function runAiTransformStream(
+    operation: "grammar" | "translate" | "polish" | "summarize",
+  ) {
     if (!currentText.trim() || aiBusy) {
       return;
     }
@@ -267,12 +288,7 @@
       correctedText = "";
       
       await invoke("ai_text_transform_stream", {
-        request: {
-          text: currentText,
-          operation,
-          targetLanguage: aiTargetLanguage,
-          polishStyle: aiPolishStyle,
-        },
+        request: buildAiRequest(operation),
       });
     } catch (error) {
       console.error("AI stream transform failed:", error);
@@ -285,10 +301,16 @@
 
   onMount(async () => {
     unlistenChunk = await listen<string>("ai-stream-chunk", (event) => {
+      if (!aiBusy || !aiRunningOperation) {
+        return;
+      }
       correctedText += event.payload;
     });
 
     unlistenComplete = await listen("ai-stream-complete", () => {
+      if (!aiBusy || !aiRunningOperation) {
+        return;
+      }
       if (aiRunningOperation !== "grammar") {
         hasChanges = correctedText !== currentText;
         lineChanges = hasChanges
@@ -303,10 +325,17 @@
             ]
           : [];
       }
+      aiBusy = false;
+      aiRunningOperation = null;
     });
 
     unlistenError = await listen<string>("ai-stream-error", (event) => {
+      if (!aiBusy || !aiRunningOperation) {
+        return;
+      }
       aiError = event.payload;
+      aiBusy = false;
+      aiRunningOperation = null;
     });
   });
 
@@ -416,6 +445,15 @@
             {aiRunningOperation === "polish"
               ? tr("spell.running")
               : tr("spell.aiPolish")}
+          </Button>
+          <Button
+            onclick={() => runAiTransform("summarize")}
+            disabled={aiBusy || !currentText.trim()}
+            variant="outline"
+          >
+            {aiRunningOperation === "summarize"
+              ? tr("spell.running")
+              : tr("spell.aiSummarize")}
           </Button>
         </div>
         {#if aiError}

@@ -126,7 +126,7 @@
         summarize: "summarize concisely in the same language as the input",
       };
 
-      const res = await invoke<{ outputText?: string }>("ai_text_transform", {
+      await invoke("ai_text_transform_stream", {
         request: {
           text: selectedText,
           operation:
@@ -135,7 +135,6 @@
           polishStyle: polishStyleMap[tool] ?? config.aiPolishStyle ?? null,
         },
       });
-      result = res.outputText ?? "";
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -236,6 +235,28 @@
       },
     );
 
+    const unlistenChunkPromise = listen<string>("ai-stream-chunk", (event) => {
+      if (!loading || !activeTool) {
+        return;
+      }
+      result += event.payload;
+    });
+
+    const unlistenCompletePromise = listen("ai-stream-complete", () => {
+      if (!activeTool) {
+        return;
+      }
+      loading = false;
+    });
+
+    const unlistenErrorPromise = listen<string>("ai-stream-error", (event) => {
+      if (!activeTool) {
+        return;
+      }
+      error = event.payload;
+      loading = false;
+    });
+
     invoke<{ selectedText: string }>("get_ai_popup_state")
       .then((state) => {
         if (state.selectedText) selectedText = state.selectedText;
@@ -245,6 +266,9 @@
     return () => {
       unlistenThemePromise.then((fn) => fn());
       unlistenPromise.then((fn) => fn());
+      unlistenChunkPromise.then((fn) => fn());
+      unlistenCompletePromise.then((fn) => fn());
+      unlistenErrorPromise.then((fn) => fn());
       cleanupThemeListener();
     };
   });

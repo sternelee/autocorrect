@@ -559,7 +559,7 @@
     cursor: default;
   }
 
-  .add-custom:hover:notr(:disabled) {
+  .add-custom:hover:not(:disabled) {
     background: var(--popup-chip-bg);
     color: var(--popup-chip-fg);
   }
