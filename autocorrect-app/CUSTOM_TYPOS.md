@@ -12,6 +12,7 @@ The `typos` library uses a curated dictionary of common misspellings. By default
 ❌ Technical jargon or proprietary terms
 
 ✅ But it **DOES** detect common spelling errors:
+
 - `recieve` → `receive`
 - `definately` → `definitely`
 - `seperate` → `separate`
@@ -120,6 +121,7 @@ Found 1 typos
 ### Q: My custom configuration is not working
 
 A: Make sure:
+
 1. File path is correct: `~/.autocorrect-typos.txt` (with dot prefix)
 2. File format is correct: `typo=correction` (one per line)
 3. You restarted the AutoCorrect app
@@ -128,6 +130,7 @@ A: Make sure:
 ### Q: Can I disable typo checking completely?
 
 A: Yes. In AutoCorrect settings:
+
 1. Open Settings panel
 2. Find "Enable Advanced Typo Detection"
 3. Toggle it OFF
@@ -138,7 +141,8 @@ This keeps AutoCorrect's CJK formatting but disables spell checking.
 ### Q: How do I ignore words that are incorrectly flagged?
 
 A: Use AutoCorrect's Custom Dictionary feature:
-1. Open Settings → Spell Check Configuration  
+
+1. Open Settings → Spell Check Configuration
 2. Add words to "Custom Dictionary" text area (one per line)
 3. Save changes
 
@@ -190,17 +194,17 @@ If you need more comprehensive spell checking:
 
 1. **LanguageTool** - Grammar and advanced spell checking
 2. **Hunspell** - Used by LibreOffice, Firefox
-3. **Aspell** - Traditional spell checker  
+3. **Aspell** - Traditional spell checker
 4. **OS built-in** - macOS Spell Check, Windows Spell Check
 
 AutoCorrect focuses on CJK text formatting. English spell checking is a bonus feature, not the primary focus.
 
 ## File Location
 
-| OS | Location |
-|----|----------|
-| macOS | `~/.autocorrect-typos.txt` |
-| Linux | `~/.autocorrect-typos.txt` |
+| OS      | Location                               |
+| ------- | -------------------------------------- |
+| macOS   | `~/.autocorrect-typos.txt`             |
+| Linux   | `~/.autocorrect-typos.txt`             |
 | Windows | `%USERPROFILE%\.autocorrect-typos.txt` |
 
 ## Complete Example File

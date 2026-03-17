@@ -351,8 +351,8 @@ pub fn run() {
                                 // Position popup from mouse cursor with a small offset.
                                 let popup_width = 300.0;
                                 let popup_height = 120.0;
-                                let offset_x = 12.0;
-                                let offset_y = 18.0;
+                                let offset_x = 0.0;
+                                let offset_y = 0.0;
 
                                 // Use the PRIMARY display height in CG coordinates
                                 // (y=0 at top, increases down — same system as mouse_x/y).
@@ -870,15 +870,15 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                     let (icon_x, icon_y) = match macos_text::get_selected_text_bounds() {
                         Ok((sx, sy, sw, sh)) => {
                             log::info!("[AI] selection bounds: x={} y={} w={} h={}", sx, sy, sw, sh);
-                            // 右上角位置: x = 左上角 x + 宽度, y = 左上角 y
-                            (sx + sw + 8, sy - 18)
+                            // 右上角位置: x = 左上角 x + 宽度 + 小偏移, y = 左上角 y
+                            (sx + sw + 4, sy - 18)
                         }
                         Err(e) => {
                             log::warn!("[AI] get_selected_text_bounds error: {:?}", e);
                             // 回退方案：获取鼠标位置
                             let (cx, cy) = get_cursor_position();
                             // 图标显示在鼠标位置上方偏右处
-                            (cx + 20, cy - 18)
+                            (cx + 10, cy - 18)
                         }
                     };
                     log::info!(

@@ -329,8 +329,24 @@ pub fn get_focused_range_bounds(range_start: usize, range_len: usize) -> Result<
                 K_AXVALUE_CGRECT_TYPE,
                 &mut rect as *mut _ as *mut std::ffi::c_void,
             ) {
-                log::info!("[DIAG] AXBoundsForRange success: {:?}", rect);
-                return Ok(rect);
+                log::info!("[DIAG] AXBoundsForRange raw: {:?}", rect);
+
+                // 检测并修正 Electron 应用的窗口相对坐标
+                let mut final_rect = rect;
+                if let Ok((win_x, win_y)) = get_focused_window_position() {
+                    if is_window_relative_coords(rect, (win_x, win_y)) {
+                        log::info!(
+                            "[DIAG] Detected window-relative coords in get_focused_range_bounds, adding window offset ({}, {})",
+                            win_x,
+                            win_y
+                        );
+                        final_rect.origin.x += win_x;
+                        final_rect.origin.y += win_y;
+                    }
+                }
+
+                log::info!("[DIAG] AXBoundsForRange returning: {:?}", final_rect);
+                return Ok(final_rect);
             }
         }
 
@@ -548,33 +564,161 @@ pub fn get_selected_text_bounds() -> Result<(i32, i32, i32, i32)> {
                 ) {
                     // 添加调试日志查看原始值
                     log::info!(
-                        "[DIAG] get_selected_text_bounds: rect origin=({},{}) size=({},{})",
+                        "[DIAG] get_selected_text_bounds: raw rect origin=({},{}) size=({},{})",
                         rect.origin.x,
                         rect.origin.y,
                         rect.size.width,
                         rect.size.height
                     );
 
-                    // 返回原始值，不做转换（AXBoundsForRange 可能已经返回屏幕坐标）
-                    let sx = rect.origin.x as i32;
-                    let sy = rect.origin.y as i32;
-                    let sw = rect.size.width as i32;
-                    let sh = rect.size.height as i32;
+                    // 检测 bounds 是否有效 (某些 Electron 应用返回 0,0 大小)
+                    let is_valid = rect.size.width > 0.0 && rect.size.height > 0.0;
 
-                    log::info!(
-                        "[DIAG] get_selected_text_bounds returning: ({},{},{},{})",
-                        sx,
-                        sy,
-                        sw,
-                        sh
-                    );
-                    return Ok((sx, sy, sw, sh));
+                    if is_valid {
+                        // 检测并修正 Electron 应用的窗口相对坐标
+                        let mut final_rect = rect;
+                        if let Ok((win_x, win_y)) = get_focused_window_position() {
+                            if is_window_relative_coords(rect, (win_x, win_y)) {
+                                log::info!(
+                                    "[DIAG] Detected window-relative coords, adding window offset ({}, {})",
+                                    win_x,
+                                    win_y
+                                );
+                                final_rect.origin.x += win_x;
+                                final_rect.origin.y += win_y;
+                            }
+                        }
+
+                        // 返回修正后的值
+                        let sx = final_rect.origin.x as i32;
+                        let sy = final_rect.origin.y as i32;
+                        let sw = final_rect.size.width as i32;
+                        let sh = final_rect.size.height as i32;
+
+                        log::info!(
+                            "[DIAG] get_selected_text_bounds returning: ({},{},{},{})",
+                            sx,
+                            sy,
+                            sw,
+                            sh
+                        );
+                        return Ok((sx, sy, sw, sh));
+                    } else {
+                        // Bounds 无效，回退到使用鼠标位置
+                        log::info!("[DIAG] AXBoundsForRange returned invalid bounds, using mouse position fallback");
+                        let (mouse_x, mouse_y) = get_cursor_position_nsevent();
+                        // 返回鼠标位置作为近似选区位置，使用固定的小宽度
+                        return Ok((mouse_x as i32, mouse_y as i32, 100, 20));
+                    }
                 }
             }
         }
 
         Err(AccessibilityError::NoTextSelected)
     }
+}
+
+/// Get the window's screen position for the currently focused element.
+/// This is used to detect if AXBoundsForRange returns window-relative coordinates.
+#[cfg(target_os = "macos")]
+pub fn get_focused_window_position() -> Result<(f64, f64)> {
+    if !unsafe { AXIsProcessTrusted() } {
+        return Err(AccessibilityError::PermissionDenied);
+    }
+
+    unsafe {
+        let system_element = AXUIElementCreateSystemWide();
+        let mut focused_element: Id = NIL;
+
+        let err = AXUIElementCopyAttributeValue(
+            system_element,
+            to_ax_string("AXFocusedUIElement"),
+            &mut focused_element,
+        );
+
+        if err != 0 || focused_element.is_null() {
+            return Err(AccessibilityError::NoFocusedElement);
+        }
+
+        // Walk up the hierarchy to find the window
+        let mut current: Id = focused_element;
+        let mut window_position: Option<(f64, f64)> = None;
+
+        for _ in 0..10 {
+            // Check if this element is a window
+            let mut role_value: Id = NIL;
+            AXUIElementCopyAttributeValue(current, to_ax_string("AXRole"), &mut role_value);
+            let role = if !role_value.is_null() {
+                from_ax_string(role_value)
+            } else {
+                String::new()
+            };
+
+            if role == "AXWindow" {
+                // Get window position
+                let mut position_value: Id = NIL;
+                let err_pos = AXUIElementCopyAttributeValue(
+                    current,
+                    to_ax_string("AXPosition"),
+                    &mut position_value,
+                );
+
+                if err_pos == 0 && !position_value.is_null() {
+                    let mut point = core_graphics::geometry::CGPoint::new(0.0, 0.0);
+                    if AXValueGetValue(
+                        position_value,
+                        2, // kAXValueTypeCGPoint
+                        &mut point as *mut _ as *mut std::ffi::c_void,
+                    ) {
+                        window_position = Some((point.x, point.y));
+                        log::info!(
+                            "[DIAG] get_focused_window_position: found window at ({}, {})",
+                            point.x,
+                            point.y
+                        );
+                        break;
+                    }
+                }
+            }
+
+            // Move to parent
+            let mut parent: Id = NIL;
+            let err_parent = AXUIElementCopyAttributeValue(
+                current,
+                to_ax_string("AXParent"),
+                &mut parent,
+            );
+
+            if err_parent != 0 || parent.is_null() {
+                break;
+            }
+            current = parent;
+        }
+
+        window_position.ok_or(AccessibilityError::NoFocusedElement)
+    }
+}
+
+/// Check if the given bounds appear to be window-relative (inside an Electron app)
+/// rather than screen coordinates. Electron apps often return coordinates relative
+/// to the window origin instead of screen coordinates.
+fn is_window_relative_coords(bounds: CGRect, window_pos: (f64, f64)) -> bool {
+    // If bounds origin is very close to window position, it's likely window-relative
+    let dx = (bounds.origin.x - window_pos.0).abs();
+    let dy = (bounds.origin.y - window_pos.1).abs();
+
+    // Window-relative coords typically have small delta (< 50 pixels)
+    // Screen coords have larger delta (window position + text position)
+    let threshold = 50.0;
+
+    // Also check if bounds are at a typical "inside window" position
+    // (small positive coordinates, not screen-size coordinates)
+    let looks_like_window_coords = bounds.origin.x < 2000.0
+        && bounds.origin.y < 2000.0
+        && window_pos.0 > 0.0
+        && window_pos.1 > 0.0;
+
+    (dx < threshold && dy < threshold) || looks_like_window_coords
 }
 
 // --- macOS 底层辅助函数 ---

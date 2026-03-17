@@ -13,6 +13,7 @@ Successfully implemented a complete UI-based management system for custom typo c
 **File:** `autocorrect-app/src-tauri/src/commands/custom_corrections.rs`
 
 Created 5 new Tauri commands:
+
 - `get_custom_corrections()` - Retrieve all custom corrections
 - `add_custom_correction(typo, correction)` - Add new correction
 - `update_custom_correction(old_typo, new_typo, new_correction)` - Edit existing
@@ -20,12 +21,14 @@ Created 5 new Tauri commands:
 - `get_custom_corrections_path_cmd()` - Get file path for display
 
 **Features:**
+
 - Reads/writes to `~/.autocorrect-typos.txt`
 - Validates input (no empty values, checks for duplicates)
 - Preserves file comments and formatting
 - Returns detailed error messages
 
 **File Format:**
+
 ```
 # Custom typo corrections for AutoCorrect
 # Format: typo=correction
@@ -38,12 +41,14 @@ teh=the
 **File:** `autocorrect-app/src-tauri/src/typocheck.rs`
 
 **Changes:**
+
 - Replaced `LazyLock<HashMap>` with `LazyLock<RwLock<HashMap>>`
 - Added `reload_custom_corrections()` function
 - Automatically reloads corrections after file updates
 - **No app restart required!**
 
 **Implementation:**
+
 ```rust
 static CUSTOM_CORRECTIONS: LazyLock<RwLock<HashMap<String, String>>> =
     LazyLock::new(|| RwLock::new(load_custom_corrections()));
@@ -62,6 +67,7 @@ pub fn reload_custom_corrections() {
 **File:** `autocorrect-app/src/lib/components/CustomCorrectionsManager.svelte`
 
 **Features:**
+
 - **View Mode:** Table display with typo → correction mapping
 - **Add Mode:** Form to add new corrections
 - **Edit Mode:** Inline editing of existing corrections
@@ -70,6 +76,7 @@ pub fn reload_custom_corrections() {
 - **Responsive UI:** Adapts to light/dark mode
 
 **UI Elements:**
+
 - Purple "+ Add to Custom" button
 - Inline edit/delete buttons per row
 - Empty state with examples
@@ -81,6 +88,7 @@ pub fn reload_custom_corrections() {
 **File:** `autocorrect-app/src/lib/components/SettingsPanel.svelte`
 
 Added the CustomCorrectionsManager component to the **Spell Check Configuration** section, positioned after:
+
 1. Enable/Disable Typo Checking toggle
 2. Custom Dictionary textarea
 
@@ -89,10 +97,12 @@ Users can now manage corrections directly from the Settings UI.
 ### 5. Popup Quick-Add Feature
 
 **Files:**
+
 - `autocorrect-app/src/popup.ts`
 - `autocorrect-app/popup.html`
 
 **New Features:**
+
 - **"+ Add to Custom" button** appears next to each typo suggestion
 - Click to instantly add typo → correction to custom list
 - Shows success notification
@@ -100,6 +110,7 @@ Users can now manage corrections directly from the Settings UI.
 - Purple styling to distinguish from regular suggestions
 
 **Notification System:**
+
 - Animated slide-down notifications
 - Auto-dismisses after 3 seconds
 - Success (green) and error (red) variants
@@ -140,10 +151,12 @@ Users can now manage corrections directly from the Settings UI.
 ## 📁 Files Modified/Created
 
 ### Created Files
+
 1. `autocorrect-app/src-tauri/src/commands/custom_corrections.rs` (195 lines)
 2. `autocorrect-app/src/lib/components/CustomCorrectionsManager.svelte` (334 lines)
 
 ### Modified Files
+
 1. `autocorrect-app/src-tauri/src/commands.rs` - Added module declaration
 2. `autocorrect-app/src-tauri/src/lib.rs` - Registered 5 new commands
 3. `autocorrect-app/src-tauri/src/typocheck.rs` - Hot-reload system
@@ -156,13 +169,16 @@ Users can now manage corrections directly from the Settings UI.
 ## 🧪 Testing
 
 ### Backend Tests
+
 All 6 tests pass:
+
 ```bash
 cd autocorrect-app/src-tauri
 cargo test --lib typocheck -- --nocapture
 ```
 
 **Results:**
+
 - ✅ `test_check_typos` - Default typos library
 - ✅ `test_calculate_line_col` - Line/col calculation
 - ✅ `test_no_typos` - No false positives
@@ -171,12 +187,14 @@ cargo test --lib typocheck -- --nocapture
 - ✅ `test_whts_with_custom` - Custom "whts" detection ✅
 
 ### Frontend Tests
+
 ```bash
 cd autocorrect-app
 pnpm check
 ```
 
 **Results:**
+
 - ✅ 0 errors
 - ⚠️ 3 warnings (pre-existing accessibility warnings)
 
@@ -205,14 +223,16 @@ Next spell check uses updated corrections
 ### Data Flow
 
 **Add Correction:**
+
 ```
-Frontend Input → add_custom_correction() → Append to file → 
+Frontend Input → add_custom_correction() → Append to file →
 reload_typocheck_corrections() → Update RwLock → Success
 ```
 
 **Spell Check with Custom:**
+
 ```
-check_typos(text) → 
+check_typos(text) →
 1. Check with typos library
 2. Check with RwLock<HashMap> custom corrections
 3. Merge results → Return Vec<TypoError>
@@ -245,6 +265,7 @@ check_typos(text) →
 ## 🎨 UI Screenshots Description
 
 ### Settings Panel
+
 - **Section Title:** "Custom Typo Corrections"
 - **Description:** "Define your own typo → correction mappings. Changes take effect immediately."
 - **Add Button:** Purple "+ Add New" in top-right
@@ -252,6 +273,7 @@ check_typos(text) →
 - **Empty State:** "No custom corrections yet. Add one above to get started!"
 
 ### Popup Quick-Add
+
 - **Location:** Yellow "Spelling Issues" section
 - **Button:** Purple "+ Add to Custom" next to suggestions
 - **Notification:** Slides down from top, green background, auto-dismisses
@@ -261,6 +283,7 @@ check_typos(text) →
 ## 🚀 What's Next (Optional Enhancements)
 
 ### Already Implemented ✅
+
 1. ✅ CRUD operations
 2. ✅ Hot-reload system
 3. ✅ UI for management
@@ -268,6 +291,7 @@ check_typos(text) →
 5. ✅ Tests passing
 
 ### Future Ideas (Not Implemented)
+
 1. **Import/Export:** Share corrections between machines
 2. **Frequency Tracking:** Learn from user corrections
 3. **Search/Filter:** Find specific corrections in large lists
@@ -279,13 +303,16 @@ check_typos(text) →
 ## 📝 Migration Notes
 
 ### From Previous Version
+
 If users had manually created `~/.autocorrect-typos.txt`:
+
 - ✅ Existing file is preserved
 - ✅ Comments are maintained
 - ✅ All corrections are loaded
 - ✅ Can now edit via UI
 
 ### File Location
+
 - **macOS/Linux:** `~/.autocorrect-typos.txt`
 - **Windows:** `%USERPROFILE%\.autocorrect-typos.txt`
 
@@ -311,12 +338,14 @@ If users had manually created `~/.autocorrect-typos.txt`:
 ## 📚 Related Documentation
 
 **Previous Session Docs:**
+
 - `autocorrect-app/CUSTOM_TYPOS.md` - User guide (English)
 - `autocorrect-app/CUSTOM_TYPOS_ZH.md` - User guide (Chinese)
 - `autocorrect-app/TYPO_DICTIONARY.md` - Updated with UI info
 - `autocorrect-app/TYPOS_LIMITATIONS.md` - Why "whts" needs custom
 
 **Code Documentation:**
+
 - `custom_corrections.rs:19-29` - Functions and formats
 - `typocheck.rs:1-17` - Custom corrections usage
 - `CustomCorrectionsManager.svelte:1-10` - Component props/usage
@@ -326,12 +355,14 @@ If users had manually created `~/.autocorrect-typos.txt`:
 ## ✨ Summary
 
 **Before:**
+
 - Users manually edited `~/.autocorrect-typos.txt`
 - Required app restart
 - No UI feedback
 - Error-prone (typos in corrections!)
 
 **After:**
+
 - Full UI management in Settings
 - Quick-add from popup
 - Instant hot-reload
@@ -340,6 +371,7 @@ If users had manually created `~/.autocorrect-typos.txt`:
 - All 6 tests passing ✅
 
 **Lines of Code:**
+
 - Backend: ~195 lines (custom_corrections.rs)
 - Frontend: ~334 lines (CustomCorrectionsManager.svelte)
 - Modifications: ~50 lines across 6 files

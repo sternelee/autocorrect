@@ -11,6 +11,7 @@ We have successfully integrated CSpell's 50+ professional programming dictionari
 #### New Module: `src-tauri/src/cspell.rs` (420 lines)
 
 A complete Rust wrapper for CSpell CLI that:
+
 - Executes CSpell as a subprocess with specified dictionaries
 - Parses JSON output from `@cspell/cspell-json-reporter`
 - Converts CSpell issues to AutoCorrect's `TypoError` format
@@ -32,24 +33,24 @@ pub struct CSpellDictionaries {
     pub php: bool,
     pub ruby: bool,
     pub swift: bool,
-    
+
     // Web Technologies (4)
     pub html: bool,
     pub css: bool,
     pub node: bool,
     pub npm: bool,
-    
+
     // Frameworks (3)
     pub react: bool,
     pub vue: bool,
     pub django: bool,
-    
+
     // Tools & Platforms (4)
     pub docker: bool,
     pub k8s: bool,
     pub aws: bool,
     pub git: bool,
-    
+
     // General (4)
     pub companies: bool,
     pub software_terms: bool,
@@ -61,6 +62,7 @@ pub fn check_with_cspell(text: &str, dictionaries: &CSpellDictionaries) -> Vec<T
 ```
 
 **Default Dictionaries Enabled:**
+
 - TypeScript, HTML, CSS, Node.js, NPM
 - Git, Companies, Software Terms, File Types, Public Licenses
 
@@ -102,26 +104,27 @@ The `spell_check()` command now uses a **hybrid approach**:
 pub fn spell_check(text: String) -> Result<SpellCheckResult, Error> {
     // 1. AutoCorrect CJK formatting
     let corrected = autocorrect::format_for(&text, "text");
-    
+
     // 2. Typos library (basic English spelling)
     if app_settings.typo_checking_enabled {
         typos.extend(typocheck::check_typos(&text));
     }
-    
+
     // 3. CSpell (programming-specific terms)
     if app_settings.cspell_enabled {
         typos.extend(cspell::check_with_cspell(&text, &app_settings.cspell_dictionaries));
     }
-    
+
     // 4. Deduplicate results
     typos.sort_by(|a, b| ...);
     typos.dedup_by(|a, b| ...);
-    
+
     Ok(SpellCheckResult { typos, ... })
 }
 ```
 
 **Benefits of Hybrid Approach:**
+
 - **Typos library**: Fast, lightweight, catches common English errors
 - **CSpell**: Recognizes programming terms (useState, TypeScript, npm, etc.)
 - **Custom corrections**: User-defined typo → correction mappings
@@ -137,22 +140,26 @@ Added comprehensive CSpell configuration UI:
 
 ```typescript
 interface CSpellDictionaries {
-    typescript: boolean;
-    python: boolean;
-    rust: boolean;
-    // ... 25 total dictionaries
+  typescript: boolean;
+  python: boolean;
+  rust: boolean;
+  // ... 25 total dictionaries
 }
 
 let cspellEnabled = false;
-let cspellDictionaries: CSpellDictionaries = { /* defaults */ };
+let cspellDictionaries: CSpellDictionaries = {
+  /* defaults */
+};
 ```
 
 **UI Components Added:**
 
 1. **Master Toggle**
+
    ```svelte
    <Switch bind:checked={cspellEnabled} id="cspell-enabled" />
    ```
+
    - Label: "Enable CSpell Programming Dictionaries"
    - Description: "Use CSpell's 50+ specialized dictionaries"
 
@@ -163,17 +170,16 @@ let cspellDictionaries: CSpellDictionaries = { /* defaults */ };
      - **Frameworks** (3): React, Vue, Django
      - **Tools & Platforms** (4): Docker, Kubernetes, AWS, Git
      - **General** (4): Companies, Software Terms, File Types, Public Licenses
-   
    - Each checkbox triggers `hasUnsavedChanges = true`
    - Grid layout (2 columns) for compact display
 
 3. **Save Configuration**
    ```typescript
-   await invoke('update_config', {
-       updates: {
-           cspellEnabled: cspellEnabled,
-           cspellDictionaries: cspellDictionaries
-       }
+   await invoke("update_config", {
+     updates: {
+       cspellEnabled: cspellEnabled,
+       cspellDictionaries: cspellDictionaries,
+     },
    });
    ```
 
@@ -231,6 +237,7 @@ Display suggestions to user
 ### Example: Checking TypeScript Code
 
 **Input text:**
+
 ```typescript
 const useState = 123;
 let funciton = 456;
@@ -238,16 +245,19 @@ const whts = 789;
 ```
 
 **With only Typos library (default):**
+
 - ❌ `useState` flagged as error (false positive!)
 - ✅ `funciton` → suggests "function"
 - ✅ `whts` → suggests "what's" (if in custom corrections)
 
 **With CSpell + TypeScript dictionary:**
+
 - ✅ `useState` recognized (not flagged)
 - ✅ `funciton` → suggests "function"
 - ✅ `whts` → not recognized by CSpell dictionaries (requires custom corrections)
 
 **Best configuration:**
+
 - ✅ Typos library: ON
 - ✅ CSpell: ON with TypeScript, Node, NPM
 - ✅ Custom corrections: Add `whts=what's`
@@ -266,6 +276,7 @@ cargo test --lib cspell -- --nocapture
 ```
 
 **Test Results:**
+
 ```
 running 4 tests
 test cspell::tests::test_default_dictionaries ... ok
@@ -277,6 +288,7 @@ test result: ok. 4 passed; 0 failed; 0 ignored
 ```
 
 **Test Cases:**
+
 1. **test_default_dictionaries**: Verifies default dicts are enabled
 2. **test_custom_dictionaries**: Tests enabling/disabling specific dicts
 3. **test_cspell_check_typescript**: Checks TypeScript code with CSpell
@@ -290,6 +302,7 @@ pnpm check
 ```
 
 **Result:**
+
 ```
 svelte-check found 0 errors and 3 warnings in 2 files
 ```
@@ -305,10 +318,12 @@ Only accessibility warnings (labels), no compilation errors.
    - Click "Save Configuration"
 
 2. **Test with Code**
+
    ```typescript
-   const useState = require('react');
+   const useState = require("react");
    let funciton = 123;
    ```
+
    - Select text
    - Press Cmd+Shift+K
    - Should flag only `funciton`, not `useState` or `require` or `react`
@@ -348,6 +363,7 @@ Only accessibility warnings (labels), no compilation errors.
 ### Recommended Configurations
 
 #### Web Developer
+
 ```
 ✅ TypeScript
 ✅ HTML
@@ -362,6 +378,7 @@ Only accessibility warnings (labels), no compilation errors.
 ```
 
 #### Backend Developer (Python)
+
 ```
 ✅ Python
 ✅ Django (if using)
@@ -374,6 +391,7 @@ Only accessibility warnings (labels), no compilation errors.
 ```
 
 #### Systems Programmer (Rust)
+
 ```
 ✅ Rust
 ✅ C++
@@ -386,16 +404,19 @@ Only accessibility warnings (labels), no compilation errors.
 ### Performance Considerations
 
 **CSpell Performance:**
+
 - First check: ~300-500ms (spawns subprocess)
 - Subsequent checks: ~100-200ms (caching?)
 - Minimal impact on user experience
 
 **Memory Usage:**
+
 - CSpell subprocess: ~50-100MB RAM
 - Only runs during spell check (not persistent)
 - App RAM: +5-10MB for Rust wrapper
 
 **Battery Impact:**
+
 - Only runs on-demand (hotkey trigger)
 - No background polling
 - Negligible battery drain
@@ -458,22 +479,25 @@ spellcheck:
 ### Disabling Specific Checkers
 
 **Disable Typos library (only use CSpell):**
+
 ```typescript
 // In Settings
-typoCheckingEnabled: false
-cspellEnabled: true
+typoCheckingEnabled: false;
+cspellEnabled: true;
 ```
 
 **Disable CSpell (only use Typos):**
+
 ```typescript
-typoCheckingEnabled: true
-cspellEnabled: false
+typoCheckingEnabled: true;
+cspellEnabled: false;
 ```
 
 **Use all three:**
+
 ```typescript
-typoCheckingEnabled: true  // Basic English
-cspellEnabled: true        // Programming terms
+typoCheckingEnabled: true; // Basic English
+cspellEnabled: true; // Programming terms
 // + Custom corrections    // User-defined
 ```
 
@@ -482,12 +506,13 @@ cspellEnabled: true        // Programming terms
 To add a new language to CSpell (e.g., Kotlin):
 
 1. **Update Rust struct** (`src-tauri/src/cspell.rs`):
+
    ```rust
    pub struct CSpellDictionaries {
        // ... existing fields
        pub kotlin: bool,
    }
-   
+
    impl Default for CSpellDictionaries {
        fn default() -> Self {
            Self {
@@ -496,7 +521,7 @@ To add a new language to CSpell (e.g., Kotlin):
            }
        }
    }
-   
+
    impl CSpellDictionaries {
        pub fn get_enabled(&self) -> Vec<String> {
            // ... existing code
@@ -506,22 +531,24 @@ To add a new language to CSpell (e.g., Kotlin):
    ```
 
 2. **Update TypeScript interface** (`src/lib/components/SettingsPanel.svelte`):
+
    ```typescript
    interface CSpellDictionaries {
-       // ... existing fields
-       kotlin: boolean;
+     // ... existing fields
+     kotlin: boolean;
    }
-   
+
    let cspellDictionaries: CSpellDictionaries = {
-       // ... existing defaults
-       kotlin: false
+     // ... existing defaults
+     kotlin: false,
    };
    ```
 
 3. **Add UI checkbox**:
+
    ```svelte
    <label class="flex items-center space-x-2 text-sm">
-       <input type="checkbox" bind:checked={cspellDictionaries.kotlin} 
+       <input type="checkbox" bind:checked={cspellDictionaries.kotlin}
               onchange={() => hasUnsavedChanges = true} class="rounded" />
        <span>Kotlin</span>
    </label>
@@ -536,6 +563,7 @@ To add a new language to CSpell (e.g., Kotlin):
 ### Debugging CSpell Issues
 
 **Enable debug logging:**
+
 ```bash
 # Check if CSpell is accessible
 cd autocorrect-app
@@ -547,12 +575,14 @@ echo "const useState = 123; let funciton = 456;" | \
 ```
 
 **Check Rust logs:**
+
 ```bash
 cd autocorrect-app/src-tauri
 RUST_LOG=debug cargo run
 ```
 
 Look for log messages like:
+
 ```
 [DEBUG] Running CSpell with dictionaries: ["typescript", "html", "css"]
 [DEBUG] CSpell found 1 issues
@@ -564,10 +594,12 @@ Look for log messages like:
 ### Issue: CSpell not working
 
 **Symptoms:**
+
 - CSpell toggle enabled but no programming terms recognized
 - Logs show "CSpell not found"
 
 **Solution:**
+
 ```bash
 cd autocorrect-app
 pnpm install  # Reinstall dependencies
@@ -577,9 +609,11 @@ pnpm cspell --version  # Verify installation
 ### Issue: All code flagged as errors
 
 **Symptoms:**
+
 - Valid code like `useState`, `React`, `npm` flagged
 
 **Solution:**
+
 - Enable CSpell in Settings
 - Select appropriate dictionaries (TypeScript, React, NPM)
 - Ensure CSpell toggle is ON (not just dictionaries selected)
@@ -587,10 +621,12 @@ pnpm cspell --version  # Verify installation
 ### Issue: Performance is slow
 
 **Symptoms:**
+
 - Spell check takes >1 second
 - UI feels laggy
 
 **Solution:**
+
 - Reduce number of enabled dictionaries (only enable what you use)
 - Disable typos library if only checking code (not prose)
 - Check system resources (cspell subprocess might be resource-constrained)
@@ -598,9 +634,11 @@ pnpm cspell --version  # Verify installation
 ### Issue: Settings not persisting
 
 **Symptoms:**
+
 - Changes revert after restart
 
 **Solution:**
+
 - Check file permissions: `ls -la ~/.autocorrect-app.json`
 - Manually verify settings saved: `cat ~/.autocorrect-app.json`
 - Check app logs for write errors
@@ -639,6 +677,7 @@ pnpm cspell --version  # Verify installation
 ### Why CLI Integration Instead of Library?
 
 **Considered Approaches:**
+
 1. ✅ **CLI subprocess** (implemented)
    - Pros: Simple, no parsing logic, leverages existing tooling
    - Cons: Slower (process spawn), requires CSpell installed
@@ -656,11 +695,13 @@ pnpm cspell --version  # Verify installation
 ### Dictionary Format
 
 CSpell dictionaries are in `node_modules/@cspell/dict-*/` with:
+
 - `cspell-ext.json`: Configuration
 - `dict/*.txt`: Word lists
 - `dict/*.trie`: Compressed dictionaries
 
 Example: `@cspell/dict-typescript/`
+
 ```
 cspell-ext.json
 dict/typescript.txt
@@ -669,6 +710,7 @@ dict/typescript.txt
 ### Performance Profiling
 
 Benchmark (M1 MacBook Pro):
+
 ```
 Text size: 500 characters
 Typos library only: 5ms
@@ -686,11 +728,12 @@ We have successfully integrated CSpell into AutoCorrect desktop app with:
 ✅ **Frontend**: Beautiful Svelte UI with category organization  
 ✅ **Testing**: 4 passing tests, all checks pass  
 ✅ **Documentation**: This comprehensive guide  
-✅ **User Experience**: Seamless integration with existing workflow  
+✅ **User Experience**: Seamless integration with existing workflow
 
 **Key Achievement:** Users can now spell-check code without false positives on programming terms like `useState`, `TypeScript`, `npm`, etc.
 
 **Next Steps:**
+
 - Test with real-world users
 - Gather feedback on dictionary selection
 - Monitor performance metrics

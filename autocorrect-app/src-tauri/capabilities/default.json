@@ -2,11 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "enables the default permissions plus clipboard access for AutoCorrect",
-  "windows": [
-    "main",
-    "popup",
-    "ai-popup"
-  ],
+  "windows": ["main", "popup", "ai-popup"],
   "permissions": [
     "core:default",
     "core:window:allow-center",

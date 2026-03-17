@@ -19,6 +19,7 @@ How to get the exact screen position of specific characters/words in a third-par
 **The core problem**: Electron apps use Chromium's accessibility implementation, which exposes `AXValue` (the text content) but does NOT properly implement `AXBoundsForRange` for parameterized attribute queries. This is a known limitation of Chromium's accessibility bridge on macOS.
 
 **What works in Electron apps via Accessibility API**:
+
 - `AXValue` -- full text content of the focused element (confirmed working in your codebase)
 - `AXSelectedText` -- currently selected text
 - `AXSelectedTextRange` -- range of the selection
@@ -28,6 +29,7 @@ How to get the exact screen position of specific characters/words in a third-par
 - `AXSize` -- the size of the entire UI element
 
 **What does NOT work reliably in Electron**:
+
 - `AXBoundsForRange` -- returns zero-sized rect (your current problem)
 - `AXRangeForPosition` -- may not work in Electron
 - `AXLineForIndex` / `AXRangeForLine` -- inconsistent support
@@ -57,12 +59,14 @@ How to get the exact screen position of specific characters/words in a third-par
 **This is the most promising approach for Electron apps.** A recent real-world project (SnapTra Translator, January 2026) demonstrates a complete working pipeline:
 
 **Pipeline**:
+
 1. Capture a screen region around the focused text field using `ScreenCaptureKit` (or `CGWindowListCreateImage`)
 2. Feed the captured image to `VNRecognizeTextRequest` from Apple's Vision framework
 3. Vision returns recognized text with **bounding boxes** for each text line/word
 4. Map the recognized words to your typo list to find exact screen positions
 
 **Key technical details**:
+
 - Vision returns bounding boxes in **normalized coordinates** (0.0 to 1.0), which you convert to screen coordinates using the capture region's screen rect
 - `recognitionLevel = .accurate` gives best results for text position accuracy
 - The y-axis is flipped (Vision uses bottom-left origin, screen uses top-left)
@@ -71,11 +75,13 @@ How to get the exact screen position of specific characters/words in a third-par
 - For CJK text, word-level bounding boxes may need custom splitting since Vision returns line-level results
 
 **Performance considerations**:
+
 - Capture only a small region around the text field (not full screen) -- the SnapTra project uses 520x140px
 - OCR a region this size takes ~50-100ms on Apple Silicon
 - With an 800ms polling interval (matching your current `sync_system_typos` approach), this is feasible
 
 **Limitations**:
+
 - Requires Screen Recording permission (in addition to Accessibility)
 - OCR results may not be pixel-perfect -- typically within 2-5px accuracy
 - Performance overhead is higher than Accessibility API
@@ -89,12 +95,14 @@ How to get the exact screen position of specific characters/words in a third-par
 **Concept**: Create a custom macOS input method that intercepts text input and can annotate it.
 
 **How it works**:
+
 - An IMK-based input method receives every keystroke via `inputText:client:` callback
 - The `client` parameter gives you an `id` representing the text input field
 - You can call `setMarkedText:selectionRange:replacementRange:` to show inline annotations (underlined text in the composition buffer)
 - The `mark(forStyle:at:)` method controls the appearance of marked text
 
 **Why this is NOT suitable**:
+
 1. **Users must actively select your input method**: It replaces their normal keyboard input. You cannot run it alongside their preferred input method (e.g., Chinese Pinyin).
 2. **It only works during active input**: You cannot annotate existing text that was already typed.
 3. **Marked text is temporary**: It disappears once committed. You cannot persistently underline a word.
@@ -110,6 +118,7 @@ How to get the exact screen position of specific characters/words in a third-par
 **AXTextMarker / AXTextMarkerRange**: These are private, undocumented accessibility attributes used internally by Apple's VoiceOver. They represent opaque position markers within text content.
 
 **Reality**:
+
 - `AXTextMarker` and `AXTextMarkerRange` are NOT part of the public Accessibility API
 - They are used internally by VoiceOver and are specific to certain Apple apps (Safari, TextEdit)
 - Chromium/Electron does NOT implement these private markers
@@ -141,12 +150,14 @@ How to get the exact screen position of specific characters/words in a third-par
 ## Codebase Analysis
 
 Your current implementation in `/Users/sternelee/www/github/autocorrect/autocorrect-app/src-tauri/src/macos_text.rs`:
+
 - Uses `AXBoundsForRange` (line 104-109) to get screen coordinates for text ranges
 - Falls back to returning a default (zero) `CGRect` when this fails (line 122)
 - Has a `get_focused_text_context()` function that successfully extracts text content from Electron apps via `AXValue`
 - Already handles UTF-16 range calculations for the Accessibility API
 
 Your overlay system in `/Users/sternelee/www/github/autocorrect/autocorrect-app/src-tauri/src/overlay.rs`:
+
 - Creates native macOS overlay windows
 - Positions `TypoMarker` elements at specific (x, y, width, height) coordinates
 - Already has the rendering infrastructure in place
@@ -160,10 +171,12 @@ The gap is specifically: when `AXBoundsForRange` returns zero, you have no chara
 ### Recommended Strategy: Tiered Fallback System
 
 **Tier 1: AXBoundsForRange (current approach)**
+
 - Keep using this for native macOS apps (TextEdit, Notes, Pages, Xcode, etc.) where it works perfectly
 - Detection: If `AXBoundsForRange` returns a non-zero rect, use it
 
 **Tier 2: Screen OCR via Vision Framework (new, for Electron apps)**
+
 - When `AXBoundsForRange` returns zero, capture the text field region and run OCR
 - Steps:
   1. Get the text field's overall bounds via `AXPosition` + `AXSize` (this DOES work for Electron)
@@ -175,11 +188,13 @@ The gap is specifically: when `AXBoundsForRange` returns zero, you have no chara
 - OCR can be cached and only re-run when text changes (detected via `AXValue` polling)
 
 **Tier 3: Approximate positioning (fallback for when OCR is not available)**
+
 - Position the popup/overlay relative to the entire text field, not at character precision
 - Use a floating widget approach similar to Grammarly's desktop app
 - This is a degraded but still useful experience
 
 ### Why NOT to pursue other approaches:
+
 - **IMK (Input Method)**: Fundamentally wrong architecture; conflicts with CJK input methods
 - **AXTextMarker**: Private API, not implemented by Electron
 - **CGEvent**: No layout information available

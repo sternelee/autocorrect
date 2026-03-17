@@ -10,6 +10,7 @@ The app crash on startup has been fixed. The issue was caused by:
 ## Solution Applied
 
 ### 1. Fixed rdev dependency (Cargo.toml)
+
 ```toml
 # Use forked rdev that fixes macOS crash issue (see Tauri discussion #7839)
 rdev = { git = "https://github.com/fufesou/rdev" }
@@ -20,15 +21,18 @@ This fork is maintained by the RustDesk team and fixes the `dispatch_assert_queu
 Reference: https://github.com/tauri-apps/tauri/discussions/7839
 
 ### 2. Fixed channel shadowing bug (lib.rs)
+
 - Removed unused channel creation on line 27
 - Changed `(_hotkey_rx, ...)` to `(hotkey_rx, ...)` on line 45 to properly capture the receiver
 
 ## Current State
+
 - App starts successfully without crashes
 - Hotkey listener initializes with Cmd+Shift+A
 - Vite dev server running on http://localhost:1420/
 - All Tauri commands registered and functional
 
 ## Files Modified
+
 - `src-tauri/Cargo.toml` - Updated rdev to use fixed fork
 - `src-tauri/src/lib.rs` - Fixed channel variable shadowing

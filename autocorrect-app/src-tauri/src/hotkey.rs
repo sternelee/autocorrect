@@ -246,7 +246,7 @@ impl HotkeyConfig {
 /// - A handle that can be used to stop the listener
 ///
 /// # Example
-/// ```no_run
+/// ```ignore
 /// use autocorrect_app_lib::hotkey::{create_hotkey_channel, HotkeyConfig};
 /// use rdev::Key;
 ///

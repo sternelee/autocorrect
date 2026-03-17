@@ -6,7 +6,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Settings, Home, Info } from 'lucide-svelte';
 	import { listen } from '@tauri-apps/api/event';
-	import { onMount } from 'svelte';
+	import { onMount, onDestroy } from 'svelte';
 	import { locale, t } from '$lib/i18n';
 	$locale;
 
@@ -21,12 +21,71 @@
 	let isEnabled = $state(true);
 	let correctionCount = $state(0);
 
+	// Theme management
+	type ThemeMode = 'light' | 'dark' | 'auto';
+	const THEME_STORAGE_KEY = 'autocorrect-theme';
+	let theme: ThemeMode = $state('auto');
+	let mediaQuery: MediaQueryList | null = null;
+
+	function loadTheme(): ThemeMode {
+		const stored = localStorage.getItem(THEME_STORAGE_KEY);
+		if (stored === 'light' || stored === 'dark' || stored === 'auto') {
+			return stored;
+		}
+		return 'auto';
+	}
+
+	function applyTheme(mode: ThemeMode) {
+		const html = document.documentElement;
+		if (mode === 'dark') {
+			html.classList.add('dark');
+		} else if (mode === 'auto') {
+			const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+			html.classList.toggle('dark', prefersDark);
+		} else {
+			html.classList.remove('dark');
+		}
+		localStorage.setItem(THEME_STORAGE_KEY, mode);
+	}
+
+	function setupSystemThemeListener() {
+		if (mediaQuery) {
+			mediaQuery.removeEventListener('change', handleSystemThemeChange);
+		}
+		mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+		mediaQuery.addEventListener('change', handleSystemThemeChange);
+	}
+
+	function handleSystemThemeChange(e: MediaQueryListEvent) {
+		if (theme === 'auto') {
+			const html = document.documentElement;
+			html.classList.toggle('dark', e.matches);
+		}
+	}
+
+	function cleanupThemeListener() {
+		if (mediaQuery) {
+			mediaQuery.removeEventListener('change', handleSystemThemeChange);
+			mediaQuery = null;
+		}
+	}
+
 	function handleToggleEnabled(enabled: boolean) {
 		isEnabled = enabled;
 	}
 
+	// Apply theme when it changes
+	$effect(() => {
+		applyTheme(theme);
+	});
+
 	// Listen for Tauri events from the Rust backend
 	onMount(() => {
+		// Initialize theme
+		theme = loadTheme();
+		applyTheme(theme);
+		setupSystemThemeListener();
+
 		// Listen for suggestion-accepted event (from popup window)
 		const unlistenAccepted = listen('suggestion-accepted', () => {
 			correctionCount++;
@@ -43,6 +102,10 @@
 			unlistenAccepted.then((unlisten) => unlisten());
 			unlistenNoChanges.then((unlisten) => unlisten());
 		};
+	});
+
+	onDestroy(() => {
+		cleanupThemeListener();
 	});
 </script>
 
@@ -98,7 +161,7 @@
 		{#if currentTab === 'spellchecker'}
 			<SpellChecker />
 		{:else if currentTab === 'settings'}
-			<SettingsPanel />
+			<SettingsPanel {theme} onThemeChange={(mode) => (theme = mode)} />
 		{:else if currentTab === 'about'}
 			<div class="flex h-full items-center justify-center p-6">
 				<div class="max-w-md space-y-4 text-center">

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - 2026-02-04
 
 ### Added
+
 - **Initial Release of AutoCorrect Desktop Application**
   - Real-time spell checking powered by AutoCorrect engine
   - Global hotkey support (Cmd+Shift+A / Ctrl+Shift+A) for system-wide corrections
@@ -16,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Built with Tauri 2 and Svelte 5
 
 ### Features
+
 - **Spell Checking Interface**
   - Main spell checker tab with text input area
   - Real-time correction suggestions
@@ -48,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Responsive layout
 
 ### Technology Stack
+
 - **Backend**: Rust with Tauri 2
   - AutoCorrect integration for spell checking
   - rdev for global hotkey handling
@@ -60,6 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - TypeScript for type safety
 
 ### Known Limitations
+
 - Clipboard monitoring detects changes but automatic text replacement in external applications is limited
 - Text replacement in external applications depends on platform accessibility APIs
 - Global hotkey may conflict with other applications using the same combination
@@ -70,6 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Roadmap
 
 #### Upcoming Features (0.2.0)
+
 - [ ] Enhanced text replacement in external applications
 - [ ] Custom dictionary management UI
 - [ ] Language detection and automatic switching
@@ -77,6 +82,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [ ] Auto-start on system boot
 
 #### Future Features (1.0.0)
+
 - [ ] Cloud sync for settings and custom rules
 - [ ] Browser extension integration
 - [ ] Machine learning-powered suggestions
@@ -85,17 +91,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - [ ] Statistics and usage tracking
 
 ### Development Notes
+
 - Minimum Node.js version: 18.x
 - Minimum Rust version: 1.77.2
 - Tested on macOS 14+, Windows 10+, Ubuntu 22.04+
 
 ### Documentation
+
 - Comprehensive README with installation and usage instructions
 - Testing guide with step-by-step test cases
 - Inline code documentation
 - Demo script for guided testing
 
 ### Contributors
+
 - AutoCorrect Contributors
 
 ---
@@ -103,6 +112,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## Version History Format
 
 Each version includes:
+
 - **Added**: New features
 - **Changed**: Changes to existing functionality
 - **Deprecated**: Features to be removed in future releases

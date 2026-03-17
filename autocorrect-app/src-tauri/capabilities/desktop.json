@@ -4,4 +4,3 @@
   "windows": ["main"],
   "permissions": ["autostart:default"]
 }
-

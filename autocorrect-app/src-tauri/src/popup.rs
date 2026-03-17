@@ -554,10 +554,13 @@ pub fn trigger_spell_check_workflow(app: AppHandle, x: i32, y: i32) -> Result<()
     // If there are changes or typos, show popup
     if (result.has_changes || !result.typos.is_empty()) && !result.corrected.is_empty() {
         log::info!("Spell check found corrections needed");
+        // Small offset from cursor so popup doesn't cover the selection
+        let offset_x = 5;
+        let offset_y = 5;
         show_popup(
             app,
-            x,
-            y,
+            x + offset_x,
+            y + offset_y,
             text,
             result.corrected,
             Some(result.typos),

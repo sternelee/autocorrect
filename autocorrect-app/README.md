@@ -15,6 +15,7 @@ A system-wide text correction and spell checking desktop application powered by 
 ## Screenshots
 
 <!-- Add screenshots here -->
+
 - Main application window showing spell checker interface
 - Settings panel with rule configuration
 - Suggestion popup in action
@@ -71,16 +72,16 @@ npm run tauri:dev
 
 ### Available Scripts
 
-| Command | Description |
-|---------|-------------|
-| `npm run dev` | Start Vite dev server (frontend only) |
-| `npm run build` | Build frontend for production |
-| `npm run tauri:dev` | Start full development environment (Tauri + Vite) |
-| `npm run tauri:build` | Build release binaries |
-| `npm run tauri:build:debug` | Build debug binaries (faster compilation) |
-| `npm run check` | Run TypeScript and Svelte type checking |
-| `npm run lint` | Run ESLint and Prettier checks |
-| `npm run format` | Format code with Prettier |
+| Command                     | Description                                       |
+| --------------------------- | ------------------------------------------------- |
+| `npm run dev`               | Start Vite dev server (frontend only)             |
+| `npm run build`             | Build frontend for production                     |
+| `npm run tauri:dev`         | Start full development environment (Tauri + Vite) |
+| `npm run tauri:build`       | Build release binaries                            |
+| `npm run tauri:build:debug` | Build debug binaries (faster compilation)         |
+| `npm run check`             | Run TypeScript and Svelte type checking           |
+| `npm run lint`              | Run ESLint and Prettier checks                    |
+| `npm run format`            | Format code with Prettier                         |
 
 ### Project Structure
 
@@ -138,12 +139,12 @@ For permanent permission persistence across builds, [code-sign the app](https://
 
 The overlay works in apps that expose text via the macOS Accessibility API:
 
-| Works | Does not work |
-|-------|---------------|
-| Slack, Discord | Terminal emulators (Ghostty, iTerm2, Terminal.app) |
-| Notes, Mail, TextEdit | VS Code (terminal pane) |
-| Chrome, Safari (input fields) | Sandboxed apps without AX support |
-| Most native macOS apps | |
+| Works                         | Does not work                                      |
+| ----------------------------- | -------------------------------------------------- |
+| Slack, Discord                | Terminal emulators (Ghostty, iTerm2, Terminal.app) |
+| Notes, Mail, TextEdit         | VS Code (terminal pane)                            |
+| Chrome, Safari (input fields) | Sandboxed apps without AX support                  |
+| Most native macOS apps        |                                                    |
 
 ---
 

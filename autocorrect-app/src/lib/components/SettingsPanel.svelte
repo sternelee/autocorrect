@@ -1,6 +1,6 @@
 <script lang="ts">
   $locale;
-  import { onDestroy, onMount } from "svelte";
+  import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
   import { Button } from "$lib/components/ui/button";
   import {
@@ -24,6 +24,8 @@
   import CustomCorrectionsManager from "./CustomCorrectionsManager.svelte";
   import IgnoredAppsManager from "./IgnoredAppsManager.svelte";
   import { locale, t, setLocale } from "$lib/i18n";
+
+  let { theme, onThemeChange }: { theme: "light" | "dark" | "auto"; onThemeChange: (mode: "light" | "dark" | "auto") => void } = $props();
 
   // Reactive translation helper - use in template with {tr("key")}
   const tr = $derived((key: string, params?: Record<string, string | number>) => {
@@ -58,9 +60,9 @@
     aiTranslateTargetLanguage?: string;
     aiPolishStyle?: string;
     uiLanguage?: string;
+    underlineStyle?: string;
+    underlineColor?: string;
   }
-
-  type ThemeMode = "light" | "dark" | "auto";
 
   // Hotkey configuration
   interface Modifiers {
@@ -103,33 +105,6 @@
   let aiTranslateTargetLanguage = $state("English");
   let aiPolishStyle = $state("professional");
   let uiLanguage: "en" | "zh-CN" = $state("en");
-
-  const THEME_STORAGE_KEY = "autocorrect-theme";
-
-  function loadTheme(): ThemeMode {
-    const stored = localStorage.getItem(THEME_STORAGE_KEY);
-    if (stored === "light" || stored === "dark" || stored === "auto") {
-      return stored;
-    }
-    return "auto"; // default
-  }
-
-  function applyTheme(mode: ThemeMode) {
-    const html = document.documentElement;
-    if (mode === "dark") {
-      html.classList.add("dark");
-    } else if (mode === "auto") {
-      const prefersDark = window.matchMedia(
-        "(prefers-color-scheme: dark)",
-      ).matches;
-      html.classList.toggle("dark", prefersDark);
-    } else {
-      html.classList.remove("dark");
-    }
-    localStorage.setItem(THEME_STORAGE_KEY, mode);
-  }
-
-  let theme: ThemeMode = $state("auto");
 
   // Underline appearance
   let underlineStyle = $state("wavy");
@@ -179,30 +154,6 @@
       tw: "bg-[#34c759]",
     },
   ];
-
-  let mediaQuery: MediaQueryList | null = null;
-
-  function setupSystemThemeListener() {
-    if (mediaQuery) {
-      mediaQuery.removeEventListener("change", handleSystemThemeChange);
-    }
-    mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
-    mediaQuery.addEventListener("change", handleSystemThemeChange);
-  }
-
-  function handleSystemThemeChange(e: MediaQueryListEvent) {
-    if (theme === "auto") {
-      const html = document.documentElement;
-      html.classList.toggle("dark", e.matches);
-    }
-  }
-
-  function cleanupThemeListener() {
-    if (mediaQuery) {
-      mediaQuery.removeEventListener("change", handleSystemThemeChange);
-      mediaQuery = null;
-    }
-  }
 
   const translateLanguageOptions = [
     "简体中文",
@@ -267,8 +218,8 @@
       aiPolishStyle = config.aiPolishStyle ?? "professional";
       uiLanguage = config.uiLanguage === "zh-CN" ? "zh-CN" : "en";
       setLocale(uiLanguage);
-      underlineStyle = (config as any).underlineStyle ?? "wavy";
-      underlineColor = (config as any).underlineColor ?? "#ff3b30";
+      underlineStyle = config.underlineStyle ?? "wavy";
+      underlineColor = config.underlineColor ?? "#ff3b30";
 
       hasUnsavedChanges = false;
     } catch (error) {
@@ -451,15 +402,6 @@
   onMount(() => {
     loadConfiguration();
     loadHotkeyConfiguration();
-
-    // Initialize theme
-    theme = loadTheme();
-    applyTheme(theme);
-    setupSystemThemeListener();
-  });
-
-  onDestroy(() => {
-    cleanupThemeListener();
   });
 
   async function loadHotkeyConfiguration() {
@@ -817,8 +759,11 @@
           <div class="space-y-2">
             <p class="text-sm font-medium">{tr("settings.theme")}</p>
             <select
-              bind:value={theme}
-              onchange={() => applyTheme(theme)}
+              value={theme}
+              onchange={(e) => {
+                const target = e.currentTarget;
+                onThemeChange(target.value as "light" | "dark" | "auto");
+              }}
               class="border-input bg-background ring-offset-background focus-visible:border-ring focus-visible:ring-ring/50 flex h-9 w-full max-w-xs min-w-0 rounded-md border px-3 py-1 text-sm outline-none focus-visible:ring-[3px]"
             >
               <option value="light">{tr("settings.theme.light")}</option>

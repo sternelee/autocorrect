@@ -7,11 +7,13 @@
 ### 1. 应用需要重启
 
 **症状：**
+
 - 在 Settings 中启用了 CSpell
 - 保存了配置
 - 但拼写检查时没有检测到错误
 
 **解决方案：**
+
 ```bash
 # 停止当前运行的应用（在终端按 Ctrl+C）
 # 然后重新启动：
@@ -22,6 +24,7 @@ pnpm tauri dev
 ### 2. CSpell 路径问题（已修复）
 
 我们刚刚修复了路径查找逻辑，添加了更智能的路径搜索：
+
 - 从可执行文件路径向上查找
 - 支持多种目录结构
 - 添加了详细的调试日志
@@ -30,15 +33,16 @@ pnpm tauri dev
 
 **重要提示：** CSpell 和 typos 库检测的内容不同
 
-| 测试文本 | typos 库 | CSpell | 说明 |
-|---------|---------|--------|------|
-| "whats" | ❌ 不检测 | ❌ 不检测 | 可能被认为是合法词 |
-| "hows" | ❌ 不检测 | ❌ 不检测 | 口语形式 |
-| "areyour" | ✅ 检测 | ✅ 检测 | 明显的拼接错误 |
-| "funciton" | ✅ 检测 | ✅ 检测 | 常见拼写错误 |
-| "naem" | ✅ 检测 | ✅ 检测 | 字母颠倒 |
+| 测试文本   | typos 库  | CSpell    | 说明               |
+| ---------- | --------- | --------- | ------------------ |
+| "whats"    | ❌ 不检测 | ❌ 不检测 | 可能被认为是合法词 |
+| "hows"     | ❌ 不检测 | ❌ 不检测 | 口语形式           |
+| "areyour"  | ✅ 检测   | ✅ 检测   | 明显的拼接错误     |
+| "funciton" | ✅ 检测   | ✅ 检测   | 常见拼写错误       |
+| "naem"     | ✅ 检测   | ✅ 检测   | 字母颠倒           |
 
 **推荐测试文本：**
+
 ```
 naem is wrong and funciton too
 ```
@@ -54,6 +58,7 @@ cat ~/.autocorrect-app.json
 ```
 
 应该看到：
+
 ```json
 {
   "cspell_enabled": true,
@@ -81,6 +86,7 @@ RUST_LOG=debug pnpm tauri dev
 ```
 
 这会在终端显示详细日志，包括：
+
 - CSpell 路径查找过程
 - 启用的词典列表
 - 检测到的错误数量
@@ -124,6 +130,7 @@ cargo test --lib cspell::tests::test_cspell_hows_areyour -- --nocapture
 **答：** 这些词在某些英语词典中被认为是合法的（口语/非正式用法）。
 
 **解决方案：** 使用 Custom Corrections 功能：
+
 1. 打开 Settings → Custom Typo Corrections
 2. 添加：
    - `whats=what's`
@@ -136,6 +143,7 @@ cargo test --lib cspell::tests::test_cspell_hows_areyour -- --nocapture
 **答：** 确保启用了相关的 CSpell 词典。
 
 **解决方案：**
+
 1. Settings → Spell Check Configuration
 2. 启用 "Enable CSpell Programming Dictionaries"
 3. 选择你使用的语言：
@@ -149,6 +157,7 @@ cargo test --lib cspell::tests::test_cspell_hows_areyour -- --nocapture
 **答：** 路径查找失败。
 
 **解决方案：**
+
 ```bash
 # 确认 CSpell 已安装
 cd autocorrect-app
@@ -166,6 +175,7 @@ pnpm cspell --version
 **答：** CSpell 需要启动subprocess，第一次检查会慢一些（~200ms）。
 
 **优化建议：**
+
 - 只启用你实际使用的词典
 - 对于纯文本，可以禁用 CSpell，只用 typos 库
 - 对于代码，两个都启用效果最好
@@ -193,6 +203,7 @@ spell_check() 函数被调用
 ## 推荐配置
 
 ### 对于 Web 开发者
+
 ```
 ✅ typo_checking_enabled: true
 ✅ cspell_enabled: true
@@ -209,6 +220,7 @@ spell_check() 函数被调用
 ```
 
 ### 对于纯文本写作
+
 ```
 ✅ typo_checking_enabled: true
 ❌ cspell_enabled: false
@@ -223,17 +235,20 @@ spell_check() 函数被调用
 如果按照上述步骤操作后仍有问题：
 
 1. **查看日志：**
+
    ```bash
    cd autocorrect-app
    RUST_LOG=debug pnpm tauri dev 2>&1 | grep -i cspell
    ```
 
 2. **检查进程：**
+
    ```bash
    ps aux | grep cspell
    ```
 
 3. **完全重新编译：**
+
    ```bash
    cd autocorrect-app/src-tauri
    cargo clean
@@ -250,6 +265,7 @@ spell_check() 函数被调用
 ---
 
 **快速诊断命令：**
+
 ```bash
 # 一键测试所有组件
 cd /Users/sternelee/www/github/autocorrect/autocorrect-app

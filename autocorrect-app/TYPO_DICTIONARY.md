@@ -69,7 +69,7 @@ fro = "for"
 # Words that should NOT be flagged as errors
 [default.extend-words]
 dockerfile = "dockerfile"
-kubernetes = "kubernetes"  
+kubernetes = "kubernetes"
 mycompany = "mycompany"
 autocorrect = "autocorrect"
 

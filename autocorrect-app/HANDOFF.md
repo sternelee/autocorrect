@@ -13,6 +13,7 @@
 AutoCorrect App is a Tauri 2 + Svelte 5 desktop application providing system-wide text correction using the parent `autocorrect` Rust crate. The app features a global hotkey (Cmd+Shift+A) workflow that captures clipboard content, runs spell check, and displays a floating popup for accepting/rejecting corrections.
 
 **Technology Stack:**
+
 - Backend: Rust with Tauri 2.6.2
 - Frontend: Svelte 5 (runes mode) + Tailwind CSS 4
 - Template: `alysonhower/tauri2-svelte5-shadcn`
@@ -66,6 +67,7 @@ autocorrect-app/
 ### 1. Tauri Backend Commands
 
 **Spell Checking** (`commands/spellcheck.rs`):
+
 - `spell_check(text: String)` - Returns corrected text with diff
 - `get_clipboard_text()` - Read clipboard
 - `set_clipboard_text(text: String)` - Write clipboard
@@ -74,12 +76,14 @@ autocorrect-app/
 - `save_config(content: String)` - Save config file
 
 **Configuration** (`commands/config.rs`):
+
 - `get_config()` - Get current merged config (default + user)
 - `get_default_config()` - Get default config as YAML
 - `get_rules()` - Get all rules with severity and descriptions
 - `update_config(updates: ConfigUpdates)` - Update rule severities, spellcheck words
 
 **Popup Management** (`popup.rs`):
+
 - `show_popup(x, y, original_text, suggestion)` - Show floating popup
 - `hide_popup()` - Hide popup
 - `position_popup(x, y)` - Move popup
@@ -89,11 +93,13 @@ autocorrect-app/
 - `trigger_spell_check_workflow(x, y)` - Full workflow: clipboard → check → popup
 
 **Clipboard Monitoring** (`clipboard.rs`):
+
 - CJK (Chinese/Japanese/Korean) character detection
 - Configurable poll interval
 - Emits `clipboard-changed` events to frontend
 
 **Global Hotkey** (`hotkey.rs`):
+
 - Cross-platform global hotkey using `rdev`
 - Default: `Cmd+Shift+A` (macOS) or `Ctrl+Shift+A` (others)
 - Runs in separate thread, communicates via channels
@@ -101,23 +107,27 @@ autocorrect-app/
 ### 2. Frontend Components
 
 **Main Interface** (`App.svelte`):
+
 - Tab-based navigation (Spell Check, Settings, About)
 - Status indicator (enabled/disabled with corrections counter)
 - Route handling for tab switching
 
 **Spell Checker** (`SpellChecker.svelte`):
+
 - Text input area
 - Spell check button
 - Display of corrections (original vs suggested)
 - Accept/reject functionality
 
 **Settings Panel** (`SettingsPanel.svelte`):
+
 - Enable/disable AutoCorrect toggle
 - Hotkey configuration display
 - Clipboard monitor toggle + settings
 - Rule toggles (on/off/warning/error)
 
 **Status Indicator** (`StatusIndicator.svelte`):
+
 - Green/gray dot for enabled/disabled
 - Corrections counter
 - Click to toggle status
@@ -125,6 +135,7 @@ autocorrect-app/
 ### 3. Floating Popup Window
 
 **Independent Window** (configured in `tauri.conf.json`):
+
 ```json
 {
   "label": "popup",
@@ -140,6 +151,7 @@ autocorrect-app/
 ```
 
 **Popup Features** (`popup.html` + `popup.ts`):
+
 - Displays original text (strikethrough) and suggestion
 - Accept button (sets clipboard + simulates paste)
 - Reject button (closes popup)
@@ -150,6 +162,7 @@ autocorrect-app/
 ### 4. Configuration
 
 **Tauri Config** (`tauri.conf.json`):
+
 - Product: AutoCorrect
 - Version: 0.1.0
 - Identifier: dev.autocorrect.app
@@ -157,6 +170,7 @@ autocorrect-app/
 - Two windows: main + popup
 
 **Rust Dependencies** (`Cargo.toml`):
+
 ```toml
 autocorrect = { path = "../../autocorrect" }  # Workspace dependency
 tauri = { version = "2.6.2", features = ["macos-private-api"] }
@@ -167,6 +181,7 @@ tokio = { version = "1", features = ["time"] }
 ```
 
 **Frontend Dependencies** (`package.json`):
+
 - Svelte 5.28.1 (runes mode)
 - Tailwind CSS 4.1.7
 - Tauri API 2.5.0
@@ -175,6 +190,7 @@ tokio = { version = "1", features = ["time"] }
 ### 5. Key Workflow
 
 **Global Hotkey Workflow:**
+
 1. User presses `Cmd+Shift+A` anywhere
 2. `hotkey.rs` detects combo, sends `SpellCheckTriggered` event
 3. `lib.rs` event loop triggers `trigger_spell_check_workflow()`
@@ -195,12 +211,14 @@ tokio = { version = "1", features = ["time"] }
 **Description:** The application crashes during startup. The crash likely occurs during hotkey listener initialization in `lib.rs` setup function.
 
 **Potential Causes:**
+
 1. Hotkey thread initialization issue
 2. rdev::listen blocking behavior
 3. Permissions issue on macOS (Accessibility)
 4. Channel setup between threads
 
 **Debugging Steps:**
+
 1. Run with RUST_BACKTRACE=1: `RUST_BACKTRACE=1 npm run tauri:dev`
 2. Check macOS System Settings → Privacy & Security → Accessibility
 3. Add logging in hotkey.rs to trace initialization
@@ -214,12 +232,14 @@ tokio = { version = "1", features = ["time"] }
 ## Development Commands
 
 **Development:**
+
 ```bash
 npm run tauri:dev        # Full dev environment (Vite + Tauri)
 npm run dev              # Frontend only (port 1420)
 ```
 
 **Building:**
+
 ```bash
 npm run tauri:build          # Release build (slow, optimized)
 npm run tauri:build:debug    # Debug build (faster)
@@ -227,6 +247,7 @@ npm run check                # Svelte type checking
 ```
 
 **Testing:**
+
 ```bash
 ./demo.sh                # Interactive demo/testing script
 ```
@@ -238,9 +259,10 @@ npm run check                # Svelte type checking
 **User Config Location:** `~/.autocorrectrc`
 
 **Config Structure:**
+
 ```yaml
 rules:
-  space-word: 2          # 0=off, 1=error, 2=warning
+  space-word: 2 # 0=off, 1=error, 2=warning
   fullwidth: 1
 textRules:
   halfwidth-quotes: 2
@@ -258,12 +280,14 @@ fileTypes:
 ## Platform-Specific Notes
 
 ### macOS
+
 - Private API enabled for future enhancements
 - Accessibility permissions required for global hotkey
 - Cursor position detection is currently placeholder (returns 800, 400)
 - Full implementation would use NSEvent or CGEvent
 
 ### Windows/Linux
+
 - Uses Ctrl+Shift+A hotkey
 - Similar permission requirements may apply
 
@@ -272,6 +296,7 @@ fileTypes:
 ## File Locations (Absolute Paths)
 
 **Key Implementation Files:**
+
 - `/Users/sternelee/www/github/autocorrect/autocorrect-app/src-tauri/src/lib.rs` - Main entry, setup
 - `/Users/sternelee/www/github/autocorrect/autocorrect-app/src-tauri/src/hotkey.rs` - Global hotkey
 - `/Users/sternelee/www/github/autocorrect/autocorrect-app/src-tauri/src/popup.rs` - Popup management
@@ -284,6 +309,7 @@ fileTypes:
 - `/Users/sternelee/www/github/autocorrect/autocorrect-app/src-tauri/Cargo.toml` - Rust deps
 
 **Documentation:**
+
 - `/Users/sternelee/www/github/autocorrect/autocorrect-app/README.md`
 - `/Users/sternelee/www/github/autocorrect/autocorrect-app/TESTING.md`
 - `/Users/sternelee/www/github/autocorrect/autocorrect-app/CHANGELOG.md`
@@ -294,12 +320,14 @@ fileTypes:
 ## Next Steps for Continuation
 
 ### 1. Debug Startup Crash (Priority: High)
+
 - Investigate hotkey listener initialization
 - Add error handling in lib.rs setup
 - Verify macOS permissions
 - Consider lazy initialization of hotkey listener
 
 ### 2. Complete Workflow Testing
+
 - Once crash is fixed, test full workflow:
   - Press hotkey
   - Verify popup appears
@@ -307,14 +335,17 @@ fileTypes:
   - Verify clipboard + paste simulation
 
 ### 3. Cursor Position Detection
+
 - Implement proper macOS cursor position using NSEvent/CGEvent
 - Replace placeholder (800, 400) in `get_cursor_position()`
 
 ### 4. Clipboard Monitor Enhancement
+
 - Currently detects changes but doesn't auto-replace
 - Implement automatic text replacement workflow
 
 ### 5. Svelte 5 Compatibility Fixes (from COMPLETION_SUMMARY.md)
+
 - Fix lucide-svelte import errors
 - Update components to use `$props()` instead of `export let`
 - Fix duplicate imports in switch.svelte
@@ -325,10 +356,12 @@ fileTypes:
 ## References
 
 **Parent Project:** `/Users/sternelee/www/github/autocorrect/`
+
 - AutoCorrect Rust crate at workspace path
 - Used for all text correction logic
 
 **Template:** `alysonhower/tauri2-svelte5-shadcn`
+
 - Base template with shadcn/ui components
 - Svelte 5 runes mode enabled
 
