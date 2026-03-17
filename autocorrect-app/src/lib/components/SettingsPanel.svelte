@@ -59,6 +59,8 @@
     uiLanguage?: string;
   }
 
+  type ThemeMode = "light" | "dark" | "auto";
+
   // Hotkey configuration
   interface Modifiers {
     shift: boolean;
@@ -100,6 +102,7 @@
   let aiTranslateTargetLanguage = $state("English");
   let aiPolishStyle = $state("professional");
   let uiLanguage: "en" | "zh-CN" = $state("en");
+  let theme: ThemeMode = $state("auto");
 
   // Underline appearance
   let underlineStyle = $state("wavy");
