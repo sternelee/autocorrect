@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
-  import { invoke } from '@tauri-apps/api/core';
-  import { listen } from '@tauri-apps/api/event';
+  import { onMount } from "svelte";
+  import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
 
   interface TypoMarker {
     id: string;
@@ -26,21 +26,21 @@
   }
 
   let markers = $state<MarkerView[]>([]);
-  let underlineStyle = $state('wavy');
-  let underlineColor = $state('#ff3b30');
+  let underlineStyle = $state("wavy");
+  let underlineColor = $state("#ff3b30");
 
   // Build the inline CSS for a single marker element based on current style/color.
   const markerCss = $derived(buildMarkerCss(underlineStyle, underlineColor));
 
   function buildMarkerCss(style: string, color: string): string {
-    if (style === 'wavy') {
+    if (style === "wavy") {
       // Encode color for SVG data-URI (only # needs encoding).
-      const c = color.replace('#', '%23');
+      const c = color.replace("#", "%23");
       return [
         `background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='6' viewBox='0 0 8 6'%3E%3Cpath d='M0 4 Q 2 1, 4 4 T 8 4' fill='none' stroke='${c}' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E") repeat-x`,
-        'height: 6px',
-        'border: none',
-      ].join('; ');
+        "height: 6px",
+        "border: none",
+      ].join("; ");
     }
     const borderMap: Record<string, string> = {
       solid: `2px solid ${color}`,
@@ -56,13 +56,21 @@
   }
 
   function resolveMarkerTop(marker: TypoMarker): number {
-    if (marker.id.includes('fallback')) {
-      return clamp(window.innerHeight - marker.y - 2, 0, Math.max(0, window.innerHeight - 4));
+    if (marker.id.includes("fallback")) {
+      return clamp(
+        window.innerHeight - marker.y - 2,
+        0,
+        Math.max(0, window.innerHeight - 4),
+      );
     }
     const topFromTopLeft = marker.y + marker.height - 2;
     const topFromBottomLeft = window.innerHeight - marker.y - 2;
     const topA = clamp(topFromTopLeft, 0, Math.max(0, window.innerHeight - 4));
-    const topB = clamp(topFromBottomLeft, 0, Math.max(0, window.innerHeight - 4));
+    const topB = clamp(
+      topFromBottomLeft,
+      0,
+      Math.max(0, window.innerHeight - 4),
+    );
     const aDelta = Math.abs(topFromTopLeft - topA);
     const bDelta = Math.abs(topFromBottomLeft - topB);
     return aDelta <= bDelta ? topA : topB;
@@ -73,9 +81,17 @@
     for (const marker of incoming) {
       if (!marker.width || marker.width <= 0) continue;
 
-      const isFallback = marker.id.includes('fallback');
-      const topA = clamp(marker.y + marker.height - 2, 0, Math.max(0, window.innerHeight - 4));
-      const topB = clamp(window.innerHeight - marker.y - 2, 0, Math.max(0, window.innerHeight - 4));
+      const isFallback = marker.id.includes("fallback");
+      const topA = clamp(
+        marker.y + marker.height - 2,
+        0,
+        Math.max(0, window.innerHeight - 4),
+      );
+      const topB = clamp(
+        window.innerHeight - marker.y - 2,
+        0,
+        Math.max(0, window.innerHeight - 4),
+      );
 
       views.push({
         key: marker.id,
@@ -100,21 +116,24 @@
 
   onMount(() => {
     // Load initial underline config.
-    invoke<{ underlineStyle: string; underlineColor: string }>('get_config')
+    invoke<{ underlineStyle: string; underlineColor: string }>("get_config")
       .then((cfg) => {
-        underlineStyle = cfg.underlineStyle ?? 'wavy';
-        underlineColor = cfg.underlineColor ?? '#ff3b30';
+        underlineStyle = cfg.underlineStyle ?? "wavy";
+        underlineColor = cfg.underlineColor ?? "#ff3b30";
       })
       .catch(() => {});
 
-    const unlistenMarkers = listen<TypoMarker[]>('update-markers', (event) => {
+    const unlistenMarkers = listen<TypoMarker[]>("update-markers", (event) => {
       markers = buildViews(event.payload || []);
     });
 
-    const unlistenStyle = listen<UnderlineConfig>('underline-config-update', (event) => {
-      underlineStyle = event.payload.underlineStyle;
-      underlineColor = event.payload.underlineColor;
-    });
+    const unlistenStyle = listen<UnderlineConfig>(
+      "underline-config-update",
+      (event) => {
+        underlineStyle = event.payload.underlineStyle;
+        underlineColor = event.payload.underlineColor;
+      },
+    );
 
     return () => {
       unlistenMarkers.then((fn) => fn());

@@ -3,6 +3,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { Ban, Check, Pencil, Plus, X } from "lucide-svelte";
   import {
     Tooltip,
     TooltipTrigger,
@@ -20,10 +21,12 @@
   $locale;
 
   // Reactive translation helper
-  const tr = $derived((key: string, params?: Record<string, string | number>) => {
-    const _ = $locale;
-    return t(key, params);
-  });
+  const tr = $derived(
+    (key: string, params?: Record<string, string | number>) => {
+      const _ = $locale;
+      return t(key, params);
+    },
+  );
 
   interface TypoSuggestion {
     typo: string;
@@ -64,7 +67,10 @@
         return stored;
       }
     } catch (error) {
-      console.warn("Failed to load popup theme from store, fallback to localStorage:", error);
+      console.warn(
+        "Failed to load popup theme from store, fallback to localStorage:",
+        error,
+      );
     }
     return loadThemeFromLocalStorage();
   }
@@ -147,26 +153,29 @@
       }
     })();
 
-    const unlistenShowPromise = listen<PopupData>("popup-show", async (event) => {
-      const data = event.payload;
-      originalText = data.originalText;
-      suggestion = data.suggestion;
-      typos = data.typos || [];
-      offset = data.offset ?? null;
-      charLength = data.charLength ?? null;
+    const unlistenShowPromise = listen<PopupData>(
+      "popup-show",
+      async (event) => {
+        const data = event.payload;
+        originalText = data.originalText;
+        suggestion = data.suggestion;
+        typos = data.typos || [];
+        offset = data.offset ?? null;
+        charLength = data.charLength ?? null;
 
-      // Refresh source app info when popup shows
-      try {
-        const state = await invoke<{
-          sourceAppName?: string;
-          sourceBundleId?: string;
-        }>("get_popup_state");
-        sourceAppName = state.sourceAppName || "";
-        sourceBundleId = state.sourceBundleId || "";
-      } catch (e) {
-        console.error("Failed to get popup state:", e);
-      }
-    });
+        // Refresh source app info when popup shows
+        try {
+          const state = await invoke<{
+            sourceAppName?: string;
+            sourceBundleId?: string;
+          }>("get_popup_state");
+          sourceAppName = state.sourceAppName || "";
+          sourceBundleId = state.sourceBundleId || "";
+        } catch (e) {
+          console.error("Failed to get popup state:", e);
+        }
+      },
+    );
 
     const unlistenHidePromise = listen("popup-hide", () => {
       hidePopup();
@@ -270,10 +279,14 @@
     }
   }
 
-  function isInteractiveTarget(target: EventTarget | null): target is HTMLElement {
+  function isInteractiveTarget(
+    target: EventTarget | null,
+  ): target is HTMLElement {
     return (
       target instanceof HTMLElement &&
-      Boolean(target.closest("button, input, textarea, select, a, [role='button']"))
+      Boolean(
+        target.closest("button, input, textarea, select, a, [role='button']"),
+      )
     );
   }
 
@@ -293,25 +306,14 @@
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="header" onmousedown={startWindowDrag}>
     <span class="header-icon">
-      <!-- pencil icon -->
-      <svg
-        width="14"
-        height="14"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2.2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      >
-        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
-        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
-      </svg>
+      <Pencil class="h-3.5 w-3.5" />
     </span>
     <span class="title">{title}</span>
     <div class="header-actions">
       {#if ignoreMessage}
-        <span class="ignore-message" class:error={ignoreError}>{ignoreMessage}</span>
+        <span class="ignore-message" class:error={ignoreError}
+          >{ignoreMessage}</span
+        >
       {/if}
       <TooltipProvider>
         <Tooltip>
@@ -321,41 +323,15 @@
               aria-label={tr("popup.ignoreTooltip")}
               onclick={ignoreApp}
             >
-              <svg
-                width="13"
-                height="13"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <circle cx="12" cy="12" r="10" />
-                <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
-              </svg>
+              <Ban class="h-3.5 w-3.5" />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="top">{tr("popup.ignoreTooltip")}</TooltipContent>
+          <TooltipContent side="top">{tr("popup.ignoreTooltip")}</TooltipContent
+          >
         </Tooltip>
       </TooltipProvider>
       <button class="icon-btn close" title={tr("popup.close")} onclick={reject}>
-        <svg
-          width="13"
-          height="13"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2.5"
-          stroke-linecap="round"
-        >
-          <line x1="18" y1="6" x2="6" y2="18" /><line
-            x1="6"
-            y1="6"
-            x2="18"
-            y2="18"
-          />
-        </svg>
+        <X class="h-3.5 w-3.5" />
       </button>
     </div>
   </div>
@@ -376,35 +352,9 @@
                 onclick={addToCustom}
               >
                 {#if addedToCustom}
-                  <svg
-                    width="13"
-                    height="13"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2.5"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
+                  <Check class="h-3.5 w-3.5" />
                 {:else}
-                  <svg
-                    width="13"
-                    height="13"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    stroke-width="2"
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                  >
-                    <path
-                      d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z"
-                    />
-                    <line x1="12" y1="8" x2="12" y2="14" />
-                    <line x1="9" y1="11" x2="15" y2="11" />
-                  </svg>
+                  <Plus class="h-3.5 w-3.5" />
                 {/if}
               </button>
             </TooltipTrigger>

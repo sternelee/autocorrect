@@ -2,6 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { Ban, Sparkles, X } from "lucide-svelte";
   import { onMount } from "svelte";
   import { locale, t } from "$lib/i18n";
   import {
@@ -22,10 +23,12 @@
   $locale;
 
   // Reactive translation helper
-  const tr = $derived((key: string, params?: Record<string, string | number>) => {
-    const _ = $locale;
-    return t(key, params);
-  });
+  const tr = $derived(
+    (key: string, params?: Record<string, string | number>) => {
+      const _ = $locale;
+      return t(key, params);
+    },
+  );
 
   type Tool = "translate" | "polish" | "improve" | "summarize";
 
@@ -58,7 +61,10 @@
         return stored;
       }
     } catch (error) {
-      console.warn("Failed to load AI popup theme from store, fallback to localStorage:", error);
+      console.warn(
+        "Failed to load AI popup theme from store, fallback to localStorage:",
+        error,
+      );
     }
     return loadThemeFromLocalStorage();
   }
@@ -186,10 +192,14 @@
     }
   }
 
-  function isInteractiveTarget(target: EventTarget | null): target is HTMLElement {
+  function isInteractiveTarget(
+    target: EventTarget | null,
+  ): target is HTMLElement {
     return (
       target instanceof HTMLElement &&
-      Boolean(target.closest("button, input, textarea, select, a, [role='button']"))
+      Boolean(
+        target.closest("button, input, textarea, select, a, [role='button']"),
+      )
     );
   }
 
@@ -295,33 +305,25 @@
   );
 </script>
 
-<svelte:window onkeydown={(e) => {
-  if (e.key === "Escape") close();
-}} />
+<svelte:window
+  onkeydown={(e) => {
+    if (e.key === "Escape") close();
+  }}
+/>
 
 <div class="popup" data-locale={$locale}>
   <!-- Header -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="header" onmousedown={startWindowDrag}>
     <span class="header-icon">
-      <!-- magic wand icon -->
-      <svg
-        width="14"
-        height="14"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="currentColor"
-        stroke-width="2"
-        stroke-linecap="round"
-        stroke-linejoin="round"
-      >
-        <path d="M21.5 2v6h-6M21.34 2.5a8 8 0 1 1-.58 4.9" />
-      </svg>
+      <Sparkles class="h-3.5 w-3.5" />
     </span>
     <span class="title">{tr("aipopup.tools")}</span>
     <div class="header-actions">
       {#if ignoreMessage}
-        <span class="ignore-message" class:error={ignoreError}>{ignoreMessage}</span>
+        <span class="ignore-message" class:error={ignoreError}
+          >{ignoreMessage}</span
+        >
       {/if}
       <TooltipProvider>
         <Tooltip>
@@ -331,36 +333,19 @@
               aria-label={tr("popup.ignoreTooltip")}
               onclick={ignoreApp}
             >
-              <svg
-                width="13"
-                height="13"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <circle cx="12" cy="12" r="10" />
-                <line x1="4.93" y1="4.93" x2="19.07" y2="19.07" />
-              </svg>
+              <Ban class="h-3.5 w-3.5" />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="top">{tr("popup.ignoreTooltip")}</TooltipContent>
+          <TooltipContent side="top">{tr("popup.ignoreTooltip")}</TooltipContent
+          >
         </Tooltip>
       </TooltipProvider>
-      <button class="icon-btn close" title={tr("aipopup.close")} onclick={close}>
-        <svg
-          width="13"
-          height="13"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2.5"
-          stroke-linecap="round"
-        >
-          <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
-        </svg>
+      <button
+        class="icon-btn close"
+        title={tr("aipopup.close")}
+        onclick={close}
+      >
+        <X class="h-3.5 w-3.5" />
       </button>
     </div>
   </div>
@@ -450,7 +435,8 @@
 
 <style>
   :global(body) {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family:
+      -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background: transparent;
     overflow: hidden;
   }
@@ -538,7 +524,9 @@
     align-items: center;
     justify-content: center;
     color: var(--popup-icon);
-    transition: background 0.12s, color 0.12s;
+    transition:
+      background 0.12s,
+      color 0.12s;
     padding: 0;
   }
 
@@ -715,5 +703,4 @@
     gap: 8px;
     margin-top: 8px;
   }
-
 </style>
