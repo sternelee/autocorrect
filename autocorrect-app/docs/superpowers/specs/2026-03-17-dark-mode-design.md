@@ -14,7 +14,7 @@ Add dark mode support to the AutoCorrect desktop application with configurable t
 
 - `light` - Force light theme
 - `dark` - Force dark theme
-- `auto` - Follow system preference (default: `light`)
+- `auto` - Follow system preference (default: `auto`)
 
 ### User Interface
 
@@ -25,8 +25,8 @@ Add dark mode support to the AutoCorrect desktop application with configurable t
 ### Storage & Persistence
 
 - Store theme preference in localStorage with key `autocorrect-theme`
-- Default to `light` on fresh install
-- Fallback to `light` if no stored value
+- Default to `auto` on fresh install
+- Fallback to `auto` if no stored value
 
 ### System Theme Detection
 
@@ -50,7 +50,7 @@ Add state for theme selection:
 
 ```typescript
 type ThemeMode = "light" | "dark" | "auto";
-let theme: ThemeMode = $state("light");
+let theme: ThemeMode = $state("auto");
 ```
 
 Add theme selector UI in Appearance section (above underline style):
@@ -81,7 +81,7 @@ function loadTheme(): ThemeMode {
   if (stored === "light" || stored === "dark" || stored === "auto") {
     return stored;
   }
-  return "light"; // default
+  return "auto"; // default
 }
 
 function applyTheme(mode: ThemeMode) {
@@ -185,8 +185,8 @@ Add to `src/lib/i18n/messages.ts`:
 
 ## Edge Cases
 
-- localStorage unavailable (rare): fallback to default `light`
-- System preference detection fails: fallback to `light`
+- localStorage unavailable (rare): fallback to default `auto`
+- System preference detection fails: fallback to `auto`
 - Multiple components trying to manage theme: single source of truth in SettingsPanel
 
 ## Future Considerations
