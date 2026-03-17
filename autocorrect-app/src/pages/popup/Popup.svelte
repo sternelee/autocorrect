@@ -269,12 +269,29 @@
       reject();
     }
   }
+
+  function isInteractiveTarget(target: EventTarget | null): target is HTMLElement {
+    return (
+      target instanceof HTMLElement &&
+      Boolean(target.closest("button, input, textarea, select, a, [role='button']"))
+    );
+  }
+
+  async function startWindowDrag(event: MouseEvent) {
+    if (event.button !== 0 || isInteractiveTarget(event.target)) return;
+    try {
+      await getCurrentWindow().startDragging();
+    } catch (error) {
+      console.error("Failed to start popup drag:", error);
+    }
+  }
 </script>
 
 <svelte:window onkeydown={onKeydown} />
 
 <div class="popup" data-locale={$locale}>
-  <div class="header">
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="header" onmousedown={startWindowDrag}>
     <span class="header-icon">
       <!-- pencil icon -->
       <svg
@@ -438,6 +455,8 @@
     align-items: center;
     gap: 6px;
     -webkit-app-region: drag;
+    cursor: move;
+    cursor: all-scroll;
   }
 
   .header-icon {

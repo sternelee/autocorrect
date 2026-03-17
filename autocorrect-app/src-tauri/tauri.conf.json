@@ -33,7 +33,8 @@
         "skipTaskbar": true,
         "center": false,
         "visible": false,
-        "focus": true
+        "focus": true,
+        "acceptFirstMouse": true
       },
       {
         "label": "ai-popup",
@@ -48,7 +49,8 @@
         "skipTaskbar": true,
         "center": false,
         "visible": false,
-        "focus": true
+        "focus": true,
+        "acceptFirstMouse": true
       }
     ],
     "security": {

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
   import { locale, t } from "$lib/i18n";
   import {
@@ -185,6 +186,22 @@
     }
   }
 
+  function isInteractiveTarget(target: EventTarget | null): target is HTMLElement {
+    return (
+      target instanceof HTMLElement &&
+      Boolean(target.closest("button, input, textarea, select, a, [role='button']"))
+    );
+  }
+
+  async function startWindowDrag(event: MouseEvent) {
+    if (event.button !== 0 || isInteractiveTarget(event.target)) return;
+    try {
+      await getCurrentWindow().startDragging();
+    } catch (error) {
+      console.error("Failed to start AI popup drag:", error);
+    }
+  }
+
   onMount(() => {
     const unlistenThemePromise = listen<ThemeMode>("theme-changed", (event) => {
       const mode = event.payload;
@@ -284,7 +301,8 @@
 
 <div class="popup" data-locale={$locale}>
   <!-- Header -->
-  <div class="header">
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <div class="header" onmousedown={startWindowDrag}>
     <span class="header-icon">
       <!-- magic wand icon -->
       <svg
@@ -456,6 +474,8 @@
     display: flex;
     align-items: center;
     gap: 6px;
+    cursor: move;
+    cursor: all-scroll;
   }
 
   .header-icon {
