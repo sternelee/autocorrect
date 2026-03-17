@@ -102,6 +102,32 @@
   let aiTranslateTargetLanguage = $state("English");
   let aiPolishStyle = $state("professional");
   let uiLanguage: "en" | "zh-CN" = $state("en");
+
+  const THEME_STORAGE_KEY = "autocorrect-theme";
+
+  function loadTheme(): ThemeMode {
+    const stored = localStorage.getItem(THEME_STORAGE_KEY);
+    if (stored === "light" || stored === "dark" || stored === "auto") {
+      return stored;
+    }
+    return "auto"; // default
+  }
+
+  function applyTheme(mode: ThemeMode) {
+    const html = document.documentElement;
+    if (mode === "dark") {
+      html.classList.add("dark");
+    } else if (mode === "auto") {
+      const prefersDark = window.matchMedia(
+        "(prefers-color-scheme: dark)",
+      ).matches;
+      html.classList.toggle("dark", prefersDark);
+    } else {
+      html.classList.remove("dark");
+    }
+    localStorage.setItem(THEME_STORAGE_KEY, mode);
+  }
+
   let theme: ThemeMode = $state("auto");
 
   // Underline appearance
@@ -152,6 +178,30 @@
       tw: "bg-[#34c759]",
     },
   ];
+
+  let mediaQuery: MediaQueryList | null = null;
+
+  function setupSystemThemeListener() {
+    if (mediaQuery) {
+      mediaQuery.removeEventListener("change", handleSystemThemeChange);
+    }
+    mediaQuery = window.matchMedia("(prefers-color-scheme: dark)");
+    mediaQuery.addEventListener("change", handleSystemThemeChange);
+  }
+
+  function handleSystemThemeChange(e: MediaQueryListEvent) {
+    if (theme === "auto") {
+      const html = document.documentElement;
+      html.classList.toggle("dark", e.matches);
+    }
+  }
+
+  function cleanupThemeListener() {
+    if (mediaQuery) {
+      mediaQuery.removeEventListener("change", handleSystemThemeChange);
+      mediaQuery = null;
+    }
+  }
 
   const translateLanguageOptions = [
     "简体中文",
