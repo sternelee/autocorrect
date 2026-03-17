@@ -304,57 +304,55 @@ pub async fn ai_text_transform(
     })
 }
 
-async fn run_stream_fallback(
-    app: &tauri::AppHandle,
-    fallback_request: &AiTextTransformRequest,
-    request_id: u128,
-    reason: &str,
-    elapsed_ms: u128,
-) -> Result<(), Error> {
-    log::warn!(
-        "[AI_STREAM][{}] {} ; trying non-stream fallback",
-        request_id,
-        reason
-    );
-    match ai_text_transform(app.clone(), fallback_request.clone()).await {
-        Ok(resp) => {
-            if let Some(text) = resp.output_text {
-                let output_chars = text.chars().count();
-                if !text.is_empty() {
-                    let _ = app.emit("ai-stream-chunk", &text);
+fn collect_stream_content(choice: &serde_json::Value) -> Vec<String> {
+    fn push_content_value(content: &serde_json::Value, out: &mut Vec<String>) {
+        match content {
+            serde_json::Value::String(s) => {
+                if !s.is_empty() {
+                    out.push(s.clone());
                 }
-                let _ = app.emit("ai-stream-complete", ());
-                log::info!(
-                    "[AI_STREAM][{}] fallback succeeded output_chars={} total_elapsed_ms={}",
-                    request_id,
-                    output_chars,
-                    elapsed_ms
-                );
-                Ok(())
-            } else {
-                let message = "Stream fallback returned no text output".to_string();
-                log::error!(
-                    "[AI_STREAM][{}] fallback returned empty output total_elapsed_ms={}",
-                    request_id,
-                    elapsed_ms
-                );
-                let _ = app.emit("ai-stream-error", message.clone());
-                Err(Error::Api(message))
             }
-        }
-        Err(fallback_error) => {
-            let message = format!("{}; fallback error: {}", reason, fallback_error);
-            log::error!(
-                "[AI_STREAM][{}] fallback failed reason={} fallback_error={} total_elapsed_ms={}",
-                request_id,
-                reason,
-                fallback_error,
-                elapsed_ms
-            );
-            let _ = app.emit("ai-stream-error", message.clone());
-            Err(Error::Api(message))
+            serde_json::Value::Array(items) => {
+                for item in items {
+                    if let Some(text) = item.get("text").and_then(|v| v.as_str()) {
+                        if !text.is_empty() {
+                            out.push(text.to_string());
+                        }
+                        continue;
+                    }
+                    if let Some(text) = item.get("content").and_then(|v| v.as_str()) {
+                        if !text.is_empty() {
+                            out.push(text.to_string());
+                        }
+                    }
+                }
+            }
+            serde_json::Value::Object(map) => {
+                if let Some(text) = map.get("text").and_then(|v| v.as_str()) {
+                    if !text.is_empty() {
+                        out.push(text.to_string());
+                    }
+                }
+            }
+            _ => {}
         }
     }
+
+    let mut out = Vec::new();
+    if let Some(delta) = choice.get("delta") {
+        if let Some(content) = delta.get("content") {
+            push_content_value(content, &mut out);
+        }
+    }
+    if let Some(message) = choice.get("message") {
+        if let Some(content) = message.get("content") {
+            push_content_value(content, &mut out);
+        }
+    }
+    if let Some(text) = choice.get("text") {
+        push_content_value(text, &mut out);
+    }
+    out
 }
 
 #[tauri::command]
@@ -367,7 +365,6 @@ pub async fn ai_text_transform_stream(
         .map(|d| d.as_millis())
         .unwrap_or(0);
     let started_at = std::time::Instant::now();
-    let fallback_request = request.clone();
     let settings = load_app_settings(&app)?;
     let api_key = settings.openai_api_key.trim().to_string();
     if api_key.is_empty() {
@@ -402,6 +399,7 @@ pub async fn ai_text_transform_stream(
         "model": model,
         "temperature": 0,
         "stream": true,
+        "reasoning": { "exclude": true },
         "messages": [
             { "role": "system", "content": system_prompt },
             { "role": "user", "content": request.text }
@@ -461,6 +459,10 @@ pub async fn ai_text_transform_stream(
     let mut total_bytes: usize = 0;
     let mut emitted_chars: usize = 0;
     let mut non_content_events: usize = 0;
+    let mut reasoning_only_events: usize = 0;
+    let mut parse_error_events: usize = 0;
+    let mut sample_non_content_logs: usize = 0;
+    let mut raw_sse_log_count: usize = 0;
     let mut stream_finished = false;
     
     loop {
@@ -484,8 +486,12 @@ pub async fn ai_text_transform_stream(
                     let line = pending[..newline_pos].trim_end_matches('\r').to_string();
                     pending.drain(..=newline_pos);
 
-                    if line.starts_with("data: ") {
-                        let data = &line[6..];
+                    if line.starts_with("data:") {
+                        let data = line.trim_start_matches("data:").trim_start();
+                        if raw_sse_log_count < 40 || raw_sse_log_count.is_multiple_of(200) {
+                            log::info!("[AI_STREAM][{}] raw_sse_data={}", request_id, data);
+                        }
+                        raw_sse_log_count += 1;
                         if data == "[DONE]" {
                             continue;
                         }
@@ -508,21 +514,44 @@ pub async fn ai_text_transform_stream(
                                             stream_finished = true;
                                         }
                                     }
-                                    if let Some(delta) = first_choice.get("delta") {
-                                        if let Some(content) = delta.get("content").and_then(|c| c.as_str()) {
-                                            if !content.is_empty() {
-                                                emitted_chars += content.chars().count();
-                                                let _ = app.emit("ai-stream-chunk", content);
-                                            } else {
-                                                non_content_events += 1;
-                                            }
-                                        } else {
-                                            non_content_events += 1;
+                                    let contents = collect_stream_content(first_choice);
+                                    if contents.is_empty() {
+                                        non_content_events += 1;
+                                        let has_reasoning = first_choice
+                                            .get("delta")
+                                            .and_then(|d| d.get("reasoning"))
+                                            .and_then(|r| r.as_str())
+                                            .map(|s| !s.is_empty())
+                                            .unwrap_or(false);
+                                        if has_reasoning {
+                                            reasoning_only_events += 1;
+                                        }
+                                        if sample_non_content_logs < 3 {
+                                            log::warn!(
+                                                "[AI_STREAM][{}] non-content event sample={} payload_prefix={}",
+                                                request_id,
+                                                sample_non_content_logs + 1,
+                                                data.chars().take(400).collect::<String>()
+                                            );
+                                            sample_non_content_logs += 1;
                                         }
                                     } else {
-                                        non_content_events += 1;
+                                        for content in contents {
+                                            emitted_chars += content.chars().count();
+                                            let _ = app.emit("ai-stream-chunk", content);
+                                        }
                                     }
                                 }
+                            }
+                        } else {
+                            parse_error_events += 1;
+                            if parse_error_events <= 3 {
+                                log::warn!(
+                                    "[AI_STREAM][{}] stream json parse error sample={} data_prefix={}",
+                                    request_id,
+                                    parse_error_events,
+                                    data.chars().take(300).collect::<String>()
+                                );
                             }
                         }
                     }
@@ -533,45 +562,52 @@ pub async fn ai_text_transform_stream(
                 }
 
                 if emitted_chars == 0
+                    && reasoning_only_events >= 40
+                    && started_at.elapsed() > Duration::from_secs(3)
+                {
+                    log::warn!(
+                        "[AI_STREAM][{}] reasoning-only stream detected chunk_count={} reasoning_only_events={} total_bytes={} elapsed_ms={}",
+                        request_id,
+                        chunk_count,
+                        reasoning_only_events,
+                        total_bytes,
+                        started_at.elapsed().as_millis()
+                    );
+                }
+
+                if emitted_chars == 0
                     && chunk_count >= 120
                     && started_at.elapsed() > Duration::from_secs(12)
                 {
-                    let reason = format!(
-                        "Stream stalled with no content (chunk_count={} total_bytes={} non_content_events={})",
-                        chunk_count, total_bytes, non_content_events
-                    );
-                    return run_stream_fallback(
-                        &app,
-                        &fallback_request,
+                    log::warn!(
+                        "[AI_STREAM][{}] stream stalled without content chunk_count={} total_bytes={} non_content_events={} reasoning_only_events={} parse_error_events={} elapsed_ms={}",
                         request_id,
-                        &reason,
-                        started_at.elapsed().as_millis(),
-                    )
-                    .await;
+                        chunk_count,
+                        total_bytes,
+                        non_content_events,
+                        reasoning_only_events,
+                        parse_error_events,
+                        started_at.elapsed().as_millis()
+                    );
                 }
 
-                // Guardrail: if stream runs too long or too chatty with too little useful text,
-                // stop waiting and fallback to one-shot response.
+                // Guardrail: if stream runs too long or too chatty with too little useful text, fail fast.
                 if started_at.elapsed() > Duration::from_secs(35)
                     || chunk_count > 1500
                     || (total_bytes > 400_000 && emitted_chars < 120)
                 {
-                    let reason = format!(
-                        "Stream guard triggered (elapsed_ms={} chunk_count={} total_bytes={} emitted_chars={} non_content_events={})",
+                    let message = format!(
+                        "Stream guard triggered (elapsed_ms={} chunk_count={} total_bytes={} emitted_chars={} non_content_events={} parse_error_events={})",
                         started_at.elapsed().as_millis(),
                         chunk_count,
                         total_bytes,
                         emitted_chars,
-                        non_content_events
+                        non_content_events,
+                        parse_error_events
                     );
-                    return run_stream_fallback(
-                        &app,
-                        &fallback_request,
-                        request_id,
-                        &reason,
-                        started_at.elapsed().as_millis(),
-                    )
-                    .await;
+                    log::error!("[AI_STREAM][{}] {}", request_id, message);
+                    let _ = app.emit("ai-stream-error", message.clone());
+                    return Err(Error::Api(message));
                 }
             }
             Ok(None) => {
@@ -586,7 +622,7 @@ pub async fn ai_text_transform_stream(
                 break;
             }
             Err(e) => {
-                let reason = format!(
+                let message = format!(
                     "Stream error: {} (chunk_count={} total_bytes={} emitted_chars={} pending_len={} elapsed_ms={})",
                     e,
                     chunk_count,
@@ -595,16 +631,20 @@ pub async fn ai_text_transform_stream(
                     pending.len(),
                     started_at.elapsed().as_millis(),
                 );
-                return run_stream_fallback(
-                    &app,
-                    &fallback_request,
-                    request_id,
-                    &reason,
-                    started_at.elapsed().as_millis(),
-                )
-                .await;
+                let _ = app.emit("ai-stream-error", message.clone());
+                return Err(Error::Api(message));
             }
         }
+    }
+
+    if emitted_chars == 0 {
+        let message = format!(
+            "Stream ended without content (chunk_count={} total_bytes={} non_content_events={} reasoning_only_events={} parse_error_events={})",
+            chunk_count, total_bytes, non_content_events, reasoning_only_events, parse_error_events
+        );
+        log::error!("[AI_STREAM][{}] {}", request_id, message);
+        let _ = app.emit("ai-stream-error", message.clone());
+        return Err(Error::Api(message));
     }
 
     let _ = app.emit("ai-stream-complete", ());
