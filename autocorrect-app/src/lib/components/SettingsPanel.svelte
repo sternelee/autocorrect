@@ -59,7 +59,7 @@
     aiTimeoutMs?: number;
     aiApiBaseUrl?: string;
     aiTranslateTargetLanguage?: string;
-    aiPolishStyle?: string;
+    aiPolishStyles?: string[];
     uiLanguage?: string;
     underlineStyle?: string;
     underlineColor?: string;
@@ -104,7 +104,15 @@
   let aiTimeoutMs = $state(12000);
   let aiApiBaseUrl = $state("https://openrouter.ai/api/v1/chat/completions");
   let aiTranslateTargetLanguage = $state("English");
-  let aiPolishStyle = $state("professional");
+  let aiPolishStyles = $state<string[]>([]);
+
+  // Available polish styles
+  const POLISH_STYLES = [
+    { value: "formal", labelKey: "aipopup.styleFormal" },
+    { value: "conversational", labelKey: "aipopup.styleConversational" },
+    { value: "academic", labelKey: "aipopup.styleAcademic" },
+    { value: "business", labelKey: "aipopup.styleBusiness" },
+  ];
   let uiLanguage: "en" | "zh-CN" = $state("en");
 
   // Underline appearance
@@ -225,7 +233,7 @@
       aiApiBaseUrl =
         config.aiApiBaseUrl ?? "https://openrouter.ai/api/v1/chat/completions";
       aiTranslateTargetLanguage = config.aiTranslateTargetLanguage ?? "English";
-      aiPolishStyle = config.aiPolishStyle ?? "professional";
+      aiPolishStyles = config.aiPolishStyles?.length ? config.aiPolishStyles : ["formal"];
       uiLanguage = config.uiLanguage === "zh-CN" ? "zh-CN" : "en";
       setLocale(uiLanguage);
       underlineStyle = config.underlineStyle ?? "wavy";
@@ -285,7 +293,7 @@
           aiTimeoutMs: aiTimeoutMs,
           aiApiBaseUrl: aiApiBaseUrl,
           aiTranslateTargetLanguage: aiTranslateTargetLanguage,
-          aiPolishStyle: aiPolishStyle,
+          aiPolishStyle: aiPolishStyles,
           uiLanguage: uiLanguage,
           underlineStyle: underlineStyle,
           underlineColor: underlineColor,
@@ -364,7 +372,7 @@
       aiTimeoutMs = 12000;
       aiApiBaseUrl = "https://openrouter.ai/api/v1/chat/completions";
       aiTranslateTargetLanguage = "English";
-      aiPolishStyle = "professional";
+      aiPolishStyles = ["formal"];
       underlineStyle = "wavy";
       underlineColor = "#ff3b30";
       await saveConfiguration();
@@ -984,16 +992,31 @@
                 </select>
               </div>
             </div>
-            <div class="space-y-1">
-              <label class="text-sm font-medium" for="ai-polish-style"
+            <div class="space-y-2">
+              <label class="text-sm font-medium"
                 >{tr("settings.polishStyle")}</label
               >
-              <Input
-                id="ai-polish-style"
-                bind:value={aiPolishStyle}
-                placeholder="professional"
-                oninput={() => (hasUnsavedChanges = true)}
-              />
+              <div class="flex flex-wrap gap-2">
+                {#each POLISH_STYLES as style}
+                  <button
+                    type="button"
+                    class="inline-flex items-center rounded-md border border-input bg-background px-3 py-1.5 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+                    class:bg-primary={aiPolishStyles.includes(style.value)}
+                    class:text-primary-foreground={aiPolishStyles.includes(style.value)}
+                    class:border-primary={aiPolishStyles.includes(style.value)}
+                    onclick={() => {
+                      if (aiPolishStyles.includes(style.value)) {
+                        aiPolishStyles = aiPolishStyles.filter((s) => s !== style.value);
+                      } else {
+                        aiPolishStyles = [...aiPolishStyles, style.value];
+                      }
+                      hasUnsavedChanges = true;
+                    }}
+                  >
+                    {tr(style.labelKey)}
+                  </button>
+                {/each}
+              </div>
             </div>
           </div>
         {/if}

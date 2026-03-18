@@ -32,11 +32,20 @@
 
   type Tool = "translate" | "polish" | "improve" | "summarize";
 
+  // Polish styles
+  type PolishStyle = "formal" | "conversational" | "academic" | "business";
+
   // Mirror the AppConfig shape used by SpellChecker / SettingsPanel.
   interface AppConfig {
     aiGrammarEnabled?: boolean;
     aiTranslateTargetLanguage?: string;
     aiPolishStyle?: string;
+  }
+
+  // Result from batch polish
+  interface PolishedResult {
+    style: PolishStyle;
+    output_text: string;
   }
 
   let selectedText = $state("");
@@ -47,6 +56,11 @@
   let translateLang = $state("English");
   let ignoreMessage = $state("");
   let ignoreError = $state(false);
+
+  // Polish styles
+  let selectedStyles = $state<PolishStyle[]>([]);
+  let batchResults = $state<PolishedResult[]>([]);
+  let selectedResultIndex = $state<number | null>(null);
 
   // Source app info (captured when popup shows)
   let sourceAppName = $state("");
@@ -113,9 +127,96 @@
     "Korean",
   ];
 
+  function getStyleLabel(style: PolishStyle): string {
+    const styleLabelMap: Record<PolishStyle, () => string> = {
+      formal: () => tr("aipopup.styleFormal"),
+      conversational: () => tr("aipopup.styleConversational"),
+      academic: () => tr("aipopup.styleAcademic"),
+      business: () => tr("aipopup.styleBusiness"),
+    };
+    return styleLabelMap[style]();
+  }
+  const polishStyles: { id: PolishStyle; label: () => string }[] = [
+    { id: "formal", label: () => tr("aipopup.styleFormal") },
+    { id: "conversational", label: () => tr("aipopup.styleConversational") },
+    { id: "academic", label: () => tr("aipopup.styleAcademic") },
+    { id: "business", label: () => tr("aipopup.styleBusiness") },
+  ];
+
+  // All polish styles selected by default
+  function selectAllStyles() {
+    selectedStyles = polishStyles.map((s) => s.id);
+  }
+
+  function toggleStyle(style: PolishStyle) {
+    if (selectedStyles.includes(style)) {
+      selectedStyles = selectedStyles.filter((s) => s !== style);
+    } else {
+      selectedStyles = [...selectedStyles, style];
+    }
+  }
+
+  async function runBatchPolish() {
+    if (!selectedText.trim() || selectedStyles.length === 0) return;
+
+    loading = true;
+    error = "";
+    batchResults = [];
+    selectedResultIndex = null;
+
+    try {
+      const config = await invoke<AppConfig>("get_config");
+      if (!config.aiGrammarEnabled) {
+        throw new Error(tr("aipopup.aiEnableHint"));
+      }
+
+      const response = await invoke<{ results: PolishedResult[] }>(
+        "ai_polish_batch",
+        {
+          request: {
+            text: selectedText,
+            styles: selectedStyles,
+          },
+        },
+      );
+
+      batchResults = response.results;
+      // Auto-select first result if available
+      if (batchResults.length > 0 && batchResults[0].output_text) {
+        selectedResultIndex = 0;
+        result = batchResults[0].output_text;
+      }
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  function selectResult(index: number) {
+    selectedResultIndex = index;
+    if (batchResults[index]) {
+      result = batchResults[index].output_text;
+    }
+  }
+
   async function runTool(tool: Tool) {
     if (!selectedText.trim()) return;
 
+    // For polish tool, show style selector first
+    if (tool === "polish") {
+      activeTool = tool;
+      // Reset batch state
+      batchResults = [];
+      selectedResultIndex = null;
+      result = "";
+      error = "";
+      // Select all styles by default
+      selectAllStyles();
+      return;
+    }
+
+    // For other tools, run immediately
     activeTool = tool;
     loading = true;
     error = "";
@@ -389,6 +490,57 @@
           {lang}
         </button>
       {/each}
+    </div>
+  {/if}
+
+  <!-- Style selector (only for polish) -->
+  {#if activeTool === "polish" && !loading && batchResults.length === 0}
+    <div class="style-selector">
+      <div class="style-header">
+        <span class="style-label">{tr("aipopup.styles")}</span>
+      </div>
+      <div class="style-buttons">
+        {#each polishStyles as style}
+          <button
+            class="style-btn"
+            class:selected={selectedStyles.includes(style.id)}
+            onclick={() => toggleStyle(style.id)}
+          >
+            {style.label()}
+          </button>
+        {/each}
+      </div>
+      <Button
+        size="sm"
+        class="generate-btn"
+        onclick={runBatchPolish}
+        disabled={selectedStyles.length === 0}
+      >
+        {tr("aipopup.generateAll")}
+      </Button>
+    </div>
+  {/if}
+
+  <!-- Batch results (for polish) -->
+  {#if batchResults.length > 0}
+    <div class="batch-results">
+      <div class="results-header">
+        <span class="results-label">{tr("aipopup.selectResult")}</span>
+      </div>
+      <div class="results-list">
+        {#each batchResults as res, i}
+          <button
+            class="result-card"
+            class:selected={selectedResultIndex === i}
+            class:empty={!res.output_text}
+            onclick={() => selectResult(i)}
+            disabled={!res.output_text}
+          >
+            <span class="result-style">{getStyleLabel(res.style)}</span>
+            <span class="result-preview">{res.output_text.slice(0, 80)}{res.output_text.length > 80 ? "…" : ""}</span>
+          </button>
+        {/each}
+      </div>
     </div>
   {/if}
 
@@ -702,5 +854,124 @@
     display: flex;
     gap: 8px;
     margin-top: 8px;
+  }
+
+  /* Style selector styles */
+  .style-selector {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    background: var(--popup-muted-surface);
+    border-radius: 6px;
+  }
+
+  .style-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .style-label {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--popup-muted-label);
+  }
+
+  .style-buttons {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 6px;
+  }
+
+  .style-btn {
+    padding: 6px 8px;
+    background: var(--popup-surface);
+    border: 1px solid var(--popup-border);
+    border-radius: 6px;
+    color: var(--popup-muted-text);
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+
+  .style-btn:hover {
+    background: var(--popup-ai-hover-bg);
+    border-color: var(--popup-ai-hover-border);
+  }
+
+  .style-btn.selected {
+    background: var(--popup-ai-active-bg);
+    border-color: var(--popup-ai-active-border);
+    color: var(--popup-ai-active-fg);
+  }
+
+  :global(.generate-btn) {
+    width: 100%;
+    margin-top: 4px;
+  }
+
+  /* Batch results styles */
+  .batch-results {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .results-header {
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--popup-muted-label);
+  }
+
+  .results-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .result-card {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px;
+    background: var(--popup-surface);
+    border: 1px solid var(--popup-border);
+    border-radius: 6px;
+    cursor: pointer;
+    text-align: left;
+    transition: all 0.12s ease;
+  }
+
+  .result-card:hover:not(:disabled) {
+    background: var(--popup-ai-hover-bg);
+    border-color: var(--popup-ai-hover-border);
+  }
+
+  .result-card.selected {
+    background: var(--popup-ai-active-bg);
+    border-color: var(--popup-ai-active-border);
+  }
+
+  .result-card.empty {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .result-style {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--popup-title);
+  }
+
+  .result-preview {
+    font-size: 11px;
+    color: var(--popup-muted-text);
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 </style>

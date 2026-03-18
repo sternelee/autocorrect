@@ -11,7 +11,6 @@
     CardHeader,
     CardTitle,
   } from "$lib/components/ui/card";
-  import { Input } from "$lib/components/ui/input";
   import { Textarea } from "$lib/components/ui/textarea";
   import { Check, RefreshCw, Copy } from "lucide-svelte";
   import { locale, t } from "$lib/i18n";
@@ -49,7 +48,7 @@
     | "summarize"
     | null = $state(null);
   let aiTargetLanguage = $state("English");
-  let aiPolishStyle = $state("professional");
+  let aiPolishStyles = $state<string[]>([]);
   let unlistenChunk: (() => void) | null = null;
   let unlistenComplete: (() => void) | null = null;
   let unlistenError: (() => void) | null = null;
@@ -70,14 +69,14 @@
   interface AppConfig {
     aiGrammarEnabled?: boolean;
     aiTranslateTargetLanguage?: string;
-    aiPolishStyle?: string;
+    aiPolishStyles?: string[];
   }
 
   async function loadAiDefaults() {
     try {
       const config = await invoke<AppConfig>("get_config");
       aiTargetLanguage = config.aiTranslateTargetLanguage ?? "English";
-      aiPolishStyle = config.aiPolishStyle ?? "professional";
+      aiPolishStyles = config.aiPolishStyles?.length ? config.aiPolishStyles : ["formal"];
     } catch (error) {
       console.warn("Failed to load AI defaults:", error);
     }
@@ -188,19 +187,15 @@
   }
 
   function buildAiRequest(operation: "grammar" | "translate" | "polish" | "summarize") {
-    const polishStyleMap: Record<"polish" | "summarize", string> = {
-      polish: aiPolishStyle,
-      summarize: "summarize concisely in the same language as the input",
-    };
-
+    const polishStyle = aiPolishStyles[0] ?? "formal";
     return {
       text: currentText,
       operation: operation === "summarize" ? "polish" : operation,
       targetLanguage: aiTargetLanguage,
       polishStyle:
         operation === "polish" || operation === "summarize"
-          ? polishStyleMap[operation]
-          : aiPolishStyle,
+          ? polishStyle
+          : polishStyle,
     };
   }
 
@@ -404,7 +399,7 @@
 
       <div class="rounded-md border p-3 space-y-3">
         <div class="text-sm font-medium">{tr("spell.aiTools")}</div>
-        <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+        <div class="flex">
           <select
             bind:value={aiTargetLanguage}
             class="border-input bg-background ring-offset-background focus-visible:border-ring focus-visible:ring-ring/50 flex h-9 w-full min-w-0 rounded-md border px-3 py-1 text-sm outline-none focus-visible:ring-[3px]"
@@ -413,10 +408,6 @@
               <option value={language}>{language}</option>
             {/each}
           </select>
-          <Input
-            bind:value={aiPolishStyle}
-            placeholder={tr("spell.polishPlaceholder")}
-          />
         </div>
         <div class="flex flex-wrap gap-2">
           <Button

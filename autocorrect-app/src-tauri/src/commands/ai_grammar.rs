@@ -5,6 +5,20 @@ use serde_json::json;
 use std::time::Duration;
 use tauri::Emitter;
 
+// Predefined polish styles
+pub const POLISH_STYLES: &[&str] = &["formal", "conversational", "academic", "business"];
+
+// Style descriptions for prompts
+fn get_style_description(style: &str) -> &'static str {
+    match style {
+        "formal" => "formal and professional",
+        "conversational" => "conversational and friendly",
+        "academic" => "academic and scholarly",
+        "business" => "business and corporate",
+        _ => "professional",
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct AiGrammarRequest {
@@ -32,6 +46,26 @@ pub struct AiTextTransformRequest {
 pub struct AiTextTransformResponse {
     pub output_text: Option<String>,
     pub typos: Vec<AiTypo>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiPolishedResult {
+    pub style: String,
+    pub output_text: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiPolishBatchRequest {
+    pub text: String,
+    pub styles: Vec<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiPolishBatchResponse {
+    pub results: Vec<AiPolishedResult>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -671,6 +705,131 @@ pub async fn ai_text_transform_stream(
         emitted_chars,
         started_at.elapsed().as_millis()
     );
-    
+
     Ok(())
+}
+
+/// Call AI API and return polished text for a single style.
+async fn polish_text_with_style(
+    api_base_url: &str,
+    api_key: &str,
+    model: &str,
+    text: &str,
+    style: &str,
+    timeout_ms: u64,
+) -> Result<String, Error> {
+    let style_desc = get_style_description(style);
+    let system_prompt = format!(
+        "You are an expert copy editor. Polish the text in a {} style. Return polished text only. No markdown, no explanations, no prefixes.",
+        style_desc
+    );
+
+    let payload = json!({
+        "model": model,
+        "temperature": 0,
+        "messages": [
+            { "role": "system", "content": system_prompt },
+            { "role": "user", "content": text }
+        ]
+    });
+
+    let client = tauri_plugin_http::reqwest::Client::builder()
+        .timeout(Duration::from_millis(timeout_ms))
+        .build()
+        .map_err(|e| Error::Api(format!("Failed to build HTTP client: {}", e)))?;
+
+    let response = client
+        .post(api_base_url)
+        .header("Content-Type", "application/json")
+        .bearer_auth(api_key)
+        .body(payload.to_string())
+        .send()
+        .await
+        .map_err(|e| Error::Api(format!("HTTP request failed: {}", e)))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| Error::Api(format!("Failed to read HTTP response body: {}", e)))?;
+
+    if !status.is_success() {
+        return Err(Error::Api(format!(
+            "AI request failed with status {}: {}",
+            status, body
+        )));
+    }
+    let value: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| Error::Api(format!("Invalid AI response JSON: {}", e)))?;
+
+    if let Some(err) = value.get("error") {
+        return Err(Error::Api(format!("AI returned error: {}", err)));
+    }
+
+    let content = extract_content(&value);
+    if content.trim().is_empty() {
+        return Err(Error::Api("AI returned empty content".to_string()));
+    }
+
+    Ok(content)
+}
+
+#[tauri::command]
+pub async fn ai_polish_batch(
+    app: tauri::AppHandle,
+    request: AiPolishBatchRequest,
+) -> Result<AiPolishBatchResponse, Error> {
+    let settings = load_app_settings(&app)?;
+    let api_key = settings.openai_api_key.trim().to_string();
+    if api_key.is_empty() {
+        return Err(Error::Api("API key is required".to_string()));
+    }
+
+    let model = normalize_model(Some(settings.openai_model));
+    let timeout_ms = settings.ai_timeout_ms;
+    let api_base_url = normalize_endpoint(Some(settings.ai_api_base_url));
+
+    // Process each style in parallel using tokio::stream
+    let mut handles = Vec::new();
+
+    for style in &request.styles {
+        let text = request.text.clone();
+        let api_base_url = api_base_url.clone();
+        let api_key = api_key.clone();
+        let model = model.clone();
+        let style = style.clone();
+
+        handles.push(tokio::spawn(async move {
+            polish_text_with_style(&api_base_url, &api_key, &model, &text, &style, timeout_ms).await
+        }));
+    }
+
+    let mut results = Vec::new();
+    for (style, handle) in request.styles.iter().zip(handles) {
+        match handle.await {
+            Ok(Ok(output_text)) => {
+                results.push(AiPolishedResult {
+                    style: style.clone(),
+                    output_text,
+                });
+            }
+            Ok(Err(e)) => {
+                log::error!("Polish style '{}' failed: {}", style, e);
+                // Add empty result for failed style
+                results.push(AiPolishedResult {
+                    style: style.clone(),
+                    output_text: String::new(),
+                });
+            }
+            Err(e) => {
+                log::error!("Polish style '{}' task failed: {}", style, e);
+                results.push(AiPolishedResult {
+                    style: style.clone(),
+                    output_text: String::new(),
+                });
+            }
+        }
+    }
+
+    Ok(AiPolishBatchResponse { results })
 }

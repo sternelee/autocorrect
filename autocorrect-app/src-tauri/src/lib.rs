@@ -71,9 +71,10 @@ mod geom {
 }
 
 use ai_popup::{SharedAiPopupState, SharedNativeIconWindow};
-use commands::ai_grammar::{ai_grammar_check, ai_text_transform, ai_text_transform_stream};
+use commands::ai_grammar::{ai_grammar_check, ai_polish_batch, ai_text_transform, ai_text_transform_stream};
 use commands::config::{
-    ensure_app_settings_initialized, get_config, get_default_config, get_rules, update_config,
+    ensure_app_settings_initialized, get_config, get_default_config, get_polish_styles, get_rules,
+    update_config,
 };
 use commands::custom_corrections::{
     add_custom_correction, delete_custom_correction, get_custom_corrections,
@@ -527,6 +528,7 @@ pub fn run() {
             get_config,
             get_default_config,
             get_rules,
+            get_polish_styles,
             update_config,
             start_clipboard_monitor,
             stop_clipboard_monitor,
@@ -551,6 +553,7 @@ pub fn run() {
             ai_grammar_check,
             ai_text_transform,
             ai_text_transform_stream,
+            ai_polish_batch,
             // Ignored apps commands
             get_ignored_apps,
             add_ignored_app,

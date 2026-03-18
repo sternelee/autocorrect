@@ -11,6 +11,30 @@ use tauri_plugin_store::StoreExt;
 pub const DEFAULT_UNDERLINE_STYLE: &str = "wavy";
 pub const DEFAULT_UNDERLINE_COLOR: &str = "#ff3b30";
 
+/// Deserialize that handles both old string and new array format for polish styles
+fn deserialize_polish_styles<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    match value {
+        serde_json::Value::String(s) => {
+            // Old format: single string like "professional"
+            Ok(vec![s])
+        }
+        serde_json::Value::Array(arr) => {
+            // New format: array of strings
+            arr.into_iter()
+                .map(|v| match v {
+                    serde_json::Value::String(s) => Ok(s),
+                    _ => Err(serde::de::Error::custom("expected string in array")),
+                })
+                .collect()
+        }
+        _ => Err(serde::de::Error::custom("expected string or array")),
+    }
+}
+
 /// Custom app-specific settings stored separately from autocorrect config
 #[derive(Clone, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -32,8 +56,8 @@ pub struct AppSettings {
     pub ai_api_base_url: String,
     #[serde(default = "default_ai_translate_target_language")]
     pub ai_translate_target_language: String,
-    #[serde(default = "default_ai_polish_style")]
-    pub ai_polish_style: String,
+    #[serde(default = "default_ai_polish_styles", deserialize_with = "deserialize_polish_styles")]
+    pub ai_polish_style: Vec<String>,
     #[serde(default = "default_underline_style")]
     pub underline_style: String,
     #[serde(default = "default_underline_color")]
@@ -56,7 +80,7 @@ impl Default for AppSettings {
             ai_timeout_ms: default_ai_timeout_ms(),
             ai_api_base_url: default_ai_api_base_url(),
             ai_translate_target_language: default_ai_translate_target_language(),
-            ai_polish_style: default_ai_polish_style(),
+            ai_polish_style: default_ai_polish_styles(),
             underline_style: default_underline_style(),
             underline_color: default_underline_color(),
             ui_language: default_ui_language(),
@@ -93,8 +117,8 @@ fn default_ai_translate_target_language() -> String {
     "English".to_string()
 }
 
-fn default_ai_polish_style() -> String {
-    "professional".to_string()
+fn default_ai_polish_styles() -> Vec<String> {
+    vec!["formal".to_string()]
 }
 
 fn default_underline_style() -> String {
@@ -151,8 +175,8 @@ pub struct AppConfig {
     pub ai_api_base_url: String,
     /// Default translation target language
     pub ai_translate_target_language: String,
-    /// Default polish style
-    pub ai_polish_style: String,
+    /// Default polish styles
+    pub ai_polish_style: Vec<String>,
     /// Underline style: "wavy" | "solid" | "dashed" | "dotted"
     pub underline_style: String,
     /// Underline color hex (e.g. "#ff3b30")
@@ -201,8 +225,8 @@ pub struct ConfigUpdates {
     pub ai_api_base_url: Option<String>,
     /// Default translation target language
     pub ai_translate_target_language: Option<String>,
-    /// Default polish style
-    pub ai_polish_style: Option<String>,
+    /// Default polish styles
+    pub ai_polish_style: Option<Vec<String>>,
     /// Underline style
     pub underline_style: Option<String>,
     /// Underline color hex
@@ -285,6 +309,17 @@ pub fn get_default_config() -> Result<String, Error> {
     // Read from the default config embedded in autocorrect crate
     let default_config_str = include_str!("../../../../autocorrect/.autocorrectrc.default");
     Ok(default_config_str.to_string())
+}
+
+/// Get available polish styles
+#[tauri::command]
+pub fn get_polish_styles() -> Vec<String> {
+    vec![
+        "formal".to_string(),
+        "conversational".to_string(),
+        "academic".to_string(),
+        "business".to_string(),
+    ]
 }
 
 /// Get all available rules with their current severity and descriptions
