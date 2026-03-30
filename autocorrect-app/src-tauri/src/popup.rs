@@ -120,7 +120,8 @@ pub fn show_popup(
                         // but remains a non-key window (AutoCorrect is not the
                         // frontmost app), causing WKWebView to skip hover tracking
                         // until the user clicks once.
-                        let app_class = AnyClass::get("NSApplication").expect("NSApplication not found");
+                        let app_class =
+                            AnyClass::get("NSApplication").expect("NSApplication not found");
                         let app_ns: Id = msg_send![app_class, sharedApplication];
                         let _: () = msg_send![app_ns, activateIgnoringOtherApps: true];
                         let _: () = msg_send![ns_window, makeKeyAndOrderFront: NIL];
@@ -392,7 +393,6 @@ fn restore_clipboard(clipboard: &mut arboard::Clipboard, previous_clipboard: Opt
 pub fn is_app_frontmost_macos_pub(app_name: &str) -> bool {
     use objc2::msg_send;
     use objc2::runtime::AnyClass;
-    
 
     type Id = *mut objc2::runtime::AnyObject;
 

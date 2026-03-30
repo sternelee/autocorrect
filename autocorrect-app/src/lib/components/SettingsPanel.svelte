@@ -993,9 +993,9 @@
               </div>
             </div>
             <div class="space-y-2">
-              <label class="text-sm font-medium"
-                >{tr("settings.polishStyle")}</label
-              >
+              <span class="text-sm font-medium">
+                {tr("settings.polishStyle")}
+              </span>
               <div class="flex flex-wrap gap-2">
                 {#each POLISH_STYLES as style}
                   <button

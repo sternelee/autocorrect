@@ -49,29 +49,30 @@ mod geom {
     }
 
     unsafe impl Encode for CGPoint {
-        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("CGPoint", &[
-            objc2::Encoding::Double,
-            objc2::Encoding::Double,
-        ]);
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct(
+            "CGPoint",
+            &[objc2::Encoding::Double, objc2::Encoding::Double],
+        );
     }
 
     unsafe impl Encode for CGSize {
-        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("CGSize", &[
-            objc2::Encoding::Double,
-            objc2::Encoding::Double,
-        ]);
+        const ENCODING: objc2::Encoding = objc2::Encoding::Struct(
+            "CGSize",
+            &[objc2::Encoding::Double, objc2::Encoding::Double],
+        );
     }
 
     unsafe impl Encode for CGRect {
-        const ENCODING: objc2::Encoding = objc2::Encoding::Struct("CGRect", &[
-            <CGPoint>::ENCODING,
-            <CGSize>::ENCODING,
-        ]);
+        const ENCODING: objc2::Encoding =
+            objc2::Encoding::Struct("CGRect", &[<CGPoint>::ENCODING, <CGSize>::ENCODING]);
     }
 }
 
 use ai_popup::{SharedAiPopupState, SharedNativeIconWindow};
-use commands::ai_grammar::{ai_grammar_check, ai_polish_batch, ai_text_transform, ai_text_transform_stream};
+use commands::ai_grammar::{
+    ai_clarity_check, ai_clarity_check_stream, ai_grammar_check, ai_polish_batch,
+    ai_text_transform, ai_text_transform_stream, ai_tone_detect, ai_vocabulary_enhance,
+};
 use commands::config::{
     ensure_app_settings_initialized, get_config, get_default_config, get_polish_styles, get_rules,
     update_config,
@@ -85,8 +86,8 @@ use commands::hotkey_config::{
     get_available_keys, get_hotkey_config, reset_hotkey_config, update_hotkey_config,
 };
 use commands::ignored_apps::{
-    add_ignored_app, get_frontmost_app_info, get_ignored_apps, is_app_ignored,
-    remove_ignored_app, update_ignored_app,
+    add_ignored_app, get_frontmost_app_info, get_ignored_apps, is_app_ignored, remove_ignored_app,
+    update_ignored_app,
 };
 use commands::spellcheck::{
     get_clipboard_text, load_config, save_config, set_clipboard_text, spell_check,
@@ -554,6 +555,10 @@ pub fn run() {
             ai_text_transform,
             ai_text_transform_stream,
             ai_polish_batch,
+            ai_tone_detect,
+            ai_clarity_check,
+            ai_clarity_check_stream,
+            ai_vocabulary_enhance,
             // Ignored apps commands
             get_ignored_apps,
             add_ignored_app,
@@ -661,7 +666,10 @@ fn sync_system_typos(app: &tauri::AppHandle) {
 
                 // Check if app is ignored for overlay
                 if is_app_ignored(app, &ctx.bundle_id, false, true) {
-                    log::info!("[DIAG] App {} is ignored for overlay, skipping", ctx.bundle_id);
+                    log::info!(
+                        "[DIAG] App {} is ignored for overlay, skipping",
+                        ctx.bundle_id
+                    );
                     overlay_manager.update_markers(vec![]);
                     return;
                 }
@@ -870,7 +878,8 @@ fn sync_system_typos(app: &tauri::AppHandle) {
         match macos_text::get_selected_text() {
             Ok(sel) if sel.chars().count() >= MIN_SELECTION_CHARS => {
                 // Check if frontmost app is ignored for popup
-                let should_show_icon = match commands::ignored_apps::get_frontmost_bundle_id_macos() {
+                let should_show_icon = match commands::ignored_apps::get_frontmost_bundle_id_macos()
+                {
                     Some(bundle_id) => !is_app_ignored(app, &bundle_id, true, false),
                     None => true, // Show if we can't get bundle ID
                 };
@@ -879,7 +888,13 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                     // 使用选区 bounds 定位图标到选中文本右上角
                     let (icon_x, icon_y) = match macos_text::get_selected_text_bounds() {
                         Ok((sx, sy, sw, sh)) => {
-                            log::info!("[AI] selection bounds: x={} y={} w={} h={}", sx, sy, sw, sh);
+                            log::info!(
+                                "[AI] selection bounds: x={} y={} w={} h={}",
+                                sx,
+                                sy,
+                                sw,
+                                sh
+                            );
                             // 右上角位置: x = 左上角 x + 宽度 + 小偏移, y = 左上角 y
                             (sx + sw + 4, sy - 18)
                         }

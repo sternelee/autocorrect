@@ -44,7 +44,11 @@ pub fn add_ignored_app(
     let mut settings = load_app_settings(&app)?;
 
     // Check if bundle_id already exists
-    if let Some(existing) = settings.ignored_apps.iter_mut().find(|a| a.bundle_id == bundle_id) {
+    if let Some(existing) = settings
+        .ignored_apps
+        .iter_mut()
+        .find(|a| a.bundle_id == bundle_id)
+    {
         // Update existing entry
         existing.name = name;
         existing.ignore_popup = ignore_popup;
@@ -72,7 +76,11 @@ pub fn update_ignored_app(
 ) -> Result<(), Error> {
     let mut settings = load_app_settings(&app)?;
 
-    if let Some(app) = settings.ignored_apps.iter_mut().find(|a| a.bundle_id == bundle_id) {
+    if let Some(app) = settings
+        .ignored_apps
+        .iter_mut()
+        .find(|a| a.bundle_id == bundle_id)
+    {
         app.ignore_popup = ignore_popup;
         app.ignore_overlay = ignore_overlay;
     }
@@ -108,7 +116,11 @@ pub fn is_app_ignored(
     check_overlay: bool,
 ) -> bool {
     if let Ok(settings) = load_app_settings(app) {
-        if let Some(ignored) = settings.ignored_apps.iter().find(|a| a.bundle_id == bundle_id) {
+        if let Some(ignored) = settings
+            .ignored_apps
+            .iter()
+            .find(|a| a.bundle_id == bundle_id)
+        {
             if check_popup && ignored.ignore_popup {
                 return true;
             }
@@ -151,7 +163,9 @@ pub fn get_frontmost_app_info_macos() -> Option<(String, String)> {
     if !name_output.status.success() {
         return None;
     }
-    let name = String::from_utf8_lossy(&name_output.stdout).trim().to_string();
+    let name = String::from_utf8_lossy(&name_output.stdout)
+        .trim()
+        .to_string();
     if name.is_empty() {
         return None;
     }
@@ -165,7 +179,9 @@ pub fn get_frontmost_app_info_macos() -> Option<(String, String)> {
     if !bundle_output.status.success() {
         return None;
     }
-    let bundle_id = String::from_utf8_lossy(&bundle_output.stdout).trim().to_string();
+    let bundle_id = String::from_utf8_lossy(&bundle_output.stdout)
+        .trim()
+        .to_string();
 
     Some((name, bundle_id))
 }

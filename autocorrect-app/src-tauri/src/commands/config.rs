@@ -56,7 +56,10 @@ pub struct AppSettings {
     pub ai_api_base_url: String,
     #[serde(default = "default_ai_translate_target_language")]
     pub ai_translate_target_language: String,
-    #[serde(default = "default_ai_polish_styles", deserialize_with = "deserialize_polish_styles")]
+    #[serde(
+        default = "default_ai_polish_styles",
+        deserialize_with = "deserialize_polish_styles"
+    )]
     pub ai_polish_style: Vec<String>,
     #[serde(default = "default_underline_style")]
     pub underline_style: String,

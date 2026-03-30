@@ -167,7 +167,8 @@ pub fn get_focused_text_context() -> Result<FocusedTextContext> {
 
         let mut bundle_id = String::new();
         if pid > 0 {
-            let app_class = AnyClass::get("NSRunningApplication").expect("NSRunningApplication not found");
+            let app_class =
+                AnyClass::get("NSRunningApplication").expect("NSRunningApplication not found");
             let app: Id = msg_send![app_class, runningApplicationWithProcessIdentifier: pid];
             if !app.is_null() {
                 let ns_bundle_id: Id = msg_send![app, bundleIdentifier];
@@ -683,11 +684,8 @@ pub fn get_focused_window_position() -> Result<(f64, f64)> {
 
             // Move to parent
             let mut parent: Id = NIL;
-            let err_parent = AXUIElementCopyAttributeValue(
-                current,
-                to_ax_string("AXParent"),
-                &mut parent,
-            );
+            let err_parent =
+                AXUIElementCopyAttributeValue(current, to_ax_string("AXParent"), &mut parent);
 
             if err_parent != 0 || parent.is_null() {
                 break;

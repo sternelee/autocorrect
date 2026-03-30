@@ -34,6 +34,87 @@ pub struct AiGrammarResponse {
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+pub struct AiToneDetectRequest {
+    pub text: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiToneDetectResponse {
+    pub overall: String,
+    pub score: f32,
+    pub tones: Vec<AiTone>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiTone {
+    pub name: String,
+    pub score: f32,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiClarityCheckRequest {
+    pub text: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiClarityCheckResponse {
+    pub score: f32,
+    pub issues: Vec<AiClarityIssue>,
+    pub stats: AiClarityStats,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiClarityIssue {
+    pub issue_type: String,
+    pub text: String,
+    pub suggestion: String,
+    pub line: usize,
+    pub col: usize,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiClarityStats {
+    pub readability_grade: String,
+    pub avg_sentence_length: f32,
+    pub passive_voice_count: usize,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiVocabularyEnhanceRequest {
+    pub text: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiVocabularyEnhanceResponse {
+    pub suggestions: Vec<AiVocabSuggestion>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiVocabSuggestion {
+    pub original: String,
+    pub line: usize,
+    pub col: usize,
+    pub alternatives: Vec<AiVocabAlternative>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiVocabAlternative {
+    pub word: String,
+    pub reason: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct AiTextTransformRequest {
     pub text: String,
     pub operation: String, // grammar | translate | polish
@@ -220,6 +301,31 @@ fn build_system_prompt(
     }
 }
 
+fn build_tone_detect_prompt() -> String {
+    "You are a tone analyzer. Analyze the text and identify tone.
+Return ONLY compact JSON in this exact schema: {\"overall\":\"string\",\"score\":85,\"tones\":[{\"name\":\"string\",\"score\":85}] }.
+Tone options: formal, informal, friendly, serious, professional, confident, academic, business.
+Scores are 0-100. `overall` must be the highest-confidence tone.
+No markdown, no explanations, no code block."
+        .to_string()
+}
+
+fn build_clarity_check_prompt() -> String {
+    "You are a clarity editor. Identify redundancy, complexity, passive voice, and vague expressions.
+Return ONLY compact JSON in this exact schema: {\"score\":85,\"issues\":[{\"issueType\":\"redundancy|complexity|passive|vague\",\"text\":\"string\",\"suggestion\":\"string\",\"line\":1,\"col\":1}],\"stats\":{\"readabilityGrade\":\"Grade 8\",\"avgSentenceLength\":15.5,\"passiveVoiceCount\":2}}.
+If there are no issues, return an empty issues array and keep stats valid.
+No markdown, no explanations, no code block."
+        .to_string()
+}
+
+fn build_vocabulary_prompt() -> String {
+    "You are a vocabulary enhancer. Suggest better alternatives for weak or repetitive words.
+Return ONLY compact JSON in this exact schema: {\"suggestions\":[{\"original\":\"string\",\"line\":1,\"col\":1,\"alternatives\":[{\"word\":\"string\",\"reason\":\"more precise|more formal|less repetitive|stronger|clearer\"}]}]}.
+If there are no useful suggestions, return {\"suggestions\":[]}.
+No markdown, no explanations, no code block."
+        .to_string()
+}
+
 #[tauri::command]
 pub async fn ai_grammar_check(
     app: tauri::AppHandle,
@@ -338,6 +444,303 @@ pub async fn ai_text_transform(
     })
 }
 
+#[tauri::command]
+pub async fn ai_tone_detect(
+    app: tauri::AppHandle,
+    request: AiToneDetectRequest,
+) -> Result<AiToneDetectResponse, Error> {
+    let settings = load_app_settings(&app)?;
+    let api_key = settings.openai_api_key.trim().to_string();
+    if api_key.is_empty() {
+        return Err(Error::Api("API key is required".to_string()));
+    }
+
+    let model = normalize_model(Some(settings.openai_model));
+    let timeout_ms = settings.ai_timeout_ms;
+    let api_base_url = normalize_endpoint(Some(settings.ai_api_base_url));
+
+    let payload = json!({
+        "model": model,
+        "temperature": 0,
+        "messages": [
+            { "role": "system", "content": build_tone_detect_prompt() },
+            { "role": "user", "content": request.text }
+        ]
+    });
+
+    let client = tauri_plugin_http::reqwest::Client::builder()
+        .timeout(Duration::from_millis(timeout_ms))
+        .build()
+        .map_err(|e| Error::Api(format!("Failed to build HTTP client: {}", e)))?;
+
+    let response = client
+        .post(&api_base_url)
+        .header("Content-Type", "application/json")
+        .bearer_auth(&api_key)
+        .body(payload.to_string())
+        .send()
+        .await
+        .map_err(|e| Error::Api(format!("HTTP request failed: {}", e)))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| Error::Api(format!("Failed to read HTTP response body: {}", e)))?;
+
+    if !status.is_success() {
+        return Err(Error::Api(format!(
+            "AI request failed with status {}: {}",
+            status, body
+        )));
+    }
+
+    let value: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| Error::Api(format!("Invalid AI response JSON: {}", e)))?;
+    if let Some(err) = value.get("error") {
+        return Err(Error::Api(format!("AI returned error: {}", err)));
+    }
+
+    let content = extract_content(&value);
+    if content.trim().is_empty() {
+        return Err(Error::Api("AI returned empty content".to_string()));
+    }
+
+    let json_text = extract_json_object(&content);
+    serde_json::from_str::<AiToneDetectResponse>(&json_text)
+        .map_err(|e| Error::Api(format!("Failed to parse tone detection JSON: {}", e)))
+}
+
+#[tauri::command]
+pub async fn ai_clarity_check(
+    app: tauri::AppHandle,
+    request: AiClarityCheckRequest,
+) -> Result<AiClarityCheckResponse, Error> {
+    let settings = load_app_settings(&app)?;
+    let api_key = settings.openai_api_key.trim().to_string();
+    if api_key.is_empty() {
+        return Err(Error::Api("API key is required".to_string()));
+    }
+
+    let model = normalize_model(Some(settings.openai_model));
+    let timeout_ms = settings.ai_timeout_ms;
+    let api_base_url = normalize_endpoint(Some(settings.ai_api_base_url));
+
+    let payload = json!({
+        "model": model,
+        "temperature": 0,
+        "messages": [
+            { "role": "system", "content": build_clarity_check_prompt() },
+            { "role": "user", "content": request.text }
+        ]
+    });
+
+    let client = tauri_plugin_http::reqwest::Client::builder()
+        .timeout(Duration::from_millis(timeout_ms))
+        .build()
+        .map_err(|e| Error::Api(format!("Failed to build HTTP client: {}", e)))?;
+
+    let response = client
+        .post(&api_base_url)
+        .header("Content-Type", "application/json")
+        .bearer_auth(&api_key)
+        .body(payload.to_string())
+        .send()
+        .await
+        .map_err(|e| Error::Api(format!("HTTP request failed: {}", e)))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| Error::Api(format!("Failed to read HTTP response body: {}", e)))?;
+
+    if !status.is_success() {
+        return Err(Error::Api(format!(
+            "AI request failed with status {}: {}",
+            status, body
+        )));
+    }
+
+    let value: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| Error::Api(format!("Invalid AI response JSON: {}", e)))?;
+    if let Some(err) = value.get("error") {
+        return Err(Error::Api(format!("AI returned error: {}", err)));
+    }
+
+    let content = extract_content(&value);
+    if content.trim().is_empty() {
+        return Err(Error::Api("AI returned empty content".to_string()));
+    }
+
+    let json_text = extract_json_object(&content);
+    serde_json::from_str::<AiClarityCheckResponse>(&json_text)
+        .map_err(|e| Error::Api(format!("Failed to parse clarity check JSON: {}", e)))
+}
+
+#[tauri::command]
+pub async fn ai_vocabulary_enhance(
+    app: tauri::AppHandle,
+    request: AiVocabularyEnhanceRequest,
+) -> Result<AiVocabularyEnhanceResponse, Error> {
+    let settings = load_app_settings(&app)?;
+    let api_key = settings.openai_api_key.trim().to_string();
+    if api_key.is_empty() {
+        return Err(Error::Api("API key is required".to_string()));
+    }
+
+    let model = normalize_model(Some(settings.openai_model));
+    let timeout_ms = settings.ai_timeout_ms;
+    let api_base_url = normalize_endpoint(Some(settings.ai_api_base_url));
+
+    let payload = json!({
+        "model": model,
+        "temperature": 0,
+        "messages": [
+            { "role": "system", "content": build_vocabulary_prompt() },
+            { "role": "user", "content": request.text }
+        ]
+    });
+
+    let client = tauri_plugin_http::reqwest::Client::builder()
+        .timeout(Duration::from_millis(timeout_ms))
+        .build()
+        .map_err(|e| Error::Api(format!("Failed to build HTTP client: {}", e)))?;
+
+    let response = client
+        .post(&api_base_url)
+        .header("Content-Type", "application/json")
+        .bearer_auth(&api_key)
+        .body(payload.to_string())
+        .send()
+        .await
+        .map_err(|e| Error::Api(format!("HTTP request failed: {}", e)))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| Error::Api(format!("Failed to read HTTP response body: {}", e)))?;
+
+    if !status.is_success() {
+        return Err(Error::Api(format!(
+            "AI request failed with status {}: {}",
+            status, body
+        )));
+    }
+
+    let value: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| Error::Api(format!("Invalid AI response JSON: {}", e)))?;
+    if let Some(err) = value.get("error") {
+        return Err(Error::Api(format!("AI returned error: {}", err)));
+    }
+
+    let content = extract_content(&value);
+    if content.trim().is_empty() {
+        return Err(Error::Api("AI returned empty content".to_string()));
+    }
+
+    let json_text = extract_json_object(&content);
+    serde_json::from_str::<AiVocabularyEnhanceResponse>(&json_text)
+        .map_err(|e| Error::Api(format!("Failed to parse vocabulary JSON: {}", e)))
+}
+
+#[tauri::command]
+pub async fn ai_clarity_check_stream(
+    app: tauri::AppHandle,
+    request: AiClarityCheckRequest,
+) -> Result<(), Error> {
+    let settings = load_app_settings(&app)?;
+    let api_key = settings.openai_api_key.trim().to_string();
+    if api_key.is_empty() {
+        return Err(Error::Api("API key is required".to_string()));
+    }
+
+    let model = normalize_model(Some(settings.openai_model));
+    let timeout_ms = settings.ai_timeout_ms.max(120_000);
+    let api_base_url = normalize_endpoint(Some(settings.ai_api_base_url));
+
+    let payload = json!({
+        "model": model,
+        "temperature": 0,
+        "stream": true,
+        "reasoning": { "exclude": true },
+        "messages": [
+            { "role": "system", "content": build_clarity_check_prompt() },
+            { "role": "user", "content": request.text }
+        ]
+    });
+
+    let client = tauri_plugin_http::reqwest::Client::builder()
+        .timeout(Duration::from_millis(timeout_ms))
+        .build()
+        .map_err(|e| Error::Api(format!("Failed to build HTTP client: {}", e)))?;
+
+    let mut response = client
+        .post(&api_base_url)
+        .header("Content-Type", "application/json")
+        .bearer_auth(api_key)
+        .body(payload.to_string())
+        .send()
+        .await
+        .map_err(|e| Error::Api(format!("HTTP request failed: {}", e)))?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response
+            .text()
+            .await
+            .map_err(|e| Error::Api(format!("Failed to read HTTP response body: {}", e)))?;
+        return Err(Error::Api(format!(
+            "AI request failed with status {}: {}",
+            status, body
+        )));
+    }
+
+    let mut pending = String::new();
+    loop {
+        match response.chunk().await {
+            Ok(Some(bytes)) => {
+                pending.push_str(&String::from_utf8_lossy(&bytes));
+                while let Some(newline_pos) = pending.find('\n') {
+                    let line = pending[..newline_pos].trim_end_matches('\r').to_string();
+                    pending.drain(..=newline_pos);
+
+                    if !line.starts_with("data:") {
+                        continue;
+                    }
+
+                    let data = line.trim_start_matches("data:").trim_start();
+                    if data == "[DONE]" {
+                        let _ = app.emit("ai-clarity-complete", ());
+                        return Ok(());
+                    }
+
+                    if let Ok(value) = serde_json::from_str::<serde_json::Value>(data) {
+                        let choices = value.get("choices").and_then(|c| c.as_array());
+                        if let Some(first_choice) = choices.and_then(|choices| choices.first()) {
+                            for content in collect_stream_content(first_choice) {
+                                let _ = app.emit("ai-clarity-chunk", content);
+                            }
+                        }
+                    }
+                }
+            }
+            Ok(None) => {
+                let _ = app.emit("ai-clarity-complete", ());
+                break;
+            }
+            Err(e) => {
+                let message = format!("Clarity stream error: {}", e);
+                let _ = app.emit("ai-clarity-error", message.clone());
+                return Err(Error::Api(message));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn collect_stream_content(choice: &serde_json::Value) -> Vec<String> {
     fn push_content_value(content: &serde_json::Value, out: &mut Vec<String>) {
         match content {
@@ -444,7 +847,7 @@ pub async fn ai_text_transform_stream(
         .timeout(Duration::from_millis(stream_timeout_ms))
         .build()
         .map_err(|e| Error::Api(format!("Failed to build HTTP client: {}", e)))?;
-    
+
     let mut response = client
         .post(api_base_url)
         .header("Content-Type", "application/json")
@@ -453,7 +856,7 @@ pub async fn ai_text_transform_stream(
         .send()
         .await
         .map_err(|e| Error::Api(format!("HTTP request failed: {}", e)))?;
-    
+
     let status = response.status();
     let content_type = response
         .headers()
@@ -469,7 +872,10 @@ pub async fn ai_text_transform_stream(
         .to_string();
     log::info!(
         "[AI_STREAM][{}] response status={} content-type={} transfer-encoding={}",
-        request_id, status, content_type, transfer_encoding
+        request_id,
+        status,
+        content_type,
+        transfer_encoding
     );
     if !status.is_success() {
         let body = response
@@ -498,7 +904,7 @@ pub async fn ai_text_transform_stream(
     let mut sample_non_content_logs: usize = 0;
     let mut raw_sse_log_count: usize = 0;
     let mut stream_finished = false;
-    
+
     loop {
         match response.chunk().await {
             Ok(Some(bytes)) => {
@@ -529,14 +935,13 @@ pub async fn ai_text_transform_stream(
                         if data == "[DONE]" {
                             continue;
                         }
-                        
+
                         if let Ok(value) = serde_json::from_str::<serde_json::Value>(data) {
                             if let Some(choices) = value.get("choices").and_then(|c| c.as_array()) {
                                 if let Some(first_choice) = choices.first() {
                                     let mut has_finish_reason = false;
-                                    if let Some(reason) = first_choice
-                                        .get("finish_reason")
-                                        .and_then(|r| r.as_str())
+                                    if let Some(reason) =
+                                        first_choice.get("finish_reason").and_then(|r| r.as_str())
                                     {
                                         if !reason.is_empty() && reason != "null" {
                                             has_finish_reason = true;
@@ -832,4 +1237,88 @@ pub async fn ai_polish_batch(
     }
 
     Ok(AiPolishBatchResponse { results })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_json_object_trims_fence() {
+        let wrapped = "```json\n{\"a\":1}\n```";
+        assert_eq!(extract_json_object(wrapped), "{\"a\":1}");
+
+        let wrapped_plain = "```\n{\"b\":2}\n```";
+        assert_eq!(extract_json_object(wrapped_plain), "{\"b\":2}");
+    }
+
+    #[test]
+    fn test_normalize_endpoint_and_model() {
+        assert_eq!(
+            normalize_endpoint(Some("https://openrouter.ai/api/v1".to_string())),
+            "https://openrouter.ai/api/v1/chat/completions"
+        );
+        assert_eq!(
+            normalize_model(Some("   ".to_string())),
+            "openai/gpt-5-nano"
+        );
+    }
+
+    #[test]
+    fn test_deserialize_tone_detect_response() {
+        let payload = r#"{
+            "overall":"professional",
+            "score":91,
+            "tones":[{"name":"professional","score":91},{"name":"friendly","score":35}]
+        }"#;
+        let parsed: AiToneDetectResponse = serde_json::from_str(payload).unwrap();
+        assert_eq!(parsed.overall, "professional");
+        assert_eq!(parsed.tones.len(), 2);
+        assert_eq!(parsed.tones[0].name, "professional");
+    }
+
+    #[test]
+    fn test_deserialize_clarity_response_camel_case() {
+        let payload = r#"{
+            "score": 84,
+            "issues": [
+                {"issueType":"redundancy","text":"非常非常好","suggestion":"非常好","line":1,"col":1}
+            ],
+            "stats": {"readabilityGrade":"Grade 8","avgSentenceLength":12.5,"passiveVoiceCount":1}
+        }"#;
+        let parsed: AiClarityCheckResponse = serde_json::from_str(payload).unwrap();
+        assert_eq!(parsed.issues[0].issue_type, "redundancy");
+        assert_eq!(parsed.stats.readability_grade, "Grade 8");
+        assert_eq!(parsed.stats.passive_voice_count, 1);
+    }
+
+    #[test]
+    fn test_deserialize_vocabulary_response() {
+        let payload = r#"{
+            "suggestions": [
+                {
+                    "original":"非常好",
+                    "line":1,
+                    "col":1,
+                    "alternatives":[{"word":"出色","reason":"stronger"}]
+                }
+            ]
+        }"#;
+        let parsed: AiVocabularyEnhanceResponse = serde_json::from_str(payload).unwrap();
+        assert_eq!(parsed.suggestions.len(), 1);
+        assert_eq!(parsed.suggestions[0].alternatives[0].word, "出色");
+    }
+
+    #[test]
+    fn test_collect_stream_content_from_delta_and_text() {
+        let choice = serde_json::json!({
+            "delta": { "content": [{"text":"你"}, {"text":"好"}] },
+            "text": "!"
+        });
+        let out = collect_stream_content(&choice);
+        assert_eq!(
+            out,
+            vec!["你".to_string(), "好".to_string(), "!".to_string()]
+        );
+    }
 }

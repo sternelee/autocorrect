@@ -48,7 +48,10 @@ pub fn set_theme(app: tauri::AppHandle, theme: String) -> Result<String, ThemeEr
         .store(APP_SETTINGS_STORE_FILE)
         .map_err(|e| ThemeError::Store(format!("Failed to access theme store: {}", e)))?;
 
-    store.set(THEME_STORE_KEY, serde_json::Value::String(normalized.clone()));
+    store.set(
+        THEME_STORE_KEY,
+        serde_json::Value::String(normalized.clone()),
+    );
     store
         .save()
         .map_err(|e| ThemeError::Store(format!("Failed to persist theme store: {}", e)))?;

@@ -54,8 +54,6 @@ impl<'de> Deserialize<'de> for HotkeyConfig {
     where
         D: Deserializer<'de>,
     {
-        
-
         #[derive(Deserialize)]
         struct HotkeyConfigRaw {
             key: String,
