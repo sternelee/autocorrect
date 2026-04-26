@@ -44,3 +44,17 @@ export interface AiVocabSuggestion {
 export interface AiVocabularyEnhanceResponse {
   suggestions: AiVocabSuggestion[];
 }
+
+export interface AiAssistAlternative {
+  label: string;
+  text: string;
+}
+
+export interface AiAssistResponse {
+  headline: string;
+  summary: string;
+  primaryText: string;
+  alternatives: AiAssistAlternative[];
+  focus: string[];
+  targetLanguage?: string | null;
+}

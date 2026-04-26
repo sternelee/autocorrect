@@ -2,7 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
-  import { Ban, Sparkles, X } from "lucide-svelte";
+  import { Ban, RefreshCw, Sparkles, X } from "lucide-svelte";
   import { onMount } from "svelte";
   import { locale, t } from "$lib/i18n";
   import {
@@ -14,6 +14,7 @@
   import { Button } from "$lib/components/ui/button";
   import { Textarea } from "$lib/components/ui/textarea";
   import type {
+    AiAssistResponse,
     AiClarityCheckResponse,
     AiToneDetectResponse,
     AiVocabularyEnhanceResponse,
@@ -25,9 +26,9 @@
     loadThemeFromLocalStorage,
     saveThemeToLocalStorage,
   } from "$lib/theme";
+
   $locale;
 
-  // Reactive translation helper
   const tr = $derived(
     (key: string, params?: Record<string, string | number>) => {
       const _ = $locale;
@@ -35,30 +36,97 @@
     },
   );
 
-  type Tool =
-    | "translate"
-    | "polish"
-    | "improve"
-    | "summarize"
-    | "tone"
-    | "clarity"
-    | "vocabulary";
+  type AssistAction = "translate" | "rewrite" | "paraphrase" | "concise";
+  type AnalysisTool = "tone" | "clarity" | "vocabulary";
+  type Tool = AssistAction | AnalysisTool;
 
-  // Polish styles
-  type PolishStyle = "formal" | "conversational" | "academic" | "business";
-
-  // Mirror the AppConfig shape used by SpellChecker / SettingsPanel.
   interface AppConfig {
     aiGrammarEnabled?: boolean;
     aiTranslateTargetLanguage?: string;
-    aiPolishStyle?: string;
   }
 
-  // Result from batch polish
-  interface PolishedResult {
-    style: PolishStyle;
-    output_text: string;
-  }
+  const TRANSLATION_CHAR_LIMIT = 4000;
+
+  const assistTools: {
+    id: AssistAction;
+    icon: string;
+    label: () => string;
+    description: () => string;
+  }[] = [
+    {
+      id: "translate",
+      icon: "🌐",
+      label: () => tr("aipopup.translate"),
+      description: () => tr("aipopup.translateDesc"),
+    },
+    {
+      id: "rewrite",
+      icon: "✨",
+      label: () => tr("aipopup.rewrite"),
+      description: () => tr("aipopup.rewriteDesc"),
+    },
+    {
+      id: "paraphrase",
+      icon: "🪄",
+      label: () => tr("aipopup.paraphrase"),
+      description: () => tr("aipopup.paraphraseDesc"),
+    },
+    {
+      id: "concise",
+      icon: "✂️",
+      label: () => tr("aipopup.concise"),
+      description: () => tr("aipopup.conciseDesc"),
+    },
+  ];
+
+  const analysisTools: {
+    id: AnalysisTool;
+    icon: string;
+    label: () => string;
+    description: () => string;
+  }[] = [
+    {
+      id: "tone",
+      icon: "🎯",
+      label: () => tr("aipopup.tone"),
+      description: () => tr("aipopup.toneDesc"),
+    },
+    {
+      id: "clarity",
+      icon: "🧭",
+      label: () => tr("aipopup.clarity"),
+      description: () => tr("aipopup.clarityDesc"),
+    },
+    {
+      id: "vocabulary",
+      icon: "📚",
+      label: () => tr("aipopup.vocabulary"),
+      description: () => tr("aipopup.vocabularyDesc"),
+    },
+  ];
+
+  const languages = [
+    "English",
+    "English (US)",
+    "English (UK)",
+    "简体中文",
+    "繁體中文",
+    "Español",
+    "Español (México)",
+    "Français",
+    "Deutsch",
+    "Italiano",
+    "Português",
+    "Português (Brasil)",
+    "Nederlands",
+    "Svenska",
+    "Polski",
+    "Türkçe",
+    "Українська",
+    "日本語",
+    "한국어",
+    "Bahasa Indonesia",
+  ];
 
   let selectedText = $state("");
   let result = $state("");
@@ -68,21 +136,104 @@
   let translateLang = $state("English");
   let ignoreMessage = $state("");
   let ignoreError = $state(false);
-
-  // Polish styles
-  let selectedStyles = $state<PolishStyle[]>([]);
-  let batchResults = $state<PolishedResult[]>([]);
-  let selectedResultIndex = $state<number | null>(null);
+  let assistResult = $state<AiAssistResponse | null>(null);
+  let lastAssistAction = $state<AssistAction | null>(null);
   let toneResult = $state<AiToneDetectResponse | null>(null);
   let clarityResult = $state<AiClarityCheckResponse | null>(null);
   let vocabResult = $state<AiVocabularyEnhanceResponse | null>(null);
   let clarityStreamBuffer = $state("");
 
-  // Source app info (captured when popup shows)
   let sourceAppName = $state("");
   let sourceBundleId = $state("");
   let theme: ThemeMode = $state("auto");
   let mediaQuery: MediaQueryList | null = null;
+
+  const selectedCharCount = $derived(Array.from(selectedText).length);
+  const preview = $derived(
+    selectedText.length > 140 ? selectedText.slice(0, 140) + "…" : selectedText,
+  );
+
+  function isAssistTool(tool: Tool | null): tool is AssistAction {
+    return (
+      tool === "translate" ||
+      tool === "rewrite" ||
+      tool === "paraphrase" ||
+      tool === "concise"
+    );
+  }
+
+  function clearAssistState() {
+    assistResult = null;
+    lastAssistAction = null;
+    result = "";
+    error = "";
+    if (isAssistTool(activeTool)) {
+      activeTool = null;
+    }
+  }
+
+  function clearAnalysisState() {
+    toneResult = null;
+    clarityResult = null;
+    vocabResult = null;
+    clarityStreamBuffer = "";
+  }
+
+  function clearTransientState() {
+    clearAssistState();
+    clearAnalysisState();
+    result = "";
+    error = "";
+    loading = false;
+  }
+
+  function tryParseClarityBuffer(raw: string): AiClarityCheckResponse | null {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+
+    try {
+      return JSON.parse(trimmed) as AiClarityCheckResponse;
+    } catch {
+      const scoreMatch = trimmed.match(/"score"\s*:\s*([0-9]+(?:\.[0-9]+)?)/);
+      const issuesMatch = trimmed.match(/"issues"\s*:\s*(\[[\s\S]*?\])/);
+      const statsMatch = trimmed.match(/"stats"\s*:\s*(\{[\s\S]*\})/);
+
+      let issues: AiClarityCheckResponse["issues"] = [];
+      if (issuesMatch?.[1]) {
+        try {
+          issues = JSON.parse(
+            issuesMatch[1],
+          ) as AiClarityCheckResponse["issues"];
+        } catch {
+          issues = [];
+        }
+      }
+
+      let stats: AiClarityCheckResponse["stats"] = {
+        readabilityGrade: "-",
+        avgSentenceLength: 0,
+        passiveVoiceCount: 0,
+      };
+
+      if (statsMatch?.[1]) {
+        try {
+          stats = JSON.parse(statsMatch[1]) as AiClarityCheckResponse["stats"];
+        } catch {
+          // keep defaults until full payload arrives
+        }
+      }
+
+      if (!scoreMatch && issues.length === 0) {
+        return null;
+      }
+
+      return {
+        score: scoreMatch ? Number(scoreMatch[1]) : 0,
+        issues,
+        stats,
+      };
+    }
+  }
 
   async function loadThemeFromStore(): Promise<ThemeMode> {
     try {
@@ -90,13 +241,22 @@
       if (isThemeMode(stored)) {
         return stored;
       }
-    } catch (error) {
+    } catch (themeError) {
       console.warn(
         "Failed to load AI popup theme from store, fallback to localStorage:",
-        error,
+        themeError,
       );
     }
     return loadThemeFromLocalStorage();
+  }
+
+  async function loadAiDefaults() {
+    try {
+      const config = await invoke<AppConfig>("get_config");
+      translateLang = config.aiTranslateTargetLanguage ?? "English";
+    } catch (configError) {
+      console.warn("Failed to load AI popup defaults:", configError);
+    }
   }
 
   function applyTheme(mode: ThemeMode) {
@@ -126,259 +286,111 @@
     }
   }
 
-  const tools: { id: Tool; label: () => string; icon: string }[] = [
-    { id: "translate", label: () => tr("aipopup.translate"), icon: "🌐" },
-    { id: "polish", label: () => tr("aipopup.polish"), icon: "✨" },
-    { id: "tone", label: () => tr("aipopup.tone"), icon: "🎯" },
-    { id: "clarity", label: () => tr("aipopup.clarity"), icon: "🧭" },
-    { id: "vocabulary", label: () => tr("aipopup.vocabulary"), icon: "📚" },
-    { id: "improve", label: () => tr("aipopup.improve"), icon: "📝" },
-    { id: "summarize", label: () => tr("aipopup.summarize"), icon: "📋" },
-  ];
-
-  function tryParseClarityBuffer(raw: string): AiClarityCheckResponse | null {
-    const trimmed = raw.trim();
-    if (!trimmed) return null;
-
-    try {
-      return JSON.parse(trimmed) as AiClarityCheckResponse;
-    } catch {
-      const scoreMatch = trimmed.match(/"score"\s*:\s*([0-9]+(?:\.[0-9]+)?)/);
-      const issuesMatch = trimmed.match(/"issues"\s*:\s*(\[[\s\S]*?\])/);
-      const statsMatch = trimmed.match(/"stats"\s*:\s*(\{[\s\S]*\})/);
-
-      let issues: AiClarityCheckResponse["issues"] = [];
-      if (issuesMatch?.[1]) {
-        try {
-          issues = JSON.parse(issuesMatch[1]) as AiClarityCheckResponse["issues"];
-        } catch {
-          issues = [];
-        }
-      }
-
-      let stats: AiClarityCheckResponse["stats"] = {
-        readabilityGrade: "-",
-        avgSentenceLength: 0,
-        passiveVoiceCount: 0,
-      };
-
-      if (statsMatch?.[1]) {
-        try {
-          stats = JSON.parse(statsMatch[1]) as AiClarityCheckResponse["stats"];
-        } catch {
-          // keep defaults until complete payload can be parsed
-        }
-      }
-
-      if (!scoreMatch && issues.length === 0) {
-        return null;
-      }
-
-      return {
-        score: scoreMatch ? Number(scoreMatch[1]) : 0,
-        issues,
-        stats,
-      };
+  async function ensureAiEnabled() {
+    const config = await invoke<AppConfig>("get_config");
+    if (!config.aiGrammarEnabled) {
+      throw new Error(tr("aipopup.aiEnableHint"));
     }
   }
 
-  const languages = [
-    "English",
-    "Chinese",
-    "Japanese",
-    "Spanish",
-    "French",
-    "German",
-    "Korean",
-  ];
+  async function runAssist(action: AssistAction) {
+    if (!selectedText.trim() || loading) return;
 
-  function getStyleLabel(style: PolishStyle): string {
-    const styleLabelMap: Record<PolishStyle, () => string> = {
-      formal: () => tr("aipopup.styleFormal"),
-      conversational: () => tr("aipopup.styleConversational"),
-      academic: () => tr("aipopup.styleAcademic"),
-      business: () => tr("aipopup.styleBusiness"),
-    };
-    return styleLabelMap[style]();
-  }
-  const polishStyles: { id: PolishStyle; label: () => string }[] = [
-    { id: "formal", label: () => tr("aipopup.styleFormal") },
-    { id: "conversational", label: () => tr("aipopup.styleConversational") },
-    { id: "academic", label: () => tr("aipopup.styleAcademic") },
-    { id: "business", label: () => tr("aipopup.styleBusiness") },
-  ];
-
-  // All polish styles selected by default
-  function selectAllStyles() {
-    selectedStyles = polishStyles.map((s) => s.id);
-  }
-
-  function toggleStyle(style: PolishStyle) {
-    if (selectedStyles.includes(style)) {
-      selectedStyles = selectedStyles.filter((s) => s !== style);
-    } else {
-      selectedStyles = [...selectedStyles, style];
+    if (action === "translate" && selectedCharCount > TRANSLATION_CHAR_LIMIT) {
+      activeTool = action;
+      clearAnalysisState();
+      assistResult = null;
+      result = "";
+      error = tr("aipopup.translateLimitError", {
+        limit: TRANSLATION_CHAR_LIMIT,
+      });
+      return;
     }
-  }
 
-  async function runBatchPolish() {
-    if (!selectedText.trim() || selectedStyles.length === 0) return;
-
+    activeTool = action;
     loading = true;
     error = "";
-    batchResults = [];
-    selectedResultIndex = null;
+    clearAnalysisState();
+    assistResult = null;
+    result = "";
 
     try {
-      const config = await invoke<AppConfig>("get_config");
-      if (!config.aiGrammarEnabled) {
-        throw new Error(tr("aipopup.aiEnableHint"));
-      }
-
-      const response = await invoke<{ results: PolishedResult[] }>(
-        "ai_polish_batch",
-        {
-          request: {
-            text: selectedText,
-            styles: selectedStyles,
-          },
+      await ensureAiEnabled();
+      const response = await invoke<AiAssistResponse>("ai_assist", {
+        request: {
+          text: selectedText,
+          action,
+          targetLanguage: action === "translate" ? translateLang : null,
         },
-      );
-
-      batchResults = response.results;
-      // Auto-select first result if available
-      if (batchResults.length > 0 && batchResults[0].output_text) {
-        selectedResultIndex = 0;
-        result = batchResults[0].output_text;
-      }
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      });
+      assistResult = response;
+      result = response.primaryText;
+      lastAssistAction = action;
+    } catch (assistError) {
+      error =
+        assistError instanceof Error
+          ? assistError.message
+          : String(assistError);
     } finally {
       loading = false;
     }
   }
 
-  function selectResult(index: number) {
-    selectedResultIndex = index;
-    if (batchResults[index]) {
-      result = batchResults[index].output_text;
-    }
+  async function regenerateAssist() {
+    if (!lastAssistAction || loading) return;
+    await runAssist(lastAssistAction);
   }
 
   async function runTool(tool: Tool) {
-    if (!selectedText.trim()) return;
+    if (!selectedText.trim() || loading) return;
 
-    toneResult = null;
-    clarityResult = null;
-    vocabResult = null;
-    clarityStreamBuffer = "";
-
-    if (tool === "tone") {
-      activeTool = tool;
-      loading = true;
-      error = "";
-      result = "";
-      try {
-        const response = await invoke<AiToneDetectResponse>("ai_tone_detect", {
-          request: { text: selectedText },
-        });
-        toneResult = response;
-      } catch (e) {
-        error = e instanceof Error ? e.message : String(e);
-      } finally {
-        loading = false;
-      }
+    if (isAssistTool(tool)) {
+      await runAssist(tool);
       return;
     }
 
-    if (tool === "vocabulary") {
-      activeTool = tool;
-      loading = true;
-      error = "";
-      result = "";
-      try {
-        const response = await invoke<AiVocabularyEnhanceResponse>(
+    activeTool = tool;
+    loading = true;
+    error = "";
+    clearAssistState();
+    clearAnalysisState();
+    result = "";
+
+    try {
+      await ensureAiEnabled();
+
+      if (tool === "tone") {
+        toneResult = await invoke<AiToneDetectResponse>("ai_tone_detect", {
+          request: { text: selectedText },
+        });
+        return;
+      }
+
+      if (tool === "vocabulary") {
+        vocabResult = await invoke<AiVocabularyEnhanceResponse>(
           "ai_vocabulary_enhance",
           {
             request: { text: selectedText },
           },
         );
-        vocabResult = response;
-      } catch (e) {
-        error = e instanceof Error ? e.message : String(e);
-      } finally {
-        loading = false;
-      }
-      return;
-    }
-
-    if (tool === "clarity") {
-      activeTool = tool;
-      loading = true;
-      error = "";
-      result = "";
-      try {
-        const useStream = selectedText.length > 280;
-        if (useStream) {
-          await invoke("ai_clarity_check_stream", {
-            request: { text: selectedText },
-          });
-        } else {
-          const response = await invoke<AiClarityCheckResponse>("ai_clarity_check", {
-            request: { text: selectedText },
-          });
-          clarityResult = response;
-        }
-      } catch (e) {
-        error = e instanceof Error ? e.message : String(e);
-        loading = false;
-      }
-      return;
-    }
-
-    // For polish tool, show style selector first
-    if (tool === "polish") {
-      activeTool = tool;
-      // Reset batch state
-      batchResults = [];
-      selectedResultIndex = null;
-      result = "";
-      error = "";
-      // Select all styles by default
-      selectAllStyles();
-      return;
-    }
-
-    // For other tools, run immediately
-    activeTool = tool;
-    loading = true;
-    error = "";
-    result = "";
-
-    try {
-      // Load config fresh each time — same pattern as SpellChecker.svelte.
-      const config = await invoke<AppConfig>("get_config");
-      if (!config.aiGrammarEnabled) {
-        throw new Error(tr("aipopup.aiEnableHint"));
+        return;
       }
 
-      const polishStyleMap: Record<string, string> = {
-        improve: "clear, natural, and engaging",
-        summarize: "summarize concisely in the same language as the input",
-      };
+      const useStream = selectedText.length > 280;
+      if (useStream) {
+        await invoke("ai_clarity_check_stream", {
+          request: { text: selectedText },
+        });
+        return;
+      }
 
-      await invoke("ai_text_transform_stream", {
-        request: {
-          text: selectedText,
-          operation:
-            tool === "improve" || tool === "summarize" ? "polish" : tool,
-          targetLanguage: tool === "translate" ? translateLang : null,
-          polishStyle: polishStyleMap[tool] ?? config.aiPolishStyle ?? null,
-        },
+      clarityResult = await invoke<AiClarityCheckResponse>("ai_clarity_check", {
+        request: { text: selectedText },
       });
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-    } finally {
+      loading = false;
+    } catch (toolError) {
+      error =
+        toolError instanceof Error ? toolError.message : String(toolError);
       loading = false;
     }
   }
@@ -386,6 +398,10 @@
   async function acceptResult() {
     if (!result.trim()) return;
     await invoke("accept_ai_result", { text: result });
+  }
+
+  function pickAssistText(text: string) {
+    result = text;
   }
 
   function applyVocabularySuggestion(original: string, replacement: string) {
@@ -439,12 +455,16 @@
       void acceptResult();
       return;
     }
-    if (activeTool === "clarity" && clarityResult && clarityResult.issues.length > 0) {
+
+    if (
+      activeTool === "clarity" &&
+      clarityResult &&
+      clarityResult.issues.length > 0
+    ) {
       if (!window.confirm(tr("aipopup.analysis.confirmApplyAll"))) {
         return;
       }
-      const next = buildClarityAppliedText();
-      result = next;
+      result = buildClarityAppliedText();
       void acceptResult();
     }
   }
@@ -476,8 +496,8 @@
       setTimeout(() => {
         close();
       }, 800);
-    } catch (error) {
-      console.error("Failed to ignore app:", error);
+    } catch (ignoreAppError) {
+      console.error("Failed to ignore app:", ignoreAppError);
       ignoreError = true;
       ignoreMessage = tr("popup.ignoreError");
       setTimeout(() => {
@@ -493,7 +513,9 @@
     return (
       target instanceof HTMLElement &&
       Boolean(
-        target.closest("button, input, textarea, select, a, [role='button']"),
+        target.closest(
+          "button, input, textarea, select, a, [role='button'], [data-no-drag]",
+        ),
       )
     );
   }
@@ -502,8 +524,8 @@
     if (event.button !== 0 || isInteractiveTarget(event.target)) return;
     try {
       await getCurrentWindow().startDragging();
-    } catch (error) {
-      console.error("Failed to start AI popup drag:", error);
+    } catch (dragError) {
+      console.error("Failed to start AI popup drag:", dragError);
     }
   }
 
@@ -519,8 +541,8 @@
       applyTheme(mode);
       setupSystemThemeListener();
     });
+    void loadAiDefaults();
 
-    // Get initial ai popup state (contains source app info)
     (async () => {
       try {
         const state = await invoke<{
@@ -529,25 +551,17 @@
         }>("get_ai_popup_state");
         sourceAppName = state.sourceAppName || "";
         sourceBundleId = state.sourceBundleId || "";
-      } catch (e) {
-        console.error("Failed to get ai popup state:", e);
+      } catch (stateError) {
+        console.error("Failed to get ai popup state:", stateError);
       }
     })();
 
-    const unlistenPromise = listen<{ selectedText: string }>(
+    const unlistenShowPromise = listen<{ selectedText: string }>(
       "ai-popup-show",
-      async (e) => {
-        selectedText = e.payload.selectedText;
-        result = "";
-        error = "";
-        activeTool = null;
-        loading = false;
-        toneResult = null;
-        clarityResult = null;
-        vocabResult = null;
-        clarityStreamBuffer = "";
+      async (event) => {
+        selectedText = event.payload.selectedText;
+        clearTransientState();
 
-        // Refresh source app info when popup shows
         try {
           const state = await invoke<{
             sourceAppName?: string;
@@ -555,33 +569,11 @@
           }>("get_ai_popup_state");
           sourceAppName = state.sourceAppName || "";
           sourceBundleId = state.sourceBundleId || "";
-        } catch (e) {
-          console.error("Failed to get ai popup state:", e);
+        } catch (stateError) {
+          console.error("Failed to get ai popup state:", stateError);
         }
       },
     );
-
-    const unlistenChunkPromise = listen<string>("ai-stream-chunk", (event) => {
-      if (!loading || !activeTool) {
-        return;
-      }
-      result += event.payload;
-    });
-
-    const unlistenCompletePromise = listen("ai-stream-complete", () => {
-      if (!activeTool) {
-        return;
-      }
-      loading = false;
-    });
-
-    const unlistenErrorPromise = listen<string>("ai-stream-error", (event) => {
-      if (!activeTool) {
-        return;
-      }
-      error = event.payload;
-      loading = false;
-    });
 
     const unlistenClarityChunkPromise = listen<string>(
       "ai-clarity-chunk",
@@ -610,13 +602,16 @@
       loading = false;
     });
 
-    const unlistenClarityErrorPromise = listen<string>("ai-clarity-error", (event) => {
-      if (activeTool !== "clarity") {
-        return;
-      }
-      error = event.payload;
-      loading = false;
-    });
+    const unlistenClarityErrorPromise = listen<string>(
+      "ai-clarity-error",
+      (event) => {
+        if (activeTool !== "clarity") {
+          return;
+        }
+        error = event.payload;
+        loading = false;
+      },
+    );
 
     invoke<{ selectedText: string }>("get_ai_popup_state")
       .then((state) => {
@@ -626,41 +621,33 @@
 
     return () => {
       unlistenThemePromise.then((fn) => fn());
-      unlistenPromise.then((fn) => fn());
-      unlistenChunkPromise.then((fn) => fn());
-      unlistenCompletePromise.then((fn) => fn());
-      unlistenErrorPromise.then((fn) => fn());
+      unlistenShowPromise.then((fn) => fn());
       unlistenClarityChunkPromise.then((fn) => fn());
       unlistenClarityCompletePromise.then((fn) => fn());
       unlistenClarityErrorPromise.then((fn) => fn());
       cleanupThemeListener();
     };
   });
-
-  const preview = $derived(
-    selectedText.length > 120 ? selectedText.slice(0, 120) + "…" : selectedText,
-  );
 </script>
 
 <svelte:window
-  onkeydown={(e) => {
-    if (e.key === "Escape") close();
+  onkeydown={(event) => {
+    if (event.key === "Escape") close();
   }}
 />
 
 <div class="popup" data-locale={$locale}>
-  <!-- Header -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div class="header" onmousedown={startWindowDrag}>
     <span class="header-icon">
       <Sparkles class="h-3.5 w-3.5" />
     </span>
     <span class="title">{tr("aipopup.tools")}</span>
-    <div class="header-actions">
+    <div class="header-actions" data-no-drag>
       {#if ignoreMessage}
-        <span class="ignore-message" class:error={ignoreError}
-          >{ignoreMessage}</span
-        >
+        <span class="ignore-message" class:error={ignoreError}>
+          {ignoreMessage}
+        </span>
       {/if}
       <TooltipProvider>
         <Tooltip>
@@ -687,100 +674,94 @@
     </div>
   </div>
 
-  <!-- Selected text preview -->
   {#if selectedText}
     <div class="preview">
-      <span class="preview-label">{tr("aipopup.selected")}</span>
+      <div class="preview-meta">
+        <span class="preview-label">{tr("aipopup.selected")}</span>
+        <span class="char-count">
+          {selectedCharCount}
+          {tr("aipopup.characters")}
+        </span>
+      </div>
       <p class="preview-text">{preview}</p>
     </div>
   {/if}
 
-  <!-- Tool buttons -->
-  <div class="tools">
-    {#each tools as tool}
-      <button
-        class="tool-btn"
-        class:active={activeTool === tool.id}
-        onclick={() => runTool(tool.id)}
-        disabled={loading}
-      >
-        <span class="tool-icon">{tool.icon}</span>
-        <span class="tool-label">{tool.label()}</span>
-      </button>
-    {/each}
-  </div>
-
-  <!-- Language selector (only for translate) -->
-  {#if activeTool === "translate" || (!activeTool && false)}
-    <div class="lang-row">
-      <span class="lang-label">{tr("aipopup.into")}</span>
-      {#each languages as lang}
+  <div class="section">
+    <div class="section-header">
+      <span class="section-title">{tr("aipopup.rewriteSection")}</span>
+      <span class="section-subtitle">{tr("aipopup.rewriteSectionDesc")}</span>
+    </div>
+    <div class="tool-grid tool-grid-assist">
+      {#each assistTools as tool}
         <button
-          class="lang-btn"
-          class:selected={translateLang === lang}
-          onclick={() => {
-            translateLang = lang;
-            runTool("translate");
-          }}
+          class="tool-card"
+          class:active={activeTool === tool.id}
+          onclick={() => runTool(tool.id)}
+          disabled={loading}
         >
-          {lang}
+          <span class="tool-icon">{tool.icon}</span>
+          <span class="tool-title">{tool.label()}</span>
+          <span class="tool-description">{tool.description()}</span>
         </button>
       {/each}
     </div>
-  {/if}
+  </div>
 
-  <!-- Style selector (only for polish) -->
-  {#if activeTool === "polish" && !loading && batchResults.length === 0}
-    <div class="style-selector">
-      <div class="style-header">
-        <span class="style-label">{tr("aipopup.styles")}</span>
+  <div class="section">
+    <div class="section-header">
+      <span class="section-title">{tr("aipopup.analysisSection")}</span>
+      <span class="section-subtitle">{tr("aipopup.analysisSectionDesc")}</span>
+    </div>
+    <div class="tool-grid tool-grid-analysis">
+      {#each analysisTools as tool}
+        <button
+          class="tool-card tool-card-compact"
+          class:active={activeTool === tool.id}
+          onclick={() => runTool(tool.id)}
+          disabled={loading}
+        >
+          <span class="tool-icon">{tool.icon}</span>
+          <span class="tool-title">{tool.label()}</span>
+          <span class="tool-description">{tool.description()}</span>
+        </button>
+      {/each}
+    </div>
+  </div>
+
+  {#if activeTool === "translate"}
+    <div class="translate-panel">
+      <div class="translate-meta">
+        <span class="translate-label">{tr("aipopup.into")}</span>
+        <span class="translate-hint">{tr("aipopup.translateHint")}</span>
       </div>
-      <div class="style-buttons">
-        {#each polishStyles as style}
+      <div class="lang-row">
+        {#each languages as lang}
           <button
-            class="style-btn"
-            class:selected={selectedStyles.includes(style.id)}
-            onclick={() => toggleStyle(style.id)}
+            class="lang-btn"
+            class:selected={translateLang === lang}
+            disabled={loading}
+            onclick={() => {
+              translateLang = lang;
+              void runAssist("translate");
+            }}
           >
-            {style.label()}
+            {lang}
           </button>
         {/each}
       </div>
-      <Button
-        size="sm"
-        class="generate-btn"
-        onclick={runBatchPolish}
-        disabled={selectedStyles.length === 0}
+      <div
+        class="limit-note"
+        class:limit-note-error={selectedCharCount > TRANSLATION_CHAR_LIMIT}
       >
-        {tr("aipopup.generateAll")}
-      </Button>
-    </div>
-  {/if}
-
-  <!-- Batch results (for polish) -->
-  {#if batchResults.length > 0}
-    <div class="batch-results">
-      <div class="results-header">
-        <span class="results-label">{tr("aipopup.selectResult")}</span>
-      </div>
-      <div class="results-list">
-        {#each batchResults as res, i}
-          <button
-            class="result-card"
-            class:selected={selectedResultIndex === i}
-            class:empty={!res.output_text}
-            onclick={() => selectResult(i)}
-            disabled={!res.output_text}
-          >
-            <span class="result-style">{getStyleLabel(res.style)}</span>
-            <span class="result-preview">{res.output_text.slice(0, 80)}{res.output_text.length > 80 ? "…" : ""}</span>
-          </button>
-        {/each}
+        {tr("aipopup.translateLimit", {
+          count: selectedCharCount,
+          limit: TRANSLATION_CHAR_LIMIT,
+        })}
       </div>
     </div>
   {/if}
 
-  <!-- Loading -->
   {#if loading}
     <div class="loading">
       <div class="spinner"></div>
@@ -788,9 +769,72 @@
     </div>
   {/if}
 
-  <!-- Error -->
   {#if error}
     <div class="error">{error}</div>
+  {/if}
+
+  {#if assistResult && isAssistTool(activeTool)}
+    <div class="assist-panel">
+      <div class="assist-header">
+        <div>
+          <div class="assist-headline">{assistResult.headline}</div>
+          <div class="assist-summary">{assistResult.summary}</div>
+        </div>
+        <button
+          class="ghost-action"
+          onclick={regenerateAssist}
+          disabled={loading}
+        >
+          <RefreshCw class="h-3.5 w-3.5" />
+          {tr("aipopup.tryAnother")}
+        </button>
+      </div>
+
+      {#if assistResult.focus.length > 0}
+        <div class="focus-row">
+          {#each assistResult.focus as focus}
+            <span class="focus-chip">{focus}</span>
+          {/each}
+        </div>
+      {/if}
+
+      <div class="suggestion-card">
+        <div class="suggestion-label">{tr("aipopup.bestVersion")}</div>
+        <Textarea
+          class="result-area"
+          bind:value={result}
+          rows={6}
+          spellcheck={false}
+        />
+      </div>
+
+      {#if assistResult.alternatives.length > 0}
+        <div class="alternatives">
+          <div class="alternatives-title">{tr("aipopup.alternatives")}</div>
+          <div class="alternative-list">
+            {#each assistResult.alternatives as alternative}
+              <button
+                class="alternative-card"
+                class:selected={result === alternative.text}
+                onclick={() => pickAssistText(alternative.text)}
+              >
+                <span class="alternative-label">{alternative.label}</span>
+                <span class="alternative-text">{alternative.text}</span>
+              </button>
+            {/each}
+          </div>
+        </div>
+      {/if}
+
+      <div class="result-actions">
+        <Button size="sm" onclick={acceptResult}>
+          {tr("aipopup.accept")}
+        </Button>
+        <Button size="sm" variant="outline" onclick={clearAssistState}>
+          {tr("aipopup.discard")}
+        </Button>
+      </div>
+    </div>
   {/if}
 
   {#if (activeTool === "tone" && toneResult) || (activeTool === "clarity" && clarityResult) || (activeTool === "vocabulary" && vocabResult)}
@@ -816,12 +860,25 @@
         {/if}
 
         {#if activeTool === "clarity" && clarityResult}
-          <div class="analysis-title">{tr("aipopup.analysis.clarityTitle")}</div>
-          <div class="clarity-score">{tr("aipopup.analysis.score")}: {clarityResult.score}/100</div>
+          <div class="analysis-title">
+            {tr("aipopup.analysis.clarityTitle")}
+          </div>
+          <div class="clarity-score">
+            {tr("aipopup.analysis.score")}: {clarityResult.score}/100
+          </div>
           <div class="clarity-stats">
-            <span>{tr("aipopup.analysis.readability")}: {clarityResult.stats.readabilityGrade}</span>
-            <span>{tr("aipopup.analysis.avgSentence")} {clarityResult.stats.avgSentenceLength}</span>
-            <span>{tr("aipopup.analysis.passiveVoice")} {clarityResult.stats.passiveVoiceCount}</span>
+            <span
+              >{tr("aipopup.analysis.readability")}: {clarityResult.stats
+                .readabilityGrade}</span
+            >
+            <span
+              >{tr("aipopup.analysis.avgSentence")}
+              {clarityResult.stats.avgSentenceLength}</span
+            >
+            <span
+              >{tr("aipopup.analysis.passiveVoice")}
+              {clarityResult.stats.passiveVoiceCount}</span
+            >
           </div>
           {#if clarityResult.issues.length === 0}
             <div class="empty-hint">{tr("aipopup.analysis.noIssues")}</div>
@@ -829,9 +886,13 @@
             <div class="issue-list">
               {#each clarityResult.issues as issue}
                 <div class="issue-item">
-                  <div class="issue-type">{getIssueTypeLabel(issue.issueType)}</div>
+                  <div class="issue-type">
+                    {getIssueTypeLabel(issue.issueType)}
+                  </div>
                   <div class="issue-text">{issue.text}</div>
-                  <div class="issue-suggestion">{tr("aipopup.analysis.suggestion")}: {issue.suggestion}</div>
+                  <div class="issue-suggestion">
+                    {tr("aipopup.analysis.suggestion")}: {issue.suggestion}
+                  </div>
                 </div>
               {/each}
             </div>
@@ -841,19 +902,24 @@
         {#if activeTool === "vocabulary" && vocabResult}
           <div class="analysis-title">{tr("aipopup.analysis.vocabTitle")}</div>
           {#if vocabResult.suggestions.length === 0}
-            <div class="empty-hint">{tr("aipopup.analysis.vocabNoSuggestions")}</div>
+            <div class="empty-hint">
+              {tr("aipopup.analysis.vocabNoSuggestions")}
+            </div>
           {:else}
             <div class="issue-list">
               {#each vocabResult.suggestions as item}
                 <div class="issue-item">
-                  <div class="issue-text">{tr("aipopup.analysis.sourceWord")}: {item.original}</div>
+                  <div class="issue-text">
+                    {tr("aipopup.analysis.sourceWord")}: {item.original}
+                  </div>
                   {#each item.alternatives as alt}
                     <div class="vocab-option">
                       <span>{alt.word}</span>
                       <span class="vocab-reason">{alt.reason}</span>
                       <button
                         class="mini-apply"
-                        onclick={() => applyVocabularySuggestion(item.original, alt.word)}
+                        onclick={() =>
+                          applyVocabularySuggestion(item.original, alt.word)}
                       >
                         {tr("aipopup.analysis.apply")}
                       </button>
@@ -867,12 +933,13 @@
       </div>
     </div>
     <div class="analysis-actions">
-      <Button size="sm" onclick={acceptAnalysisResult}>{tr("aipopup.analysis.applyAll")}</Button>
+      <Button size="sm" onclick={acceptAnalysisResult}>
+        {tr("aipopup.analysis.applyAll")}
+      </Button>
     </div>
   {/if}
 
-  <!-- Result -->
-  {#if result && !loading}
+  {#if result && !loading && !assistResult}
     <div class="result-wrap">
       <Textarea
         class="result-area"
@@ -889,7 +956,7 @@
           variant="outline"
           onclick={() => {
             result = "";
-            activeTool = null;
+            error = "";
           }}
         >
           {tr("aipopup.discard")}
@@ -910,15 +977,15 @@
   .popup {
     display: inline-flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
     background: var(--popup-surface);
     backdrop-filter: blur(16px);
     -webkit-backdrop-filter: blur(16px);
-    border-radius: 10px;
+    border-radius: 12px;
     box-shadow: var(--popup-shadow);
-    padding: 8px 10px 10px;
-    min-width: 280px;
-    max-width: 100vw;
+    padding: 10px 12px 12px;
+    min-width: 360px;
+    max-width: min(720px, 95vw);
     border-bottom: 3px solid var(--popup-ai-border-accent);
   }
 
@@ -1007,18 +1074,33 @@
   }
 
   .preview {
-    padding: 8px 10px;
+    padding: 10px 12px;
     background: var(--popup-muted-surface);
-    border-radius: 6px;
+    border-radius: 8px;
+    border: 1px solid var(--popup-border);
+  }
+
+  .preview-meta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 4px;
+  }
+
+  .preview-label,
+  .char-count,
+  .section-subtitle,
+  .translate-hint,
+  .limit-note {
+    font-size: 11px;
+    color: var(--popup-muted-label);
   }
 
   .preview-label {
-    font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    color: var(--popup-muted-label);
-    display: block;
-    margin-bottom: 3px;
+    font-weight: 600;
   }
 
   .preview-text {
@@ -1030,71 +1112,158 @@
     word-break: break-word;
   }
 
-  .tools {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 6px;
-  }
-
-  .tool-btn {
+  .section {
     display: flex;
     flex-direction: column;
-    align-items: center;
-    gap: 3px;
-    padding: 8px 4px;
+    gap: 8px;
+  }
+
+  .section-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .section-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--popup-title);
+  }
+
+  .tool-grid {
+    display: grid;
+    gap: 8px;
+  }
+
+  .tool-grid-assist {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .tool-grid-analysis {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .tool-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 10px 12px;
     background: var(--popup-muted-surface);
     border: 1px solid var(--popup-border);
-    border-radius: 6px;
+    border-radius: 10px;
     color: var(--popup-muted-text);
     cursor: pointer;
-    font-size: 11px;
+    text-align: left;
     transition: all 0.12s ease;
   }
 
-  .tool-btn:hover:not(:disabled) {
+  .tool-card:hover:not(:disabled) {
     background: var(--popup-ai-hover-bg);
     border-color: var(--popup-ai-hover-border);
     color: var(--popup-ai-hover-fg);
   }
 
-  .tool-btn.active {
+  .tool-card.active {
     background: var(--popup-ai-active-bg);
     border-color: var(--popup-ai-active-border);
     color: var(--popup-ai-active-fg);
   }
 
-  .tool-btn:disabled {
-    opacity: 0.5;
+  .tool-card:disabled {
+    opacity: 0.55;
     cursor: not-allowed;
   }
 
-  .tool-icon {
-    font-size: 14px;
+  .tool-card-compact {
+    min-height: 96px;
   }
 
-  .tool-label {
-    font-size: 10px;
-    font-weight: 500;
+  .tool-icon {
+    font-size: 16px;
+    line-height: 1;
+  }
+
+  .tool-title {
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .tool-description {
+    font-size: 11px;
+    line-height: 1.45;
+    color: inherit;
+    opacity: 0.82;
+  }
+
+  .translate-panel,
+  .assist-panel,
+  .result-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    border: 1px solid var(--popup-border);
+    background: var(--popup-muted-surface);
+    border-radius: 10px;
+  }
+
+  .translate-meta,
+  .assist-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  .translate-label,
+  .assist-headline,
+  .suggestion-label,
+  .alternatives-title,
+  .analysis-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--popup-title);
+  }
+
+  .assist-summary {
+    margin-top: 4px;
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--popup-muted-label);
+  }
+
+  .ghost-action {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--popup-border);
+    border-radius: 999px;
+    background: var(--popup-surface);
+    color: var(--popup-muted-text);
+    font-size: 11px;
+    padding: 6px 10px;
+    cursor: pointer;
+  }
+
+  .ghost-action:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   .lang-row {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
-    padding: 0 4px;
-    align-items: center;
+    gap: 6px;
   }
 
-  .lang-label {
+  .lang-btn,
+  .focus-chip {
     font-size: 11px;
-    color: var(--popup-muted-label);
-  }
-
-  .lang-btn {
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 10px;
-    background: var(--popup-muted-surface);
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: var(--popup-surface);
     border: 1px solid var(--popup-border);
     color: var(--popup-muted-label);
     cursor: pointer;
@@ -1104,6 +1273,68 @@
     background: var(--popup-ai-active-bg);
     border-color: var(--popup-ai-active-border);
     color: var(--popup-ai-active-fg);
+  }
+
+  .limit-note-error {
+    color: var(--popup-inline-error-fg);
+  }
+
+  .focus-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .focus-chip {
+    cursor: default;
+  }
+
+  .suggestion-card {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .alternative-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .alternative-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    border: 1px solid var(--popup-border);
+    border-radius: 8px;
+    background: var(--popup-surface);
+    padding: 10px;
+    text-align: left;
+    cursor: pointer;
+    transition: all 0.12s ease;
+  }
+
+  .alternative-card:hover,
+  .alternative-card.selected {
+    border-color: var(--popup-ai-active-border);
+    background: var(--popup-ai-active-bg);
+  }
+
+  .alternative-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--popup-title);
+  }
+
+  .alternative-text {
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--popup-muted-text);
+    line-clamp: 4;
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
   }
 
   .loading {
@@ -1131,18 +1362,13 @@
   }
 
   .error {
-    margin: 0 4px;
-    padding: 8px 10px;
+    padding: 10px 12px;
     background: var(--popup-error-bg);
     border: 1px solid var(--popup-error-border);
-    border-radius: 6px;
+    border-radius: 8px;
     color: var(--popup-error-fg);
     font-size: 12px;
-    line-height: 1.4;
-  }
-
-  .result-wrap {
-    padding: 0 4px;
+    line-height: 1.45;
   }
 
   :global(.result-area) {
@@ -1150,11 +1376,11 @@
     box-sizing: border-box;
     background: var(--popup-input-bg);
     border: 1px solid var(--popup-input-border);
-    border-radius: 6px;
+    border-radius: 8px;
     color: var(--popup-input-fg);
     font-size: 12px;
     line-height: 1.5;
-    padding: 8px 10px;
+    padding: 10px 12px;
     resize: vertical;
     font-family: inherit;
     outline: none;
@@ -1164,153 +1390,27 @@
     border-color: var(--popup-ai-focus-border);
   }
 
-  .result-actions {
+  .result-actions,
+  .analysis-actions {
     display: flex;
     gap: 8px;
-    margin-top: 8px;
-  }
-
-  /* Style selector styles */
-  .style-selector {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 8px;
-    background: var(--popup-muted-surface);
-    border-radius: 6px;
-  }
-
-  .style-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-  }
-
-  .style-label {
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--popup-muted-label);
-  }
-
-  .style-buttons {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 6px;
-  }
-
-  .style-btn {
-    padding: 6px 8px;
-    background: var(--popup-surface);
-    border: 1px solid var(--popup-border);
-    border-radius: 6px;
-    color: var(--popup-muted-text);
-    font-size: 11px;
-    cursor: pointer;
-    transition: all 0.12s ease;
-  }
-
-  .style-btn:hover {
-    background: var(--popup-ai-hover-bg);
-    border-color: var(--popup-ai-hover-border);
-  }
-
-  .style-btn.selected {
-    background: var(--popup-ai-active-bg);
-    border-color: var(--popup-ai-active-border);
-    color: var(--popup-ai-active-fg);
-  }
-
-  :global(.generate-btn) {
-    width: 100%;
-    margin-top: 4px;
-  }
-
-  /* Batch results styles */
-  .batch-results {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    max-height: 200px;
-    overflow-y: auto;
-  }
-
-  .results-header {
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--popup-muted-label);
-  }
-
-  .results-list {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-  }
-
-  .result-card {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-    padding: 8px;
-    background: var(--popup-surface);
-    border: 1px solid var(--popup-border);
-    border-radius: 6px;
-    cursor: pointer;
-    text-align: left;
-    transition: all 0.12s ease;
-  }
-
-  .result-card:hover:not(:disabled) {
-    background: var(--popup-ai-hover-bg);
-    border-color: var(--popup-ai-hover-border);
-  }
-
-  .result-card.selected {
-    background: var(--popup-ai-active-bg);
-    border-color: var(--popup-ai-active-border);
-  }
-
-  .result-card.empty {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .result-style {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--popup-title);
-  }
-
-  .result-preview {
-    font-size: 11px;
-    color: var(--popup-muted-text);
-    line-height: 1.3;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    justify-content: flex-end;
   }
 
   .analysis-layout {
     display: grid;
-    grid-template-columns: 1fr 1.2fr;
-    gap: 8px;
-    padding: 0 4px;
-    max-height: 260px;
+    grid-template-columns: 1fr 1.15fr;
+    gap: 10px;
+    max-height: 300px;
   }
 
   .analysis-original,
   .analysis-panel {
     border: 1px solid var(--popup-border);
     background: var(--popup-muted-surface);
-    border-radius: 6px;
-    padding: 8px;
+    border-radius: 10px;
+    padding: 10px;
     overflow: auto;
-  }
-
-  .analysis-title {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--popup-title);
-    margin-bottom: 6px;
   }
 
   .analysis-original p {
@@ -1401,9 +1501,17 @@
     cursor: pointer;
   }
 
-  .analysis-actions {
-    padding: 0 4px;
-    display: flex;
-    justify-content: flex-end;
+  @media (max-width: 680px) {
+    .popup {
+      min-width: 320px;
+      max-width: 96vw;
+    }
+
+    .tool-grid-assist,
+    .tool-grid-analysis,
+    .alternative-list,
+    .analysis-layout {
+      grid-template-columns: 1fr;
+    }
   }
 </style>

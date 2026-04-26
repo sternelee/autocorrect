@@ -131,6 +131,32 @@ pub struct AiTextTransformResponse {
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
+pub struct AiAssistRequest {
+    pub text: String,
+    pub action: String,
+    pub target_language: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiAssistResponse {
+    pub headline: String,
+    pub summary: String,
+    pub primary_text: String,
+    pub alternatives: Vec<AiAssistAlternative>,
+    pub focus: Vec<String>,
+    pub target_language: Option<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct AiAssistAlternative {
+    pub label: String,
+    pub text: String,
+}
+
+#[derive(Clone, Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub struct AiPolishedResult {
     pub style: String,
     pub output_text: String,
@@ -164,6 +190,10 @@ fn default_model() -> &'static str {
 
 fn default_chat_endpoint() -> &'static str {
     "https://openrouter.ai/api/v1/chat/completions"
+}
+
+fn translation_char_limit() -> usize {
+    4000
 }
 
 fn normalize_model(model: Option<String>) -> String {
@@ -324,6 +354,32 @@ Return ONLY compact JSON in this exact schema: {\"suggestions\":[{\"original\":\
 If there are no useful suggestions, return {\"suggestions\":[]}.
 No markdown, no explanations, no code block."
         .to_string()
+}
+
+fn build_assist_prompt(action: &str, target_language: Option<&str>) -> Result<String, Error> {
+    let schema = "{\"headline\":\"string\",\"summary\":\"string\",\"primaryText\":\"string\",\"alternatives\":[{\"label\":\"string\",\"text\":\"string\"}],\"focus\":[\"string\"],\"targetLanguage\":\"string|null\"}";
+
+    match action {
+        "translate" => {
+            let lang = target_language.unwrap_or("English").trim();
+            Ok(format!(
+                "You are Grammarly-style translation assistance embedded inside a writing flow. Detect the source language automatically and translate the user's text into {lang}. Preserve meaning, register, intent, and natural voice. Return ONLY compact JSON in this exact schema: {schema}. Rules: 1) `headline` is 2-5 words describing the result; 2) `summary` is one short sentence about what improved; 3) `primaryText` is the best translation ready to insert; 4) include 1-2 alternatives when helpful, especially for short phrases where nuance matters; 5) `focus` should contain 2-4 short tags like accuracy, natural, concise, formal, friendly, clear; 6) set `targetLanguage` to \"{lang}\"; 7) no markdown, no prose outside JSON."
+            ))
+        }
+        "rewrite" => Ok(format!(
+            "You are Grammarly-style rewriting assistance. Rewrite the user's text so it is clearer, smoother, and more effective while preserving meaning, intent, and voice. Return ONLY compact JSON in this exact schema: {schema}. Rules: 1) `headline` is 2-5 words; 2) `summary` briefly explains the improvement; 3) `primaryText` is the best meaning-preserving rewrite; 4) provide 1-2 alternatives with distinct labels like \"More direct\" or \"More natural\"; 5) `focus` should contain 2-4 short tags like clarity, flow, concise, professional, natural; 6) `targetLanguage` must be null; 7) no markdown, no prose outside JSON."
+        )),
+        "paraphrase" => Ok(format!(
+            "You are Grammarly-style paraphrasing assistance. Rephrase the user's text in fresh wording while keeping the original meaning intact and sounding natural. Return ONLY compact JSON in this exact schema: {schema}. Rules: 1) `headline` is 2-5 words; 2) `summary` briefly explains the change; 3) `primaryText` is the strongest paraphrase; 4) provide 1-2 alternatives with noticeably different wording while preserving meaning; 5) `focus` should contain 2-4 short tags like natural, expressive, concise, professional, engaging; 6) `targetLanguage` must be null; 7) no markdown, no prose outside JSON."
+        )),
+        "concise" => Ok(format!(
+            "You are Grammarly-style revision assistance. Rewrite the user's text to be more concise and easier to scan while preserving meaning and essential detail. Return ONLY compact JSON in this exact schema: {schema}. Rules: 1) `headline` is 2-5 words; 2) `summary` briefly explains the improvement; 3) `primaryText` is the best concise rewrite; 4) provide 1-2 alternatives with different levels of brevity when useful; 5) `focus` should contain 2-4 short tags like concise, clear, direct, readable; 6) `targetLanguage` must be null; 7) no markdown, no prose outside JSON."
+        )),
+        _ => Err(Error::Api(
+            "Unsupported assist action, expected translate|rewrite|paraphrase|concise"
+                .to_string(),
+        )),
+    }
 }
 
 #[tauri::command]
@@ -643,6 +699,107 @@ pub async fn ai_vocabulary_enhance(
     let json_text = extract_json_object(&content);
     serde_json::from_str::<AiVocabularyEnhanceResponse>(&json_text)
         .map_err(|e| Error::Api(format!("Failed to parse vocabulary JSON: {}", e)))
+}
+
+#[tauri::command]
+pub async fn ai_assist(
+    app: tauri::AppHandle,
+    request: AiAssistRequest,
+) -> Result<AiAssistResponse, Error> {
+    let settings = load_app_settings(&app)?;
+    let api_key = settings.openai_api_key.trim().to_string();
+    if api_key.is_empty() {
+        return Err(Error::Api("API key is required".to_string()));
+    }
+
+    let action = request.action.trim().to_lowercase();
+    if action == "translate" && request.text.chars().count() > translation_char_limit() {
+        return Err(Error::Api(format!(
+            "Translation is limited to {} characters per request",
+            translation_char_limit()
+        )));
+    }
+
+    let model = normalize_model(Some(settings.openai_model));
+    let timeout_ms = settings.ai_timeout_ms;
+    let api_base_url = normalize_endpoint(Some(settings.ai_api_base_url));
+    let system_prompt = build_assist_prompt(&action, request.target_language.as_deref())?;
+
+    let payload = json!({
+        "model": model,
+        "temperature": 0.35,
+        "messages": [
+            { "role": "system", "content": system_prompt },
+            { "role": "user", "content": request.text }
+        ]
+    });
+
+    let client = tauri_plugin_http::reqwest::Client::builder()
+        .timeout(Duration::from_millis(timeout_ms))
+        .build()
+        .map_err(|e| Error::Api(format!("Failed to build HTTP client: {}", e)))?;
+
+    let response = client
+        .post(&api_base_url)
+        .header("Content-Type", "application/json")
+        .bearer_auth(&api_key)
+        .body(payload.to_string())
+        .send()
+        .await
+        .map_err(|e| Error::Api(format!("HTTP request failed: {}", e)))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| Error::Api(format!("Failed to read HTTP response body: {}", e)))?;
+
+    if !status.is_success() {
+        return Err(Error::Api(format!(
+            "AI request failed with status {}: {}",
+            status, body
+        )));
+    }
+
+    let value: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| Error::Api(format!("Invalid AI response JSON: {}", e)))?;
+    if let Some(err) = value.get("error") {
+        return Err(Error::Api(format!("AI returned error: {}", err)));
+    }
+
+    let content = extract_content(&value);
+    if content.trim().is_empty() {
+        return Err(Error::Api("AI returned empty content".to_string()));
+    }
+
+    let json_text = extract_json_object(&content);
+    let mut parsed = serde_json::from_str::<AiAssistResponse>(&json_text)
+        .map_err(|e| Error::Api(format!("Failed to parse AI assist JSON: {}", e)))?;
+
+    parsed.headline = parsed.headline.trim().to_string();
+    parsed.summary = parsed.summary.trim().to_string();
+    parsed.primary_text = parsed.primary_text.trim().to_string();
+    parsed
+        .alternatives
+        .retain(|item| !item.text.trim().is_empty());
+    for item in &mut parsed.alternatives {
+        item.label = item.label.trim().to_string();
+        item.text = item.text.trim().to_string();
+    }
+    parsed.focus = parsed
+        .focus
+        .into_iter()
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect();
+
+    if parsed.primary_text.is_empty() {
+        return Err(Error::Api(
+            "AI assist response is missing primaryText".to_string(),
+        ));
+    }
+
+    Ok(parsed)
 }
 
 #[tauri::command]

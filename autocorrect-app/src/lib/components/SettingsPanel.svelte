@@ -29,11 +29,13 @@
   let { theme }: { theme: ThemeMode } = $props();
 
   // Reactive translation helper - use in template with {tr("key")}
-  const tr = $derived((key: string, params?: Record<string, string | number>) => {
-    // Access $locale to establish reactive dependency
-    const _ = $locale;
-    return t(key, params);
-  });
+  const tr = $derived(
+    (key: string, params?: Record<string, string | number>) => {
+      // Access $locale to establish reactive dependency
+      const _ = $locale;
+      return t(key, params);
+    },
+  );
 
   // Rule info from backend
   interface RuleInfo {
@@ -59,6 +61,7 @@
     aiTimeoutMs?: number;
     aiApiBaseUrl?: string;
     aiTranslateTargetLanguage?: string;
+    aiPolishStyle?: string[];
     aiPolishStyles?: string[];
     uiLanguage?: string;
     underlineStyle?: string;
@@ -233,7 +236,11 @@
       aiApiBaseUrl =
         config.aiApiBaseUrl ?? "https://openrouter.ai/api/v1/chat/completions";
       aiTranslateTargetLanguage = config.aiTranslateTargetLanguage ?? "English";
-      aiPolishStyles = config.aiPolishStyles?.length ? config.aiPolishStyles : ["formal"];
+      aiPolishStyles = config.aiPolishStyle?.length
+        ? config.aiPolishStyle
+        : config.aiPolishStyles?.length
+          ? config.aiPolishStyles
+          : ["formal"];
       uiLanguage = config.uiLanguage === "zh-CN" ? "zh-CN" : "en";
       setLocale(uiLanguage);
       underlineStyle = config.underlineStyle ?? "wavy";
@@ -632,7 +639,7 @@
     >
       <div class="flex items-start gap-3">
         <AlertCircle
-          class="h-5 w-5 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5"
+          class="mt-0.5 h-5 w-5 flex-shrink-0 text-red-600 dark:text-red-400"
         />
         <div class="flex-1">
           <h4 class="text-sm font-semibold text-red-900 dark:text-red-100">
@@ -666,7 +673,7 @@
       <!-- Language -->
       <div class="space-y-2">
         <h3 class="text-sm font-semibold">{tr("settings.language")}</h3>
-        <p class="text-xs text-muted-foreground">
+        <p class="text-muted-foreground text-xs">
           {tr("settings.languageDesc")}
         </p>
         <select
@@ -704,23 +711,23 @@
         <div class="space-y-3">
           {#each rules as rule}
             <div class="flex items-start justify-between rounded-lg border p-3">
-              <div class="space-y-0.5 flex-1">
+              <div class="flex-1 space-y-0.5">
                 <div class="flex items-center gap-2">
                   <span class="text-sm font-medium">{rule.name}</span>
                   <span
-                    class="text-xs font-mono {getSeverityColor(rule.severity)}"
+                    class="font-mono text-xs {getSeverityColor(rule.severity)}"
                   >
                     {getSeverityLabel(rule.severity)}
                   </span>
                   {#if rule.severity !== rule.defaultSeverity}
-                    <span class="text-xs text-muted-foreground"
+                    <span class="text-muted-foreground text-xs"
                       >({tr("settings.default")}: {getSeverityLabel(
                         rule.defaultSeverity,
                       )})</span
                     >
                   {/if}
                 </div>
-                <p class="text-xs text-muted-foreground">{rule.description}</p>
+                <p class="text-muted-foreground text-xs">{rule.description}</p>
               </div>
               <div class="flex gap-1">
                 <button
@@ -772,7 +779,7 @@
       <div class="space-y-3">
         <h3 class="text-sm font-semibold">{tr("settings.appearance")}</h3>
 
-        <div class="rounded-lg border p-3 space-y-4">
+        <div class="space-y-4 rounded-lg border p-3">
           <!-- Theme Selector -->
           <div class="space-y-2">
             <p class="text-sm font-medium">{tr("settings.theme")}</p>
@@ -788,8 +795,8 @@
               <option value="dark">{tr("settings.theme.dark")}</option>
               <option value="auto">{tr("settings.theme.auto")}</option>
             </select>
-            {#if theme === 'auto'}
-              <p class="text-xs text-muted-foreground">
+            {#if theme === "auto"}
+              <p class="text-muted-foreground text-xs">
                 {tr("settings.theme.autoDesc")}
               </p>
             {/if}
@@ -801,7 +808,7 @@
             <div class="flex gap-2">
               {#each UNDERLINE_STYLES as s}
                 <button
-                  class="px-3 py-1.5 rounded-md border text-xs font-medium transition-colors
+                  class="rounded-md border px-3 py-1.5 text-xs font-medium transition-colors
 										{underlineStyle === s.value
                     ? 'border-primary bg-primary text-primary-foreground'
                     : 'border-border bg-background hover:bg-muted'}"
@@ -817,10 +824,10 @@
           <!-- Underline Color -->
           <div class="space-y-2">
             <p class="text-sm font-medium">{tr("settings.underlineColor")}</p>
-            <div class="flex gap-2 flex-wrap">
+            <div class="flex flex-wrap gap-2">
               {#each UNDERLINE_COLORS as c}
                 <button
-                  class="w-7 h-7 rounded-full border-2 transition-all {c.tw}
+                  class="h-7 w-7 rounded-full border-2 transition-all {c.tw}
 										{underlineColor === c.value
                     ? 'border-foreground scale-110'
                     : 'border-transparent'}"
@@ -836,7 +843,9 @@
 
           <!-- Preview -->
           <div class="space-y-1">
-            <p class="text-xs text-muted-foreground">{tr("settings.preview")}</p>
+            <p class="text-muted-foreground text-xs">
+              {tr("settings.preview")}
+            </p>
             <span
               class="text-sm"
               style="text-decoration: underline; text-decoration-style: {underlineStyle ===
@@ -852,7 +861,9 @@
 
       <!-- General Settings -->
       <div class="space-y-3">
-        <h3 class="text-sm font-semibold">{tr("settings.general") || "General"}</h3>
+        <h3 class="text-sm font-semibold">
+          {tr("settings.general") || "General"}
+        </h3>
 
         <!-- Launch at Login -->
         <div class="flex items-center justify-between rounded-lg border p-3">
@@ -860,7 +871,7 @@
             <label class="text-sm font-medium" for="autostart-enabled"
               >{tr("settings.autostart")}</label
             >
-            <p class="text-xs text-muted-foreground">
+            <p class="text-muted-foreground text-xs">
               {tr("settings.autostartDesc")}
             </p>
           </div>
@@ -882,7 +893,7 @@
             <label class="text-sm font-medium" for="typo-checking-enabled"
               >{tr("settings.typoToggle")}</label
             >
-            <p class="text-xs text-muted-foreground">
+            <p class="text-muted-foreground text-xs">
               {tr("settings.typoToggleDesc")}
             </p>
           </div>
@@ -899,7 +910,7 @@
             <label class="text-sm font-medium" for="ai-grammar-enabled"
               >{tr("settings.aiToggle")}</label
             >
-            <p class="text-xs text-muted-foreground">
+            <p class="text-muted-foreground text-xs">
               {tr("settings.aiToggleDesc")}
             </p>
           </div>
@@ -911,7 +922,7 @@
         </div>
 
         {#if aiGrammarEnabled}
-          <div class="rounded-lg border p-4 space-y-3">
+          <div class="space-y-3 rounded-lg border p-4">
             <div class="space-y-1">
               <label class="text-sm font-medium" for="openai-api-key"
                 >{tr("settings.apiKey")}</label
@@ -924,7 +935,7 @@
                 oninput={() => (hasUnsavedChanges = true)}
               />
             </div>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div class="space-y-1">
                 <label class="text-sm font-medium" for="openai-model"
                   >{tr("settings.model")}</label
@@ -964,7 +975,7 @@
                 />
               </div>
             </div>
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div class="space-y-1 md:col-span-2">
                 <label class="text-sm font-medium" for="ai-api-base-url"
                   >{tr("settings.endpoint")}</label
@@ -1000,13 +1011,17 @@
                 {#each POLISH_STYLES as style}
                   <button
                     type="button"
-                    class="inline-flex items-center rounded-md border border-input bg-background px-3 py-1.5 text-sm transition-colors hover:bg-accent hover:text-accent-foreground"
+                    class="border-input bg-background hover:bg-accent hover:text-accent-foreground inline-flex items-center rounded-md border px-3 py-1.5 text-sm transition-colors"
                     class:bg-primary={aiPolishStyles.includes(style.value)}
-                    class:text-primary-foreground={aiPolishStyles.includes(style.value)}
+                    class:text-primary-foreground={aiPolishStyles.includes(
+                      style.value,
+                    )}
                     class:border-primary={aiPolishStyles.includes(style.value)}
                     onclick={() => {
                       if (aiPolishStyles.includes(style.value)) {
-                        aiPolishStyles = aiPolishStyles.filter((s) => s !== style.value);
+                        aiPolishStyles = aiPolishStyles.filter(
+                          (s) => s !== style.value,
+                        );
                       } else {
                         aiPolishStyles = [...aiPolishStyles, style.value];
                       }
@@ -1033,7 +1048,7 @@
             placeholder={tr("settings.customDictPlaceholder")}
             class="min-h-[100px] font-mono text-sm"
           />
-          <p class="mt-1 text-xs text-muted-foreground">
+          <p class="text-muted-foreground mt-1 text-xs">
             {tr("settings.customDictDesc")}
           </p>
         </div>
@@ -1057,7 +1072,7 @@
             <label class="text-sm font-medium" for="hotkey-enabled"
               >{tr("settings.hotkeyEnable")}</label
             >
-            <p class="text-xs text-muted-foreground">
+            <p class="text-muted-foreground text-xs">
               {tr("settings.hotkeyDesc")}
             </p>
           </div>
@@ -1073,13 +1088,13 @@
               >
               {#if hotkeyConfig}
                 <div
-                  class="flex items-center gap-2 rounded-md bg-muted px-3 py-1.5 font-mono text-sm"
+                  class="bg-muted flex items-center gap-2 rounded-md px-3 py-1.5 font-mono text-sm"
                 >
                   <Keyboard class="h-4 w-4" />
                   <span>{hotkeyConfig.display_string}</span>
                 </div>
               {:else}
-                <div class="text-sm text-muted-foreground">
+                <div class="text-muted-foreground text-sm">
                   {tr("settings.loading")}
                 </div>
               {/if}
@@ -1090,13 +1105,13 @@
               <div class="flex gap-2">
                 <button
                   onclick={() => (showKeySelector = true)}
-                  class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                  class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-3 py-1.5 text-sm font-medium"
                 >
                   {tr("settings.changeHotkey")}
                 </button>
                 <button
                   onclick={resetHotkeyToDefaults}
-                  class="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted"
+                  class="hover:bg-muted rounded-md border px-3 py-1.5 text-sm font-medium"
                 >
                   {tr("settings.resetDefault")}
                 </button>
@@ -1113,8 +1128,8 @@
 
               {#if !isRecording && !recordedShortcut}
                 <!-- Recording Instructions -->
-                <div class="rounded-md bg-muted p-4 text-center">
-                  <p class="text-sm text-muted-foreground">
+                <div class="bg-muted rounded-md p-4 text-center">
+                  <p class="text-muted-foreground text-sm">
                     {tr("settings.recordHint")}
                     <br />
                     {tr("settings.recordHint2")}
@@ -1122,9 +1137,9 @@
                   </p>
                   <button
                     onclick={startRecording}
-                    class="mt-3 rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                    class="bg-primary text-primary-foreground hover:bg-primary/90 mt-3 rounded-md px-4 py-2 text-sm font-medium"
                   >
-                    <Keyboard class="mr-2 h-4 w-4 inline" />
+                    <Keyboard class="mr-2 inline h-4 w-4" />
                     {tr("settings.startRecording")}
                   </button>
                 </div>
@@ -1133,22 +1148,22 @@
               {#if isRecording}
                 <!-- Recording State -->
                 <div
-                  class="rounded-md border-2 border-primary bg-primary/5 p-6 text-center"
+                  class="border-primary bg-primary/5 rounded-md border-2 p-6 text-center"
                 >
                   <div class="mb-3 flex justify-center">
                     <div
-                      class="flex h-8 w-8 animate-pulse items-center justify-center rounded-full bg-primary"
+                      class="bg-primary flex h-8 w-8 animate-pulse items-center justify-center rounded-full"
                     >
-                      <Keyboard class="h-4 w-4 text-primary-foreground" />
+                      <Keyboard class="text-primary-foreground h-4 w-4" />
                     </div>
                   </div>
                   <p class="text-sm font-medium">{tr("settings.recording")}</p>
-                  <p class="mt-1 text-xs text-muted-foreground">
+                  <p class="text-muted-foreground mt-1 text-xs">
                     {tr("settings.recordingDesc")}
                   </p>
                   <button
                     onclick={cancelRecording}
-                    class="mt-3 rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted"
+                    class="hover:bg-muted mt-3 rounded-md border px-3 py-1.5 text-sm font-medium"
                   >
                     {tr("settings.cancel")}
                   </button>
@@ -1157,8 +1172,8 @@
 
               {#if recordedShortcut}
                 <!-- Recorded Result -->
-                <div class="rounded-md bg-muted p-4 text-center">
-                  <p class="text-xs font-medium text-muted-foreground">
+                <div class="bg-muted rounded-md p-4 text-center">
+                  <p class="text-muted-foreground text-xs font-medium">
                     {tr("settings.recorded")}
                   </p>
                   <p class="mt-2 font-mono text-lg">
@@ -1167,13 +1182,13 @@
                   <div class="mt-4 flex justify-center gap-2">
                     <button
                       onclick={saveRecordedShortcut}
-                      class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                      class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-3 py-1.5 text-sm font-medium"
                     >
                       {tr("settings.saveHotkey")}
                     </button>
                     <button
                       onclick={() => (recordedShortcut = null)}
-                      class="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted"
+                      class="hover:bg-muted rounded-md border px-3 py-1.5 text-sm font-medium"
                     >
                       {tr("settings.tryAgain")}
                     </button>
@@ -1195,7 +1210,7 @@
                         recordingError = null;
                         startRecording();
                       }}
-                      class="rounded-md bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                      class="bg-primary text-primary-foreground hover:bg-primary/90 rounded-md px-3 py-1.5 text-sm font-medium"
                     >
                       {tr("settings.tryAgain")}
                     </button>
@@ -1204,7 +1219,7 @@
                         recordingError = null;
                         showKeySelector = false;
                       }}
-                      class="rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted"
+                      class="hover:bg-muted rounded-md border px-3 py-1.5 text-sm font-medium"
                     >
                       {tr("settings.cancel")}
                     </button>
@@ -1216,7 +1231,7 @@
               {#if !isRecording && !recordedShortcut && !recordingError}
                 <button
                   onclick={() => (showKeySelector = false)}
-                  class="w-full rounded-md border px-3 py-1.5 text-sm font-medium hover:bg-muted"
+                  class="hover:bg-muted w-full rounded-md border px-3 py-1.5 text-sm font-medium"
                 >
                   {tr("settings.cancel")}
                 </button>

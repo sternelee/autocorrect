@@ -16,10 +16,12 @@
   import { locale, t } from "$lib/i18n";
 
   // Reactive translation helper
-  const tr = $derived((key: string, params?: Record<string, string | number>) => {
-    const _ = $locale;
-    return t(key, params);
-  });
+  const tr = $derived(
+    (key: string, params?: Record<string, string | number>) => {
+      const _ = $locale;
+      return t(key, params);
+    },
+  );
 
   // Reactive state
   let currentText = $state("");
@@ -52,7 +54,7 @@
   let unlistenChunk: (() => void) | null = null;
   let unlistenComplete: (() => void) | null = null;
   let unlistenError: (() => void) | null = null;
-  
+
   const translateLanguageOptions = [
     "简体中文",
     "English",
@@ -69,6 +71,7 @@
   interface AppConfig {
     aiGrammarEnabled?: boolean;
     aiTranslateTargetLanguage?: string;
+    aiPolishStyle?: string[];
     aiPolishStyles?: string[];
   }
 
@@ -76,7 +79,11 @@
     try {
       const config = await invoke<AppConfig>("get_config");
       aiTargetLanguage = config.aiTranslateTargetLanguage ?? "English";
-      aiPolishStyles = config.aiPolishStyles?.length ? config.aiPolishStyles : ["formal"];
+      aiPolishStyles = config.aiPolishStyle?.length
+        ? config.aiPolishStyle
+        : config.aiPolishStyles?.length
+          ? config.aiPolishStyles
+          : ["formal"];
     } catch (error) {
       console.warn("Failed to load AI defaults:", error);
     }
@@ -186,7 +193,9 @@
     }
   }
 
-  function buildAiRequest(operation: "grammar" | "translate" | "polish" | "summarize") {
+  function buildAiRequest(
+    operation: "grammar" | "translate" | "polish" | "summarize",
+  ) {
     const polishStyle = aiPolishStyles[0] ?? "formal";
     return {
       text: currentText,
@@ -204,7 +213,7 @@
   ) {
     if (!currentText.trim() || aiBusy) {
       return;
-    } 
+    }
 
     if (operation !== "grammar") {
       await runAiTransformStream(operation);
@@ -272,7 +281,7 @@
     aiBusy = true;
     aiError = null;
     aiRunningOperation = operation;
-    
+
     try {
       const config = await invoke<AppConfig>("get_config");
       if (!config.aiGrammarEnabled) {
@@ -281,7 +290,7 @@
 
       typos = [];
       correctedText = "";
-      
+
       await invoke("ai_text_transform_stream", {
         request: buildAiRequest(operation),
       });
@@ -397,7 +406,7 @@
         </Button>
       </div>
 
-      <div class="rounded-md border p-3 space-y-3">
+      <div class="space-y-3 rounded-md border p-3">
         <div class="text-sm font-medium">{tr("spell.aiTools")}</div>
         <div class="flex">
           <select
@@ -462,7 +471,7 @@
           <label for="corrected-text" class="text-sm font-medium">
             {tr("spell.corrected")}
             {#if hasChanges}
-              <span class="ml-2 text-xs text-muted-foreground">
+              <span class="text-muted-foreground ml-2 text-xs">
                 ({lineChanges.length}
                 {lineChanges.length === 1
                   ? tr("spell.changeDetected")
@@ -472,7 +481,7 @@
           </label>
           <div
             id="corrected-text"
-            class="min-h-[150px] rounded-md border border-input bg-muted/50 p-3 font-mono text-sm whitespace-pre-wrap"
+            class="border-input bg-muted/50 min-h-[150px] rounded-md border p-3 font-mono text-sm whitespace-pre-wrap"
           >
             {correctedText}
           </div>
@@ -483,13 +492,13 @@
       {#if lineChanges.length > 0}
         <div class="space-y-2">
           <h3 class="text-sm font-medium">{tr("spell.changesTitle")}</h3>
-          <div class="space-y-2 max-h-[200px] overflow-y-auto">
+          <div class="max-h-[200px] space-y-2 overflow-y-auto">
             {#each lineChanges as change (change.line + ":" + change.col)}
               <div
-                class="flex items-start gap-2 rounded-md border bg-card p-2 text-sm"
+                class="bg-card flex items-start gap-2 rounded-md border p-2 text-sm"
               >
                 <span
-                  class="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs font-mono"
+                  class="bg-muted shrink-0 rounded px-1.5 py-0.5 font-mono text-xs"
                 >
                   L{change.line}:C{change.col}
                 </span>
@@ -513,17 +522,17 @@
           <h3 class="text-sm font-medium">
             {tr("spell.spellingIssues")} ({typos.length})
           </h3>
-          <div class="space-y-2 max-h-[300px] overflow-y-auto">
+          <div class="max-h-[300px] space-y-2 overflow-y-auto">
             {#each typos as typo (typo.typo + ":" + typo.line + ":" + typo.col)}
               <div
-                class="flex flex-col gap-2 rounded-md border border-yellow-400 bg-yellow-50 dark:bg-yellow-950/20 p-3 text-sm"
+                class="flex flex-col gap-2 rounded-md border border-yellow-400 bg-yellow-50 p-3 text-sm dark:bg-yellow-950/20"
               >
                 <div class="flex items-start justify-between">
                   <div class="flex flex-col gap-1">
                     <span class="font-semibold text-red-600 dark:text-red-400">
                       "{typo.typo}"
                     </span>
-                    <span class="text-xs text-muted-foreground">
+                    <span class="text-muted-foreground text-xs">
                       {tr("spell.line")}
                       {typo.line}, {tr("spell.column")}
                       {typo.col}
@@ -533,7 +542,7 @@
 
                 {#if typo.suggestions.length > 0}
                   <div class="flex flex-col gap-2">
-                    <span class="text-xs font-medium text-muted-foreground"
+                    <span class="text-muted-foreground text-xs font-medium"
                       >{tr("spell.suggestions")}</span
                     >
                     <div class="flex flex-wrap gap-2">
@@ -564,15 +573,15 @@
                     {/if}
                   </div>
                 {:else}
-                  <span class="text-xs text-muted-foreground"
+                  <span class="text-muted-foreground text-xs"
                     >{tr("spell.noSuggestions")}</span
                   >
                 {/if}
               </div>
             {/each}
           </div>
-         </div>
-       {/if}
-     </CardContent>
-   </Card>
- </div>
+        </div>
+      {/if}
+    </CardContent>
+  </Card>
+</div>
