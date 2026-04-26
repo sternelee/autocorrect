@@ -11,6 +11,23 @@ mod theme;
 mod theme_errors;
 mod typocheck;
 
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Hash of the last text seen by `sync_system_typos`.
+/// When the text is unchanged, skip typo checking and overlay re-render.
+static LAST_TEXT_HASH: AtomicU64 = AtomicU64::new(0);
+/// Hash of the last bundle_id, so we reset the text hash on focus change.
+static LAST_BUNDLE_HASH: AtomicU64 = AtomicU64::new(0);
+
+#[inline]
+fn hash_str(s: &str) -> u64 {
+    let mut h = DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
+}
+
 #[cfg(target_os = "macos")]
 mod geom {
     use objc2::Encode;
@@ -686,7 +703,21 @@ fn sync_system_typos(app: &tauri::AppHandle) {
 
                 if ctx.text.is_empty() {
                     log::info!("[DIAG] Text is empty for bundle={}", ctx.bundle_id);
+                    // Reset hash so we re-check when text becomes non-empty
+                    LAST_TEXT_HASH.store(0, Ordering::Relaxed);
                     overlay_manager.update_markers(vec![]);
+                    return;
+                }
+
+                // Skip typo check if text and focused app are unchanged since last cycle.
+                // This avoids re-running the typos library on every 800ms tick when
+                // the user is not typing.
+                let bundle_hash = hash_str(&ctx.bundle_id);
+                let text_hash = hash_str(&ctx.text);
+                let prev_bundle = LAST_BUNDLE_HASH.swap(bundle_hash, Ordering::Relaxed);
+                let prev_text = LAST_TEXT_HASH.swap(text_hash, Ordering::Relaxed);
+                if text_hash == prev_text && bundle_hash == prev_bundle {
+                    // Text unchanged — skip typo check and overlay re-render.
                     return;
                 }
 
