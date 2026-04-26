@@ -144,19 +144,24 @@ pub fn run() {
                     .build(),
             )?;
 
-            // Check Accessibility permission.  We do NOT trigger the system
-            // dialog automatically (it shows every launch for unsigned apps
-            // and confuses users).  Instead we open System Settings directly
-            // so the user can add the app themselves, then restart.
+            // Check Accessibility permission on startup.
+            // We only LOG here — we intentionally do NOT open System Settings
+            // automatically because:
+            //   1. AXIsProcessTrusted() can transiently return false on the
+            //      first call even when permission is already granted (unsigned
+            //      builds, sandbox init delay).
+            //   2. Auto-opening System Settings on every launch is disruptive
+            //      and confusing for users who have already granted access.
+            // The frontend polls check_accessibility_permission() and surfaces
+            // a guided prompt with a "Open Settings" button when needed.
             #[cfg(target_os = "macos")]
             {
                 if !macos_text::check_accessibility_trusted() {
                     log::warn!(
-                        "Accessibility permission not granted. \
-                         Opening System Settings → Privacy & Security → Accessibility. \
-                         Please enable AutoCorrect and restart the app."
+                        "Accessibility permission not yet granted (or not yet visible \
+                         to this process). Spell-check overlay will be inactive until \
+                         access is enabled in System Settings → Privacy → Accessibility."
                     );
-                    macos_text::open_accessibility_settings();
                 } else {
                     log::info!("Accessibility permission granted ✓");
                 }
