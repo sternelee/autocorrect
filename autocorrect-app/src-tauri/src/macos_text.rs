@@ -568,134 +568,20 @@ pub fn get_focused_text_context() -> Result<FocusedTextContext> {
     if !unsafe { AXIsProcessTrusted() } {
         return Err(AccessibilityError::PermissionDenied);
     }
-
     unsafe {
         let system_element = AXUIElementCreateSystemWide();
         let mut focused_element: Id = NIL;
-
         let err = AXUIElementCopyAttributeValue(
             system_element,
             to_ax_string("AXFocusedUIElement"),
             &mut focused_element,
         );
-
         if err != 0 || focused_element.is_null() {
             return Err(AccessibilityError::NoFocusedElement);
         }
-
-        // Get PID and Bundle ID safely
-        let mut pid: i32 = 0;
-        AXUIElementGetPid(focused_element, &mut pid);
-
-        let mut bundle_id = String::new();
-        if pid > 0 {
-            let app_class =
-                AnyClass::get("NSRunningApplication").expect("NSRunningApplication not found");
-            let app: Id = msg_send![app_class, runningApplicationWithProcessIdentifier: pid];
-            if !app.is_null() {
-                let ns_bundle_id: Id = msg_send![app, bundleIdentifier];
-                if !ns_bundle_id.is_null() {
-                    bundle_id = from_ax_string(ns_bundle_id);
-                }
-            }
-        }
-
-        let mut role_value: Id = NIL;
-        AXUIElementCopyAttributeValue(focused_element, to_ax_string("AXRole"), &mut role_value);
-        let role = if !role_value.is_null() {
-            from_ax_string(role_value)
-        } else {
-            String::new()
-        };
-
-        let mut editable_value: Id = NIL;
-        AXUIElementCopyAttributeValue(
-            focused_element,
-            to_ax_string("AXEditable"),
-            &mut editable_value,
-        );
-        let editable = from_ax_bool(editable_value);
-
-        // 优先全文 (AXValue)
-        let mut text_value: Id = NIL;
-        AXUIElementCopyAttributeValue(focused_element, to_ax_string("AXValue"), &mut text_value);
-
-        // Slack/Electron fallback (AXSelectedText)
-        if text_value.is_null() {
-            AXUIElementCopyAttributeValue(
-                focused_element,
-                to_ax_string("AXSelectedText"),
-                &mut text_value,
-            );
-        }
-
-        if !text_value.is_null() {
-            // Verify if the value is actually an NSString
-            let ns_string_class = AnyClass::get("NSString").expect("NSString not found");
-            let is_string: bool = msg_send![text_value, isKindOfClass: ns_string_class];
-
-            if is_string {
-                let full_text = from_ax_string(text_value);
-                if !full_text.is_empty() {
-                    let mut selected_range_value: Id = NIL;
-                    AXUIElementCopyAttributeValue(
-                        focused_element,
-                        to_ax_string("AXSelectedTextRange"),
-                        &mut selected_range_value,
-                    );
-
-                    let mut selected_range = CFRange {
-                        location: 0,
-                        length: 0,
-                    };
-                    if !selected_range_value.is_null() {
-                        let _ = AXValueGetValue(
-                            selected_range_value,
-                            K_AXVALUE_CFRANGE_TYPE,
-                            &mut selected_range as *mut _ as *mut std::ffi::c_void,
-                        );
-                    }
-
-                    let total_u16 = full_text.encode_utf16().count();
-                    if total_u16 > 20000 {
-                        let caret_u16 = if selected_range.location >= 0 {
-                            selected_range.location as usize
-                        } else {
-                            total_u16
-                        };
-                        let start_u16 = caret_u16.saturating_sub(3000);
-                        let end_u16 = (caret_u16 + 1000).min(total_u16);
-                        let sliced = slice_by_utf16_range(&full_text, start_u16, end_u16);
-                        return Ok(FocusedTextContext {
-                            text: sliced,
-                            base_offset: start_u16,
-                            caret_offset: caret_u16.saturating_sub(start_u16),
-                            role,
-                            editable,
-                            bundle_id,
-                        });
-                    }
-
-                    return Ok(FocusedTextContext {
-                        text: full_text,
-                        base_offset: 0,
-                        caret_offset: selected_range.location.max(0) as usize,
-                        role,
-                        editable,
-                        bundle_id,
-                    });
-                }
-            }
-        }
-
-        Ok(FocusedTextContext {
-            text: String::new(),
-            base_offset: 0,
-            caret_offset: 0,
-            role,
-            editable,
-            bundle_id,
-        })
+        // Delegate to the element-accepting implementation so all fixes
+        // (including base_offset correction for AXSelectedText fallback) apply here too.
+        ax_text_context_for_element(focused_element)
     }
 }
 
