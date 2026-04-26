@@ -1123,22 +1123,26 @@ pub fn get_focused_window_position() -> Result<(f64, f64)> {
 /// rather than screen coordinates. Electron apps often return coordinates relative
 /// to the window origin instead of screen coordinates.
 fn is_window_relative_coords(bounds: CGRect, window_pos: (f64, f64)) -> bool {
-    // If bounds origin is very close to window position, it's likely window-relative
-    let dx = (bounds.origin.x - window_pos.0).abs();
-    let dy = (bounds.origin.y - window_pos.1).abs();
-
-    // Window-relative coords typically have small delta (< 50 pixels)
-    // Screen coords have larger delta (window position + text position)
-    let threshold = 50.0;
-
-    // Also check if bounds are at a typical "inside window" position
-    // (small positive coordinates, not screen-size coordinates)
-    let looks_like_window_coords = bounds.origin.x < 2000.0
-        && bounds.origin.y < 2000.0
-        && window_pos.0 > 0.0
-        && window_pos.1 > 0.0;
-
-    (dx < threshold && dy < threshold) || looks_like_window_coords
+    // AX returns screen coordinates in Quartz space (y=0 at bottom of primary screen,
+    // y increases upward). A window at `window_pos` means its bottom-left corner is
+    // at that screen position.  Any element inside the window MUST have screen coords
+    // >= window_pos (or very close to it, allowing for sub-pixel rounding).
+    //
+    // Electron/CEF apps incorrectly return coordinates relative to the window origin
+    // (i.e. the element's *local* position within the window, not the screen position).
+    // When that happens, bounds.origin will be significantly *less* than window_pos
+    // because the local coordinates start near (0, 0).
+    //
+    // The old heuristic (`looks_like_window_coords = bounds < 2000`) was a false
+    // positive for any window near the top-left of the screen, causing a double-offset
+    // bug for native apps.
+    //
+    // Correct heuristic: if the bounds appear to sit *below* the window's screen
+    // position by more than a small margin, they must be window-relative.
+    let margin = 20.0; // allow for sub-pixel rounding and border thickness
+    let x_below_window = bounds.origin.x < window_pos.0 - margin;
+    let y_below_window = bounds.origin.y < window_pos.1 - margin;
+    x_below_window || y_below_window
 }
 
 // --- macOS 底层辅助函数 ---
