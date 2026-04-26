@@ -70,7 +70,7 @@ mod geom {
 
 use ai_popup::{SharedAiPopupState, SharedNativeIconWindow};
 use commands::ai_grammar::{
-    ai_clarity_check, ai_clarity_check_stream, ai_grammar_check, ai_polish_batch,
+    ai_assist, ai_clarity_check, ai_clarity_check_stream, ai_grammar_check, ai_polish_batch,
     ai_text_transform, ai_text_transform_stream, ai_tone_detect, ai_vocabulary_enhance,
 };
 use commands::config::{
@@ -552,6 +552,7 @@ pub fn run() {
             delete_custom_correction,
             get_custom_corrections_path_cmd,
             ai_grammar_check,
+            ai_assist,
             ai_text_transform,
             ai_text_transform_stream,
             ai_polish_batch,
@@ -618,10 +619,19 @@ fn sync_system_typos(app: &tauri::AppHandle) {
         }
     }
 
-    // 1. 检查焦点文本
+    // 1. 获取 AX 会话（本次 poll 周期内复用同一 focused element，
+    //    避免每个 typo 都重复 AXUIElementCreateSystemWide + AXFocusedUIElement）
     #[cfg(target_os = "macos")]
     {
-        match macos_text::get_focused_text_context() {
+        let ax_session = match macos_text::AXPollSession::new() {
+            Some(s) => s,
+            None => {
+                overlay_manager.update_markers(vec![]);
+                return;
+            }
+        };
+
+        match ax_session.get_text_context() {
             Ok(ctx) => {
                 let is_traditional_input = matches!(
                     ctx.role.as_str(),
@@ -700,14 +710,14 @@ fn sync_system_typos(app: &tauri::AppHandle) {
 
                 let mut markers = Vec::new();
 
-                // 3. 为每个错误获取屏幕坐标
+                // 3. 为每个错误获取屏幕坐标（复用会话内的 focused element + window_pos）
                 for typo in typos.iter().take(10) {
                     let typo_u16_offset = byte_offset_to_utf16_offset(&ctx.text, typo.byte_offset);
                     let absolute_offset = ctx.base_offset.saturating_add(typo_u16_offset);
                     let typo_u16_len = typo.typo.encode_utf16().count();
 
                     if let Ok(rect) =
-                        macos_text::get_focused_range_bounds(absolute_offset, typo_u16_len)
+                        ax_session.get_range_bounds(absolute_offset, typo_u16_len)
                     {
                         if rect.size.width > 0.0 {
                             markers.push(TypoMarker {
@@ -727,8 +737,8 @@ fn sync_system_typos(app: &tauri::AppHandle) {
 
                 // Fallback mechanism if no markers found but typos exist
                 if !typos.is_empty() && markers.is_empty() {
-                    let frame_rect = macos_text::get_focused_element_bounds().ok();
-                    let caret_rect = macos_text::get_focused_caret_bounds().ok();
+                    let frame_rect = ax_session.get_element_bounds().ok();
+                    let caret_rect = ax_session.get_caret_bounds().ok();
                     let (cursor_x, cursor_y) = get_cursor_position();
 
                     log::info!(
@@ -871,38 +881,40 @@ fn sync_system_typos(app: &tauri::AppHandle) {
     }
 
     // Detect long text selections and show/hide the AI floating icon.
+    // Reuse the AX session obtained above (shared focused element).
     #[cfg(target_os = "macos")]
     {
         const MIN_SELECTION_CHARS: usize = 6;
         let mut icon_triggered = false;
-        match macos_text::get_selected_text() {
+
+        // Reuse session if available; fall back to a fresh one for the AI path only.
+        let ai_session = macos_text::AXPollSession::new();
+
+        let sel_result = ai_session
+            .as_ref()
+            .map(|s| s.get_selected_text())
+            .unwrap_or(Err(macos_text::AccessibilityError::NoFocusedElement));
+
+        match sel_result {
             Ok(sel) if sel.chars().count() >= MIN_SELECTION_CHARS => {
-                // Check if frontmost app is ignored for popup
                 let should_show_icon = match commands::ignored_apps::get_frontmost_bundle_id_macos()
                 {
                     Some(bundle_id) => !is_app_ignored(app, &bundle_id, true, false),
-                    None => true, // Show if we can't get bundle ID
+                    None => true,
                 };
 
                 if should_show_icon {
-                    // 使用选区 bounds 定位图标到选中文本右上角
-                    let (icon_x, icon_y) = match macos_text::get_selected_text_bounds() {
-                        Ok((sx, sy, sw, sh)) => {
-                            log::info!(
-                                "[AI] selection bounds: x={} y={} w={} h={}",
-                                sx,
-                                sy,
-                                sw,
-                                sh
-                            );
-                            // 右上角位置: x = 左上角 x + 宽度 + 小偏移, y = 左上角 y
+                    let (icon_x, icon_y) = match ai_session
+                        .as_ref()
+                        .and_then(|s| s.get_selected_text_bounds().ok())
+                    {
+                        Some((sx, sy, sw, _sh)) => {
+                            log::info!("[AI] selection bounds: x={} y={} w={}", sx, sy, sw);
                             (sx + sw + 4, sy - 18)
                         }
-                        Err(e) => {
-                            log::warn!("[AI] get_selected_text_bounds error: {:?}", e);
-                            // 回退方案：获取鼠标位置
+                        None => {
+                            log::warn!("[AI] get_selected_text_bounds failed, using cursor");
                             let (cx, cy) = get_cursor_position();
-                            // 图标显示在鼠标位置上方偏右处
                             (cx + 10, cy - 18)
                         }
                     };
