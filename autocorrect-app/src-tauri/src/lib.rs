@@ -741,10 +741,16 @@ fn sync_system_typos(app: &tauri::AppHandle) {
 
                 let mut markers = Vec::new();
 
+                // Pre-compute all UTF-16 offsets in one O(text_len) pass
+                // instead of N separate O(text_len) scans.
+                let capped_typos: Vec<_> = typos.iter().take(10).collect();
+                let utf16_offsets =
+                    batch_byte_to_utf16_offsets(&ctx.text,
+                        capped_typos.iter().map(|t| t.byte_offset));
+
                 // 3. 为每个错误获取屏幕坐标（复用会话内的 focused element + window_pos）
-                for typo in typos.iter().take(10) {
-                    let typo_u16_offset = byte_offset_to_utf16_offset(&ctx.text, typo.byte_offset);
-                    let absolute_offset = ctx.base_offset.saturating_add(typo_u16_offset);
+                for (typo, typo_u16_offset) in capped_typos.iter().zip(utf16_offsets.iter()) {
+                    let absolute_offset = ctx.base_offset.saturating_add(*typo_u16_offset);
                     let typo_u16_len = typo.typo.encode_utf16().count();
 
                     if let Ok(rect) =
@@ -768,6 +774,11 @@ fn sync_system_typos(app: &tauri::AppHandle) {
 
                 // Fallback mechanism if no markers found but typos exist
                 if !typos.is_empty() && markers.is_empty() {
+                    // Pre-compute UTF-16 offsets for fallback path too
+                    let fallback_utf16_offsets =
+                        batch_byte_to_utf16_offsets(&ctx.text,
+                            typos.iter().take(10).map(|t| t.byte_offset));
+
                     let frame_rect = ax_session.get_element_bounds().ok();
                     let caret_rect = ax_session.get_caret_bounds().ok();
                     let (cursor_x, cursor_y) = get_cursor_position();
@@ -827,6 +838,7 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                     };
 
                     for (i, typo) in typos.iter().enumerate().take(10) {
+                        let typo_u16_offset = fallback_utf16_offsets[i];
                         let fallback_line = typo.line.saturating_sub(1) as f64;
                         let line_text = typo
                             .line
@@ -880,9 +892,7 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                         let final_x = base_x + prefix_width;
                         let final_y = base_y + (fallback_line * line_height) + line_height - 2.0;
 
-                        let absolute_offset = ctx.base_offset.saturating_add(
-                            byte_offset_to_utf16_offset(&ctx.text, typo.byte_offset),
-                        );
+                        let absolute_offset = ctx.base_offset.saturating_add(typo_u16_offset);
                         let char_length = typo.typo.encode_utf16().count();
 
                         markers.push(TypoMarker {
@@ -980,6 +990,41 @@ fn sync_system_typos(app: &tauri::AppHandle) {
 fn byte_offset_to_utf16_offset(text: &str, byte_offset: usize) -> usize {
     let clamped = byte_offset.min(text.len());
     text[..clamped].encode_utf16().count()
+}
+
+/// Convert multiple byte offsets to UTF-16 offsets in a single O(text_len) scan.
+/// `offsets` must produce values in **ascending** order (guaranteed by caller).
+/// Returns a Vec in the same order as the input offsets.
+fn batch_byte_to_utf16_offsets(
+    text: &str,
+    offsets: impl Iterator<Item = usize>,
+) -> Vec<usize> {
+    let offsets: Vec<usize> = offsets.collect();
+    let mut result = vec![0usize; offsets.len()];
+    if offsets.is_empty() {
+        return result;
+    }
+    let mut u16_count = 0usize;
+    let mut byte_pos = 0usize;
+    let mut idx = 0usize;
+    for ch in text.chars() {
+        // Fill all offsets that land at or before the current byte position
+        while idx < offsets.len() && offsets[idx] <= byte_pos {
+            result[idx] = u16_count;
+            idx += 1;
+        }
+        if idx >= offsets.len() {
+            break;
+        }
+        u16_count += ch.len_utf16();
+        byte_pos += ch.len_utf8();
+    }
+    // Fill any remaining offsets beyond end-of-text
+    while idx < offsets.len() {
+        result[idx] = u16_count;
+        idx += 1;
+    }
+    result
 }
 
 fn byte_offset_to_char_offset(text: &str, byte_offset: usize) -> usize {

@@ -113,9 +113,9 @@ pub struct TypoError {
 
 /// Check for typos in the given text
 pub fn check_typos(text: &str) -> Vec<TypoError> {
-    let mut typos_errors = Vec::new();
+    let mut typos_errors: Vec<TypoError> = Vec::new();
 
-    // First, check using the default typos library
+    // Pass 1: collect all typos from the typos library (byte offsets only, line/col deferred)
     let results = typos::check_str(text, &POLICY.tokenizer, POLICY.dict);
 
     for typo in results {
@@ -123,7 +123,6 @@ pub fn check_typos(text: &str) -> Vec<TypoError> {
             Status::Corrections(corrections) => {
                 let typo_word = typo.typo.to_string();
 
-                // Skip if the word is in our bundled programming dictionary
                 if is_bundled_word(&typo_word) {
                     log::debug!("Skipping '{}' - found in bundled dictionary", typo_word);
                     continue;
@@ -134,82 +133,111 @@ pub fn check_typos(text: &str) -> Vec<TypoError> {
                     .map(|s| s.to_string())
                     .collect::<Vec<String>>();
 
-                // Calculate line and column from byte offset
-                let (line, col) = calculate_line_col(text, typo.byte_offset);
-
                 typos_errors.push(TypoError {
                     typo: typo_word,
                     suggestions,
                     byte_offset: typo.byte_offset,
-                    line,
-                    col,
+                    line: 0, // filled in batch below
+                    col: 0,
                 });
             }
             _ => {}
         }
     }
 
-    // Second, check for custom typo corrections
-    let mut current_word_start: Option<usize> = None;
-    let mut current_word = String::new();
-
-    for (i, ch) in text.char_indices() {
-        if ch.is_alphabetic() || ch == '\'' {
-            // Include apostrophes in words
-            if current_word_start.is_none() {
-                current_word_start = Some(i);
+    // Pass 2: apply custom corrections (byte offsets only, no line/col yet)
+    {
+        let guard = CUSTOM_CORRECTIONS.read().ok();
+        if let Some(corrections) = guard.as_ref().filter(|c| !c.is_empty()) {
+            let mut word_start: Option<usize> = None;
+            let mut word = String::new();
+            for (i, ch) in text.char_indices() {
+                if ch.is_alphabetic() || ch == '\'' {
+                    if word_start.is_none() {
+                        word_start = Some(i);
+                    }
+                    word.push(ch);
+                } else if let Some(start) = word_start.take() {
+                    apply_custom_correction(&word, start, corrections, &mut typos_errors);
+                    word.clear();
+                }
             }
-            current_word.push(ch);
-        } else {
-            // End of word
-            if let Some(word_start) = current_word_start {
-                check_custom_correction(&current_word, word_start, text, &mut typos_errors);
-
-                current_word.clear();
-                current_word_start = None;
+            if let Some(start) = word_start {
+                apply_custom_correction(&word, start, corrections, &mut typos_errors);
             }
         }
     }
 
-    // Check last word if text ends with a word
-    if let Some(word_start) = current_word_start {
-        check_custom_correction(&current_word, word_start, text, &mut typos_errors);
-    }
-
-    // Sort by byte offset to return results in text order
+    // Sort by byte offset
     typos_errors.sort_by_key(|e| e.byte_offset);
+
+    // Batch-compute line/col in ONE O(text_len) scan rather than O(N * text_len)
+    if !typos_errors.is_empty() {
+        let positions = batch_line_col(text, typos_errors.iter().map(|e| e.byte_offset));
+        for (err, (line, col)) in typos_errors.iter_mut().zip(positions) {
+            err.line = line;
+            err.col = col;
+        }
+    }
 
     typos_errors
 }
 
-fn check_custom_correction(
+/// Apply a custom correction entry (no line/col — deferred to batch_line_col).
+fn apply_custom_correction(
     word: &str,
     word_start: usize,
-    text: &str,
+    corrections: &std::collections::HashMap<String, String>,
     typos_errors: &mut Vec<TypoError>,
 ) {
     let word_lower = word.to_lowercase();
-
-    // Check if this word is in our custom corrections list
-    if let Ok(corrections) = CUSTOM_CORRECTIONS.read() {
-        if let Some(correction) = corrections.get(&word_lower) {
-            // Make sure we haven't already added this from the default checker
-            let already_found = typos_errors.iter().any(|e| e.byte_offset == word_start);
-
-            if !already_found {
-                let (line, col) = calculate_line_col(text, word_start);
-                typos_errors.push(TypoError {
-                    typo: word.to_string(),
-                    suggestions: vec![correction.clone()],
-                    byte_offset: word_start,
-                    line,
-                    col,
-                });
-            }
+    if let Some(correction) = corrections.get(&word_lower) {
+        if !typos_errors.iter().any(|e| e.byte_offset == word_start) {
+            typos_errors.push(TypoError {
+                typo: word.to_string(),
+                suggestions: vec![correction.clone()],
+                byte_offset: word_start,
+                line: 0,
+                col: 0,
+            });
         }
     }
 }
 
+/// Compute (line, col) for a sorted sequence of byte offsets in a single O(text_len) scan.
+/// Offsets must be sorted ascending (guaranteed by caller's sort_by_key above).
+fn batch_line_col(text: &str, offsets: impl Iterator<Item = usize>) -> Vec<(usize, usize)> {
+    let offsets: Vec<usize> = offsets.collect();
+    let mut result = vec![(1usize, 1usize); offsets.len()];
+    if offsets.is_empty() {
+        return result;
+    }
+    let mut line = 1usize;
+    let mut col = 1usize;
+    let mut byte_pos = 0usize;
+    let mut idx = 0usize;
+    for ch in text.chars() {
+        while idx < offsets.len() && offsets[idx] <= byte_pos {
+            result[idx] = (line, col);
+            idx += 1;
+        }
+        if idx >= offsets.len() {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            col = 1;
+        } else {
+            col += 1;
+        }
+        byte_pos += ch.len_utf8();
+    }
+    while idx < offsets.len() {
+        result[idx] = (line, col);
+        idx += 1;
+    }
+    result
+}
 /// Calculate line and column number from byte offset
 fn calculate_line_col(text: &str, byte_offset: usize) -> (usize, usize) {
     let mut line = 1;
