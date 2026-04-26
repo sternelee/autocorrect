@@ -246,8 +246,14 @@ unsafe fn ax_text_context_for_element(focused_element: Id) -> Result<FocusedText
                     } else {
                         total_u16
                     };
-                    let start_u16 = caret_u16.saturating_sub(3000);
-                    let end_u16 = (caret_u16 + 1000).min(total_u16);
+                    // Raw window: 3000 units before caret, 1000 after.
+                    // Snap both edges to word boundaries so the typos library
+                    // never receives a partially-cut word at the slice boundary,
+                    // which would otherwise produce spurious false-positive errors.
+                    let raw_start = caret_u16.saturating_sub(3000);
+                    let raw_end = (caret_u16 + 1000).min(total_u16);
+                    let start_u16 = snap_utf16_to_word_start(&full_text, raw_start);
+                    let end_u16 = snap_utf16_to_word_end(&full_text, raw_end, total_u16);
                     let sliced = slice_by_utf16_range(&full_text, start_u16, end_u16);
                     return Ok(FocusedTextContext {
                         text: sliced,
@@ -1097,6 +1103,51 @@ fn from_ax_bool(ns_value: Id) -> bool {
             false
         }
     }
+}
+
+/// Snap a UTF-16 offset **backward** to the nearest word boundary (whitespace or newline).
+/// Used so that text truncation for large documents doesn't cut through a word, which
+/// would cause the typos library to receive a partial word and produce false positives.
+fn snap_utf16_to_word_start(s: &str, utf16_offset: usize) -> usize {
+    if utf16_offset == 0 {
+        return 0;
+    }
+    // Find the byte position corresponding to utf16_offset
+    let mut u16_pos = 0usize;
+    let mut snap_u16 = 0usize; // last whitespace/newline seen
+    for ch in s.chars() {
+        if u16_pos >= utf16_offset {
+            break;
+        }
+        if ch.is_whitespace() {
+            snap_u16 = u16_pos + ch.len_utf16(); // snap to the char *after* the whitespace
+        }
+        u16_pos += ch.len_utf16();
+    }
+    // If no whitespace found before offset, return the original (best effort)
+    if snap_u16 == 0 { utf16_offset } else { snap_u16 }
+}
+
+/// Snap a UTF-16 offset **forward** to the nearest word boundary.
+fn snap_utf16_to_word_end(s: &str, utf16_offset: usize, total_u16: usize) -> usize {
+    if utf16_offset >= total_u16 {
+        return total_u16;
+    }
+    let mut u16_pos = 0usize;
+    let mut past_offset = false;
+    for ch in s.chars() {
+        if u16_pos >= total_u16 {
+            break;
+        }
+        if u16_pos >= utf16_offset {
+            past_offset = true;
+        }
+        if past_offset && ch.is_whitespace() {
+            return u16_pos; // stop at the whitespace itself
+        }
+        u16_pos += ch.len_utf16();
+    }
+    total_u16
 }
 
 fn slice_by_utf16_range(s: &str, start_u16: usize, end_u16: usize) -> String {
