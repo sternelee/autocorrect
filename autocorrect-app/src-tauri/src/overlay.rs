@@ -93,6 +93,25 @@ pub struct OverlayManager {
 }
 
 static LAST_MARKER_COUNT: AtomicUsize = AtomicUsize::new(usize::MAX);
+/// Hash of the last rendered markers (id + position fingerprint).
+/// If unchanged, skip the full NSView teardown-rebuild cycle.
+static LAST_MARKERS_HASH: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+#[inline]
+fn hash_markers(markers: &[TypoMarker]) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut h = DefaultHasher::new();
+    for m in markers {
+        m.id.hash(&mut h);
+        // Round to 0.5 px to avoid float churn from sub-pixel jitter
+        ((m.x * 2.0).round() as i64).hash(&mut h);
+        ((m.y * 2.0).round() as i64).hash(&mut h);
+        ((m.width * 2.0).round() as i64).hash(&mut h);
+    }
+    h.finish()
+}
 
 #[cfg(target_os = "macos")]
 #[derive(Default)]
@@ -136,6 +155,18 @@ impl OverlayManager {
     }
 
     pub fn update_markers(&self, markers: Vec<TypoMarker>) {
+        // Fast path: if markers haven't changed (same ids + positions),
+        // skip the NSView teardown-rebuild entirely.
+        let new_hash = hash_markers(&markers);
+        let prev_hash = LAST_MARKERS_HASH.swap(new_hash, Ordering::Relaxed);
+        if new_hash == prev_hash {
+            // Markers unchanged — still update the in-memory list for the hover loop.
+            if let Ok(mut lock) = self.current_markers.lock() {
+                *lock = markers;
+            }
+            return;
+        }
+
         if let Ok(mut lock) = self.current_markers.lock() {
             *lock = markers.clone();
         }
