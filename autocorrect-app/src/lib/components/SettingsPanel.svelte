@@ -25,6 +25,7 @@
   import IgnoredAppsManager from "./IgnoredAppsManager.svelte";
   import type { ThemeMode } from "$lib/types/theme";
   import { locale, t, setLocale } from "$lib/i18n";
+  import type { AppConfig, RuleInfo, HotkeyConfig, Modifiers } from "$lib/types/app";
 
   let { theme }: { theme: ThemeMode } = $props();
 
@@ -36,51 +37,6 @@
       return t(key, params);
     },
   );
-
-  // Rule info from backend
-  interface RuleInfo {
-    name: string;
-    severity: number; // 0=off, 1=error, 2=warning
-    description: string;
-    defaultSeverity: number;
-  }
-
-  // App config from backend
-  interface AppConfig {
-    rules: Record<string, number>;
-    textRules: Record<string, number>;
-    spellcheckWords: string[];
-    fileTypes: Record<string, string>;
-    context: Record<string, number>;
-    configPath: string;
-    typoCheckingEnabled?: boolean;
-    aiGrammarEnabled?: boolean;
-    openaiApiKey?: string;
-    openaiModel?: string;
-    aiMaxInputChars?: number;
-    aiTimeoutMs?: number;
-    aiApiBaseUrl?: string;
-    aiTranslateTargetLanguage?: string;
-    aiPolishStyle?: string[];
-    aiPolishStyles?: string[];
-    uiLanguage?: string;
-    underlineStyle?: string;
-    underlineColor?: string;
-  }
-
-  // Hotkey configuration
-  interface Modifiers {
-    shift: boolean;
-    ctrl: boolean;
-    meta: boolean;
-    alt: boolean;
-  }
-
-  interface HotkeyConfig {
-    key: string;
-    modifiers: Modifiers;
-    display_string: string;
-  }
 
   let configPath = $state("");
   let isLoading = $state(false);
@@ -214,11 +170,11 @@
         }),
       ]);
 
-      configPath = config.configPath;
+      configPath = config.configPath ?? "";
       rules = allRules;
 
       // Load spellcheck words
-      customWords = config.spellcheckWords.join("\n");
+      customWords = (config.spellcheckWords ?? []).join("\n");
 
       // Load typo checking setting (default to true if not present)
       typoCheckingEnabled = config.typoCheckingEnabled ?? true;

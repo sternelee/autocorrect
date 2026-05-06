@@ -14,6 +14,7 @@
   import { Textarea } from "$lib/components/ui/textarea";
   import { Check, RefreshCw, Copy } from "lucide-svelte";
   import { locale, t } from "$lib/i18n";
+  import type { AppConfig, LineChange, TypoSuggestion, SpellCheckResult, AiTextTransformResponse } from "$lib/types/app";
 
   // Reactive translation helper
   const tr = $derived(
@@ -28,19 +29,8 @@
   let correctedText = $state("");
   let isChecking = $state(false);
   let hasChanges = $state(false);
-  let lineChanges: Array<{
-    line: number;
-    col: number;
-    original: string;
-    corrected: string;
-    severity: number;
-  }> = $state([]);
-  let typos: Array<{
-    typo: string;
-    suggestions: string[];
-    line: number;
-    col: number;
-  }> = $state([]);
+  let lineChanges: LineChange[] = $state([]);
+  let typos: TypoSuggestion[] = $state([]);
   let aiBusy = $state(false);
   let aiError: string | null = $state(null);
   let aiRunningOperation:
@@ -67,13 +57,6 @@
     "Español",
     "Português",
   ];
-
-  interface AppConfig {
-    aiGrammarEnabled?: boolean;
-    aiTranslateTargetLanguage?: string;
-    aiPolishStyle?: string[];
-    aiPolishStyles?: string[];
-  }
 
   async function loadAiDefaults() {
     try {
@@ -148,24 +131,7 @@
     const seq = ++checkSeq;
     isChecking = true;
     try {
-      const result = await invoke<{
-        original: string;
-        corrected: string;
-        has_changes: boolean;
-        line_changes: Array<{
-          line: number;
-          col: number;
-          original: string;
-          corrected: string;
-          severity: number;
-        }>;
-        typos: Array<{
-          typo: string;
-          suggestions: string[];
-          line: number;
-          col: number;
-        }>;
-      }>("spell_check", { text: currentText, enableAi });
+      const result = await invoke<SpellCheckResult>("spell_check", { text: currentText, enableAi });
 
       // Drop stale async result when user keeps typing.
       if (seq !== checkSeq) return;
@@ -229,15 +195,7 @@
         throw new Error(tr("spell.aiEnableHint"));
       }
 
-      const result = await invoke<{
-        outputText?: string;
-        typos?: Array<{
-          typo: string;
-          suggestions: string[];
-          line: number;
-          col: number;
-        }>;
-      }>("ai_text_transform", {
+      const result = await invoke<AiTextTransformResponse>("ai_text_transform", {
         request: buildAiRequest(operation),
       });
 

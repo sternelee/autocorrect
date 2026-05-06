@@ -19,6 +19,7 @@
     AiToneDetectResponse,
     AiVocabularyEnhanceResponse,
   } from "$lib/types/ai";
+  import type { AppConfig } from "$lib/types/app";
   import type { ThemeMode } from "$lib/types/theme";
   import {
     applyThemeToDom,
@@ -39,11 +40,6 @@
   type AssistAction = "translate" | "rewrite" | "paraphrase" | "concise";
   type AnalysisTool = "tone" | "clarity" | "vocabulary";
   type Tool = AssistAction | AnalysisTool;
-
-  interface AppConfig {
-    aiGrammarEnabled?: boolean;
-    aiTranslateTargetLanguage?: string;
-  }
 
   const TRANSLATION_CHAR_LIMIT = 4000;
 
