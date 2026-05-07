@@ -9,6 +9,7 @@ mod popup;
 mod text_selection;
 mod theme;
 mod theme_errors;
+mod text_utils;
 mod typocheck;
 
 use std::collections::hash_map::DefaultHasher;
@@ -21,6 +22,17 @@ static LAST_TEXT_HASH: AtomicU64 = AtomicU64::new(0);
 /// Hash of the last bundle_id, so we reset the text hash on focus change.
 static LAST_BUNDLE_HASH: AtomicU64 = AtomicU64::new(0);
 
+// Timing constants (ms)
+const SYNC_INTERVAL_MS: u64 = 800;
+const HOVER_POLL_INTERVAL_MS: u64 = 100;
+const HOVER_DELAY_MS: u128 = 300;
+const CLIPBOARD_POLL_DEFAULT_MS: u64 = 500;
+
+// Popup dimensions
+const POPUP_WIDTH: f64 = 300.0;
+const POPUP_HEIGHT: f64 = 120.0;
+const POPUP_OFFSET: f64 = 10.0;
+
 #[inline]
 fn hash_str(s: &str) -> u64 {
     let mut h = DefaultHasher::new();
@@ -29,61 +41,9 @@ fn hash_str(s: &str) -> u64 {
 }
 
 #[cfg(target_os = "macos")]
-mod geom {
-    use objc2::Encode;
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    pub struct CGPoint {
-        pub x: f64,
-        pub y: f64,
-    }
-
-    impl CGPoint {
-        pub fn new(x: f64, y: f64) -> Self {
-            Self { x, y }
-        }
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    pub struct CGSize {
-        pub width: f64,
-        pub height: f64,
-    }
-
-    impl CGSize {
-        pub fn new(width: f64, height: f64) -> Self {
-            Self { width, height }
-        }
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    pub struct CGRect {
-        pub origin: CGPoint,
-        pub size: CGSize,
-    }
-
-    unsafe impl Encode for CGPoint {
-        const ENCODING: objc2::Encoding = objc2::Encoding::Struct(
-            "CGPoint",
-            &[objc2::Encoding::Double, objc2::Encoding::Double],
-        );
-    }
-
-    unsafe impl Encode for CGSize {
-        const ENCODING: objc2::Encoding = objc2::Encoding::Struct(
-            "CGSize",
-            &[objc2::Encoding::Double, objc2::Encoding::Double],
-        );
-    }
-
-    unsafe impl Encode for CGRect {
-        const ENCODING: objc2::Encoding =
-            objc2::Encoding::Struct("CGRect", &[<CGPoint>::ENCODING, <CGSize>::ENCODING]);
-    }
-}
+mod macos_geom;
+#[cfg(target_os = "macos")]
+use macos_geom::*;
 
 use ai_popup::{SharedAiPopupState, SharedNativeIconWindow};
 use commands::ai_grammar::{
@@ -123,6 +83,7 @@ use popup::{
     accept_suggestion, get_popup_state, hide_popup, position_popup, reject_suggestion, show_popup,
     trigger_spell_check_workflow,
 };
+use text_utils::*;
 
 #[allow(clippy::missing_panics_doc)]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -210,7 +171,7 @@ pub fn run() {
                     #[cfg(not(target_os = "macos"))]
                     sync_system_typos(&app_handle_for_sync);
                 }));
-                thread::sleep(std::time::Duration::from_millis(800));
+                thread::sleep(std::time::Duration::from_millis(SYNC_INTERVAL_MS));
             });
 
             // Spawn thread to monitor mouse hover over typo markers
@@ -222,7 +183,7 @@ pub fn run() {
                 let mut prev_left_down = false;
 
                 loop {
-                    thread::sleep(std::time::Duration::from_millis(100));
+                    thread::sleep(std::time::Duration::from_millis(HOVER_POLL_INTERVAL_MS));
 
                     let overlay_manager = match app_handle_for_hover.try_state::<OverlayManager>() {
                         Some(m) => m,
@@ -244,8 +205,8 @@ pub fn run() {
                                 if let Ok(state) = popup_state.0.lock() {
                                     if state.is_visible {
                                         let (px, py) = state.position;
-                                        let popup_w = 300.0_f64;
-                                        let popup_h = 120.0_f64;
+                                        let popup_w = POPUP_WIDTH;
+                                        let popup_h = POPUP_HEIGHT;
                                         let outside = mouse_x_f < px as f64
                                             || mouse_x_f > px as f64 + popup_w
                                             || mouse_y_f < py as f64
@@ -292,8 +253,7 @@ pub fn run() {
 
                     // Get screen bounds for coordinate conversion (similar to overlay.rs)
                     #[cfg(target_os = "macos")]
-                    let (desktop_min_x, desktop_top_y, desktop_width, desktop_height) = unsafe {
-                        use geom::CGRect;
+                    let (desktop_min_x, _desktop_top_y, desktop_width, _desktop_height) = unsafe {
                         use objc2::msg_send;
                         use objc2::runtime::AnyClass;
 
@@ -364,7 +324,7 @@ pub fn run() {
                             hover_start = Some(std::time::Instant::now());
                         } else if let Some(start) = hover_start {
                             // Show popup after 300ms of hovering
-                            if start.elapsed().as_millis() > 300 {
+                            if start.elapsed().as_millis() > HOVER_DELAY_MS {
                                 // Prepare typo suggestion objects
                                 let typo_suggestions = vec![crate::commands::spellcheck::TypoSuggestion {
                                     typo: marker.text.clone(),
@@ -376,10 +336,10 @@ pub fn run() {
                                 let suggestion_text = marker.suggestions.first().cloned().unwrap_or_default();
 
                                 // Position popup from mouse cursor - offset to place corner at cursor
-                                let popup_width = 300.0;
-                                let popup_height = 120.0;
-                                let offset_x = 10.0;
-                                let offset_y = 10.0;
+                                let popup_width = POPUP_WIDTH;
+                                let popup_height = POPUP_HEIGHT;
+                                let offset_x = POPUP_OFFSET;
+                                let offset_y = POPUP_OFFSET;
 
                                 // Use the PRIMARY display height in CG coordinates
                                 // (y=0 at top, increases down — same system as mouse_x/y).
@@ -805,8 +765,8 @@ fn sync_system_typos(app: &tauri::AppHandle) {
 
                     let text_char_len = ctx.text.chars().count().max(1);
                     let visible_lines: Vec<&str> = ctx.text.lines().collect();
-                    let line_count = visible_lines.len().max(1);
-                    let max_line_chars = visible_lines
+                    let _line_count = visible_lines.len().max(1);
+                    let _max_line_chars = visible_lines
                         .iter()
                         .map(|line| line.chars().count())
                         .max()
@@ -992,126 +952,6 @@ fn sync_system_typos(app: &tauri::AppHandle) {
     }
 }
 
-fn byte_offset_to_utf16_offset(text: &str, byte_offset: usize) -> usize {
-    let clamped = byte_offset.min(text.len());
-    text[..clamped].encode_utf16().count()
-}
-
-/// Convert multiple byte offsets to UTF-16 offsets in a single O(text_len) scan.
-/// `offsets` must produce values in **ascending** order (guaranteed by caller).
-/// Returns a Vec in the same order as the input offsets.
-fn batch_byte_to_utf16_offsets(
-    text: &str,
-    offsets: impl Iterator<Item = usize>,
-) -> Vec<usize> {
-    let offsets: Vec<usize> = offsets.collect();
-    let mut result = vec![0usize; offsets.len()];
-    if offsets.is_empty() {
-        return result;
-    }
-    let mut u16_count = 0usize;
-    let mut byte_pos = 0usize;
-    let mut idx = 0usize;
-    for ch in text.chars() {
-        // Fill all offsets that land at or before the current byte position
-        while idx < offsets.len() && offsets[idx] <= byte_pos {
-            result[idx] = u16_count;
-            idx += 1;
-        }
-        if idx >= offsets.len() {
-            break;
-        }
-        u16_count += ch.len_utf16();
-        byte_pos += ch.len_utf8();
-    }
-    // Fill any remaining offsets beyond end-of-text
-    while idx < offsets.len() {
-        result[idx] = u16_count;
-        idx += 1;
-    }
-    result
-}
-
-fn byte_offset_to_char_offset(text: &str, byte_offset: usize) -> usize {
-    let clamped = byte_offset.min(text.len());
-    text[..clamped].chars().count()
-}
-
-fn utf16_offset_to_char_offset(text: &str, utf16_offset: usize) -> usize {
-    let mut chars = 0usize;
-    let mut seen_u16 = 0usize;
-    for ch in text.chars() {
-        if seen_u16 >= utf16_offset {
-            break;
-        }
-        seen_u16 += ch.len_utf16();
-        chars += 1;
-    }
-    chars
-}
-
-fn char_offset_to_line_col(text: &str, char_offset: usize) -> (usize, usize) {
-    let mut line = 1usize;
-    let mut col = 1usize;
-
-    for (idx, ch) in text.chars().enumerate() {
-        if idx >= char_offset {
-            break;
-        }
-
-        if ch == '\n' {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-    }
-
-    (line, col)
-}
-
-fn estimate_word_visual_width(word: &str, avg_char_width: f64) -> f64 {
-    let units = visual_units(word);
-    (units * avg_char_width * 0.9).max(avg_char_width * 0.7)
-}
-
-fn visual_width_for_prefix(text: &str, char_count: usize, avg_char_width: f64) -> f64 {
-    visual_units_for_prefix(text, char_count) * avg_char_width * 0.9
-}
-
-fn char_index_to_byte_offset(text: &str, char_index: usize) -> usize {
-    if char_index == 0 {
-        return 0;
-    }
-
-    text.char_indices()
-        .nth(char_index)
-        .map(|(idx, _)| idx)
-        .unwrap_or(text.len())
-}
-
-fn visual_units(text: &str) -> f64 {
-    text.chars()
-        .fold(0.0, |acc, ch| acc + glyph_width_factor(ch))
-}
-
-fn visual_units_for_prefix(text: &str, char_count: usize) -> f64 {
-    text.chars()
-        .take(char_count)
-        .fold(0.0, |acc, ch| acc + glyph_width_factor(ch))
-}
-
-fn glyph_width_factor(ch: char) -> f64 {
-    match ch {
-        'i' | 'l' | 'I' | 'j' | 't' | 'f' | 'r' | '1' | '\'' | '`' | '|' => 0.55,
-        'm' | 'w' | 'M' | 'W' | '@' | '%' | '&' | 'Q' | 'O' => 1.3,
-        'A'..='Z' => 1.05,
-        '0'..='9' => 0.9,
-        _ if ch.is_ascii_punctuation() => 0.5,
-        _ => 0.92,
-    }
-}
-
 /// Tauri command to get the current cursor position
 #[tauri::command]
 fn get_cursor_pos_cmd() -> Result<(i32, i32), String> {
@@ -1127,7 +967,7 @@ fn start_clipboard_monitor(
 ) -> Result<(), String> {
     let config = clipboard::ClipboardMonitorConfig {
         cjk_only: cjk_only.unwrap_or(true),
-        poll_interval_ms: poll_interval_ms.unwrap_or(500),
+        poll_interval_ms: poll_interval_ms.unwrap_or(CLIPBOARD_POLL_DEFAULT_MS),
         ..Default::default()
     };
 

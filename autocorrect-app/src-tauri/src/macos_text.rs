@@ -125,8 +125,8 @@ impl AXPollSession {
 /// Returns `None` if the window cannot be found within 10 levels.
 #[cfg(target_os = "macos")]
 unsafe fn ax_window_pos_for_element(focused: Id) -> Option<(f64, f64)> {
-    use objc2::msg_send;
-    use objc2::runtime::AnyClass;
+    
+    
     type Id = *mut objc2::runtime::AnyObject;
     const NIL: Id = std::ptr::null_mut();
 
@@ -847,14 +847,14 @@ pub fn get_selected_text_bounds() -> Result<(i32, i32, i32, i32)> {
             location: 0,
             length: 0,
         };
-        let range_size = std::mem::size_of::<CFRange>();
+        let _range_size = std::mem::size_of::<CFRange>();
         if AXValueGetValue(
             selected_range_value,
             K_AXVALUE_CFRANGE_TYPE,
             &mut selected_range as *mut _ as *mut std::ffi::c_void,
         ) {
-            let range_start = selected_range.location.max(0) as usize;
-            let range_len = selected_range.length.max(0) as usize;
+            let _range_start = selected_range.location.max(0) as usize;
+            let _range_len = selected_range.length.max(0) as usize;
 
             // 获取 AXBoundsForRange
             let ax_range = AXValueCreate(

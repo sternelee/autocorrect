@@ -1,5 +1,4 @@
 <script lang="ts">
-  $locale;
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { Home, Info, Settings } from "lucide-svelte";

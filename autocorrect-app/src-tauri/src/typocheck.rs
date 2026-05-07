@@ -238,29 +238,6 @@ fn batch_line_col(text: &str, offsets: impl Iterator<Item = usize>) -> Vec<(usiz
     }
     result
 }
-/// Calculate line and column number from byte offset
-fn calculate_line_col(text: &str, byte_offset: usize) -> (usize, usize) {
-    let mut line = 1;
-    let mut col = 1;
-    let mut current_offset = 0;
-
-    for ch in text.chars() {
-        if current_offset >= byte_offset {
-            break;
-        }
-
-        if ch == '\n' {
-            line += 1;
-            col = 1;
-        } else {
-            col += 1;
-        }
-
-        current_offset += ch.len_utf8();
-    }
-
-    (line, col)
-}
 
 #[cfg(test)]
 mod tests {
@@ -278,23 +255,6 @@ mod tests {
 
         assert_eq!(typos[1].typo, "soure");
         assert_eq!(typos[1].line, 2);
-    }
-
-    #[test]
-    fn test_calculate_line_col() {
-        let text = "Hello world\nSecond line\nThird line";
-
-        // First line, first word
-        assert_eq!(calculate_line_col(text, 0), (1, 1));
-
-        // First line, second word
-        assert_eq!(calculate_line_col(text, 6), (1, 7));
-
-        // Second line start
-        assert_eq!(calculate_line_col(text, 12), (2, 1));
-
-        // Third line start
-        assert_eq!(calculate_line_col(text, 24), (3, 1));
     }
 
     #[test]

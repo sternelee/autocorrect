@@ -31,9 +31,3 @@ export function t(
   }
   return value;
 }
-
-// Reactive translation for use in .svelte templates - use in script with $derived
-// Usage: const tr = $derived(new ReactiveT());
-export class ReactiveT {
-  // This will be accessed reactively via $locale
-}

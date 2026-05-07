@@ -6,10 +6,19 @@
   import { Power, CheckCircle2, XCircle, TrendingUp } from "lucide-svelte";
   import { locale, t } from "$lib/i18n";
 
-  export let isEnabled = true;
-  export let correctionCount = 0;
-  export let onToggle: ((enabled: boolean) => void) | undefined = undefined;
-  export let compact = false;
+  interface Props {
+    isEnabled?: boolean;
+    correctionCount?: number;
+    onToggle?: ((enabled: boolean) => void) | undefined;
+    compact?: boolean;
+  }
+
+  let {
+    isEnabled = $bindable(true),
+    correctionCount = $bindable(0),
+    onToggle = undefined,
+    compact = false,
+  }: Props = $props();
 
   function handleToggle() {
     isEnabled = !isEnabled;
