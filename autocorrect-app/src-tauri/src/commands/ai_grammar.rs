@@ -2,8 +2,65 @@ use super::config::load_app_settings;
 use super::errors::Error;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tauri::Emitter;
+
+// ── AI Result Cache ──────────────────────────────────────────────────────────
+
+const CACHE_TTL: Duration = Duration::from_secs(300); // 5 minutes
+const CACHE_MAX_ENTRIES: usize = 256;
+
+/// In-memory LRU-ish cache for AI command results so repeated identical
+/// requests (same text + operation + model + endpoint) are served instantly.
+static AI_CACHE: std::sync::OnceLock<Mutex<HashMap<String, (serde_json::Value, Instant)>>> =
+    std::sync::OnceLock::new();
+
+fn ai_cache() -> &'static Mutex<HashMap<String, (serde_json::Value, Instant)>> {
+    AI_CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn build_cache_key(operation: &str, text: &str, model: &str, api_base: &str) -> String {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    let mut hasher = DefaultHasher::new();
+    operation.hash(&mut hasher);
+    text.hash(&mut hasher);
+    model.hash(&mut hasher);
+    api_base.hash(&mut hasher);
+    format!("{}-{}", operation, hasher.finish())
+}
+
+/// Retrieve a cached result if it exists and hasn't expired.
+fn get_cached<T: serde::de::DeserializeOwned>(key: &str) -> Option<T> {
+    let mut cache = ai_cache().lock().ok()?;
+    if let Some((value, timestamp)) = cache.get(key) {
+        if timestamp.elapsed() < CACHE_TTL {
+            return serde_json::from_value(value.clone()).ok();
+        }
+        // Expired — remove it.
+        cache.remove(key);
+    }
+    None
+}
+
+/// Store a result in the cache, evicting the oldest entry if at capacity.
+fn set_cache<T: serde::Serialize>(key: &str, value: &T) {
+    let Ok(mut cache) = ai_cache().lock() else { return };
+    let Ok(json_value) = serde_json::to_value(value) else { return };
+
+    if cache.len() >= CACHE_MAX_ENTRIES {
+        let oldest = cache
+            .iter()
+            .min_by_key(|(_, (_, t))| *t)
+            .map(|(k, _)| k.clone());
+        if let Some(k) = oldest {
+            cache.remove(&k);
+        }
+    }
+    cache.insert(key.to_string(), (json_value, Instant::now()));
+}
 
 // Predefined polish styles
 pub const POLISH_STYLES: &[&str] = &["formal", "conversational", "academic", "business"];
@@ -262,6 +319,12 @@ pub async fn check_grammar_issues_with_ai(
     text: &str,
     timeout_ms: u64,
 ) -> Result<Vec<AiTypo>, Error> {
+    let cache_key = build_cache_key("grammar", text, model, api_base_url);
+    if let Some(cached) = get_cached::<Vec<AiTypo>>(&cache_key) {
+        log::info!("[AI_CACHE] grammar hit for key={}", &cache_key[..cache_key.len().min(20)]);
+        return Ok(cached);
+    }
+
     let system_prompt = build_system_prompt("grammar", None, None)?;
 
     let payload = json!({
@@ -326,6 +389,7 @@ pub async fn check_grammar_issues_with_ai(
     let typos: Vec<AiTypo> = serde_json::from_value(typos)
         .map_err(|e| Error::Api(format!("Invalid typos payload format: {}", e)))?;
 
+    set_cache(&cache_key, &typos);
     Ok(typos)
 }
 
@@ -588,6 +652,12 @@ pub async fn ai_tone_detect(
     let timeout_ms = settings.ai_timeout_ms;
     let api_base_url = normalize_endpoint(Some(settings.ai_api_base_url));
 
+    let cache_key = build_cache_key("tone", &request.text, &model, &api_base_url);
+    if let Some(cached) = get_cached::<AiToneDetectResponse>(&cache_key) {
+        log::info!("[AI_CACHE] tone hit");
+        return Ok(cached);
+    }
+
     let payload = json!({
         "model": model,
         "temperature": 0,
@@ -636,8 +706,10 @@ pub async fn ai_tone_detect(
     }
 
     let json_text = extract_json_object(&content);
-    serde_json::from_str::<AiToneDetectResponse>(&json_text)
-        .map_err(|e| Error::Api(format!("Failed to parse tone detection JSON: {}", e)))
+    let result = serde_json::from_str::<AiToneDetectResponse>(&json_text)
+        .map_err(|e| Error::Api(format!("Failed to parse tone detection JSON: {}", e)))?;
+    set_cache(&cache_key, &result);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -654,6 +726,12 @@ pub async fn ai_clarity_check(
     let model = normalize_model(Some(settings.openai_model));
     let timeout_ms = settings.ai_timeout_ms;
     let api_base_url = normalize_endpoint(Some(settings.ai_api_base_url));
+
+    let cache_key = build_cache_key("clarity", &request.text, &model, &api_base_url);
+    if let Some(cached) = get_cached::<AiClarityCheckResponse>(&cache_key) {
+        log::info!("[AI_CACHE] clarity hit");
+        return Ok(cached);
+    }
 
     let payload = json!({
         "model": model,
@@ -703,8 +781,10 @@ pub async fn ai_clarity_check(
     }
 
     let json_text = extract_json_object(&content);
-    serde_json::from_str::<AiClarityCheckResponse>(&json_text)
-        .map_err(|e| Error::Api(format!("Failed to parse clarity check JSON: {}", e)))
+    let result = serde_json::from_str::<AiClarityCheckResponse>(&json_text)
+        .map_err(|e| Error::Api(format!("Failed to parse clarity check JSON: {}", e)))?;
+    set_cache(&cache_key, &result);
+    Ok(result)
 }
 
 #[tauri::command]
@@ -721,6 +801,12 @@ pub async fn ai_vocabulary_enhance(
     let model = normalize_model(Some(settings.openai_model));
     let timeout_ms = settings.ai_timeout_ms;
     let api_base_url = normalize_endpoint(Some(settings.ai_api_base_url));
+
+    let cache_key = build_cache_key("vocabulary", &request.text, &model, &api_base_url);
+    if let Some(cached) = get_cached::<AiVocabularyEnhanceResponse>(&cache_key) {
+        log::info!("[AI_CACHE] vocabulary hit");
+        return Ok(cached);
+    }
 
     let payload = json!({
         "model": model,
@@ -770,8 +856,10 @@ pub async fn ai_vocabulary_enhance(
     }
 
     let json_text = extract_json_object(&content);
-    serde_json::from_str::<AiVocabularyEnhanceResponse>(&json_text)
-        .map_err(|e| Error::Api(format!("Failed to parse vocabulary JSON: {}", e)))
+    let result = serde_json::from_str::<AiVocabularyEnhanceResponse>(&json_text)
+        .map_err(|e| Error::Api(format!("Failed to parse vocabulary JSON: {}", e)))?;
+    set_cache(&cache_key, &result);
+    Ok(result)
 }
 
 #[tauri::command]

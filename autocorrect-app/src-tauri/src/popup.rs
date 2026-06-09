@@ -40,6 +40,38 @@ impl SharedPopupState {
     }
 }
 
+/// Snapshot of the last auto-applied replacement so the user can undo one step.
+#[derive(Clone, Debug)]
+pub struct LastReplacement {
+    pub original_word: String,
+    pub replacement: String,
+    pub offset: usize,
+    pub char_length: usize,
+    pub source_app_name: Option<String>,
+}
+
+static LAST_REPLACEMENT: std::sync::Mutex<Option<LastReplacement>> =
+    std::sync::Mutex::new(None);
+
+/// Push a replacement snapshot (only the most recent is kept).
+fn push_last_replacement(entry: LastReplacement) {
+    if let Ok(mut guard) = LAST_REPLACEMENT.lock() {
+        *guard = Some(entry);
+    }
+}
+
+/// Peek the last replacement without removing it.
+fn peek_last_replacement() -> Option<LastReplacement> {
+    LAST_REPLACEMENT.lock().ok().and_then(|g| g.clone())
+}
+
+/// Clear the undo slot (e.g. after a successful undo).
+fn clear_last_replacement() {
+    if let Ok(mut guard) = LAST_REPLACEMENT.lock() {
+        *guard = None;
+    }
+}
+
 /// Show the popup window with spell check results
 #[tauri::command]
 pub fn show_popup(
@@ -363,6 +395,9 @@ fn apply_suggestion_to_selection_macos(
         }
     }
 
+    // Capture original word before replacing (selection is already active).
+    let original_word = crate::macos_text::get_selected_text().unwrap_or_default();
+
     let status = std::process::Command::new("osascript")
         .arg("-e")
         .arg("tell application \"System Events\" to keystroke \"v\" using command down")
@@ -377,6 +412,31 @@ fn apply_suggestion_to_selection_macos(
     }
 
     thread::sleep(Duration::from_millis(80));
+
+    // Save undo snapshot.
+    if let (Some(start), Some(len)) = (offset, char_length) {
+        push_last_replacement(LastReplacement {
+            original_word,
+            replacement: text.to_string(),
+            offset: start,
+            char_length: len,
+            source_app_name: source_app_name.clone(),
+        });
+        log::info!(
+            "[accept] saved undo: offset={} len={} replacement='{}'",
+            start,
+            len,
+            text
+        );
+
+        // Restore caret to end of pasted text so the user can keep typing.
+        let replacement_utf16_len = text.encode_utf16().count();
+        let caret_pos = start + replacement_utf16_len;
+        if let Err(e) = crate::macos_text::select_text_range(caret_pos, 0) {
+            log::warn!("[accept] failed to restore caret position: {}", e);
+        }
+    }
+
     restore_clipboard(&mut clipboard, previous_clipboard);
     Ok(())
 }
@@ -469,6 +529,96 @@ fn activate_app_macos(app_name: &str) -> Result<(), Error> {
             "Failed to activate source app".to_string(),
         ))
     }
+}
+
+/// Undo the last auto-applied replacement by reverting the text at the
+/// recorded offset. Only the most recent replacement is remembered.
+#[tauri::command]
+pub fn undo_last_replacement(app: AppHandle) -> Result<(), Error> {
+    let entry = peek_last_replacement().ok_or_else(|| {
+        Error::InputSimulation("No recent replacement to undo".to_string())
+    })?;
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(ref app_name) = entry.source_app_name {
+            if app_name != "autocorrect-app" && app_name != "AutoCorrect" {
+                let _ = activate_app_macos(app_name);
+                let deadline = std::time::Instant::now();
+                loop {
+                    thread::sleep(Duration::from_millis(30));
+                    if is_app_frontmost_macos_pub(app_name) {
+                        break;
+                    }
+                    if deadline.elapsed().as_millis() > 600 {
+                        log::warn!("[undo] activate timeout");
+                        break;
+                    }
+                }
+                thread::sleep(Duration::from_millis(80));
+            }
+        }
+
+        let mut clipboard = arboard::Clipboard::new()
+            .map_err(|e| Error::Clipboard(format!("Clipboard init failed: {e}")))?;
+        let previous_clipboard = clipboard.get_text().ok();
+
+        clipboard
+            .set_text(entry.original_word.clone())
+            .map_err(|e| Error::Clipboard(format!("Clipboard write failed: {e}")))?;
+
+        let replacement_utf16_len = entry.replacement.encode_utf16().count();
+        let undo_offset = entry.offset;
+        let undo_len = replacement_utf16_len;
+        let sel_deadline = std::time::Instant::now();
+        loop {
+            match crate::macos_text::select_text_range(undo_offset, undo_len) {
+                Ok(()) => {
+                    thread::sleep(Duration::from_millis(50));
+                    break;
+                }
+                Err(e) => {
+                    log::warn!("[undo] select_text_range failed: {}", e);
+                    if sel_deadline.elapsed().as_millis() > 600 {
+                        log::warn!("[undo] select_text_range timed out");
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(60));
+                }
+            }
+        }
+
+        let status = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg("tell application \"System Events\" to keystroke \"v\" using command down")
+            .status()
+            .map_err(|e| Error::InputSimulation(format!("Paste simulation failed: {e}")))?;
+
+        if !status.success() {
+            restore_clipboard(&mut clipboard, previous_clipboard);
+            return Err(Error::InputSimulation("Undo paste failed".to_string()));
+        }
+
+        thread::sleep(Duration::from_millis(80));
+        restore_clipboard(&mut clipboard, previous_clipboard);
+
+        // Restore caret to end of reverted text.
+        let original_utf16_len = entry.original_word.encode_utf16().count();
+        let caret_pos = undo_offset + original_utf16_len;
+        if let Err(e) = crate::macos_text::select_text_range(caret_pos, 0) {
+            log::warn!("[undo] failed to restore caret: {}", e);
+        }
+    }
+
+    clear_last_replacement();
+    let _ = app.emit(
+        "suggestion-undone",
+        serde_json::json!({
+            "original": entry.original_word,
+            "replacement": entry.replacement,
+        }),
+    );
+    Ok(())
 }
 
 /// Reject the suggestion - just hide popup

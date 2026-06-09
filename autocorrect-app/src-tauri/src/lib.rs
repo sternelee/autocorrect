@@ -80,8 +80,8 @@ use theme::{get_theme, set_theme};
 
 // Import popup commands for the invoke handler
 use popup::{
-    accept_suggestion, get_popup_state, hide_popup, position_popup, reject_suggestion, show_popup,
-    trigger_spell_check_workflow,
+    accept_suggestion, get_popup_state, hide_popup, position_popup, reject_suggestion,
+    show_popup, trigger_spell_check_workflow, undo_last_replacement,
 };
 use text_utils::*;
 
@@ -523,6 +523,7 @@ pub fn run() {
             get_popup_state,
             accept_suggestion,
             reject_suggestion,
+            undo_last_replacement,
             trigger_spell_check_workflow,
             // AI popup commands
             ai_popup::show_ai_popup,
