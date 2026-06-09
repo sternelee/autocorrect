@@ -161,22 +161,43 @@ pub fn run() {
 
             // 核心：启动系统级下划线同步循环
             let app_handle_for_sync = app.handle().clone();
-            thread::spawn(move || loop {
-                let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    #[cfg(target_os = "macos")]
-                    unsafe {
-                        use objc2::msg_send;
-                        use objc2::runtime::AnyClass;
-                        type Id = *mut objc2::runtime::AnyObject;
-                        let pool_class = AnyClass::get("NSAutoreleasePool").expect("NSAutoreleasePool not found");
-                        let pool: Id = msg_send![pool_class, new];
+            thread::spawn(move || {
+                let mut poll_interval = std::time::Duration::from_millis(SYNC_INTERVAL_MS);
+                loop {
+                    let start = std::time::Instant::now();
+                    let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        #[cfg(target_os = "macos")]
+                        unsafe {
+                            use objc2::msg_send;
+                            use objc2::runtime::AnyClass;
+                            type Id = *mut objc2::runtime::AnyObject;
+                            let pool_class = AnyClass::get("NSAutoreleasePool").expect("NSAutoreleasePool not found");
+                            let pool: Id = msg_send![pool_class, new];
+                            sync_system_typos(&app_handle_for_sync);
+                            let _: () = msg_send![pool, drain];
+                        }
+                        #[cfg(not(target_os = "macos"))]
                         sync_system_typos(&app_handle_for_sync);
-                        let _: () = msg_send![pool, drain];
+                    }));
+
+                    // Adaptive polling: shorten interval when user is actively typing
+                    // or clicking, so typo underlines appear near-real-time.
+                    #[cfg(target_os = "macos")]
+                    {
+                        let since_key = macos_text::seconds_since_last_keydown();
+                        let since_mouse = macos_text::seconds_since_last_mouse_down();
+                        poll_interval = if since_key < 0.5 || since_mouse < 0.5 {
+                            std::time::Duration::from_millis(100)
+                        } else {
+                            std::time::Duration::from_millis(SYNC_INTERVAL_MS)
+                        };
                     }
-                    #[cfg(not(target_os = "macos"))]
-                    sync_system_typos(&app_handle_for_sync);
-                }));
-                thread::sleep(std::time::Duration::from_millis(SYNC_INTERVAL_MS));
+
+                    let elapsed = start.elapsed();
+                    if elapsed < poll_interval {
+                        thread::sleep(poll_interval - elapsed);
+                    }
+                }
             });
 
             // Spawn thread to monitor mouse hover over typo markers

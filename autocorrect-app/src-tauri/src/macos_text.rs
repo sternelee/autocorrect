@@ -1254,3 +1254,37 @@ pub fn get_cursor_position_nsevent() -> (i32, i32) {
     }
     (0, 0)
 }
+
+/// Returns seconds since the last keyboard key-down event system-wide.
+/// Uses CGEventSourceSecondsSinceLastEventType with HID system state.
+/// A low value (< 0.5s) means the user is actively typing.
+#[cfg(target_os = "macos")]
+pub fn seconds_since_last_keydown() -> f64 {
+    const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
+    const K_CG_EVENT_KEY_DOWN: u32 = 10;
+    unsafe { CGEventSourceSecondsSinceLastEventType(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE, K_CG_EVENT_KEY_DOWN) }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn seconds_since_last_keydown() -> f64 {
+    f64::INFINITY
+}
+
+/// Returns seconds since the last left-mouse-down event system-wide.
+/// Useful for detecting cursor repositioning after editing.
+#[cfg(target_os = "macos")]
+pub fn seconds_since_last_mouse_down() -> f64 {
+    const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
+    const K_CG_EVENT_LEFT_MOUSE_DOWN: u32 = 1;
+    unsafe { CGEventSourceSecondsSinceLastEventType(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE, K_CG_EVENT_LEFT_MOUSE_DOWN) }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn seconds_since_last_mouse_down() -> f64 {
+    f64::INFINITY
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
+}
