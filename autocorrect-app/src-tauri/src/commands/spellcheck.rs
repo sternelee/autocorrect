@@ -1,6 +1,6 @@
 use super::config::{load_app_settings, AppSettings};
 use super::errors::Error;
-use crate::commands::ai_grammar::correct_text_with_openai;
+use crate::commands::ai_grammar::check_grammar_issues_with_ai;
 use crate::typocheck;
 use enigo::{Direction, Enigo, Key, Keyboard, Settings};
 use serde::{Deserialize, Serialize};
@@ -91,16 +91,17 @@ pub async fn spell_check(
 
     let text_for_local = text.clone();
     let settings_for_local = app_settings.clone();
-    let (local_corrected, mut line_changes, typos) =
+    let (local_corrected, mut line_changes, mut typos) =
         tauri::async_runtime::spawn_blocking(move || {
             run_local_spellcheck(&text_for_local, &settings_for_local)
         })
         .await
         .map_err(|e| Error::Api(format!("Spell check task join error: {}", e)))?;
 
-    // Optional AI grammar enhancement (disabled by default).
     let mut corrected = local_corrected;
-    let mut ai_applied = false;
+    let mut has_changes = original != corrected;
+
+    // Optional AI grammar check: returns structured issues instead of rewriting.
     if enable_ai.unwrap_or(true) && app_settings.ai_grammar_enabled {
         let api_key = app_settings.openai_api_key.trim();
         let model = if app_settings.openai_model.trim().is_empty() {
@@ -108,20 +109,27 @@ pub async fn spell_check(
         } else {
             app_settings.openai_model.trim()
         };
-        if !api_key.is_empty() && corrected.chars().count() <= app_settings.ai_max_input_chars {
-            match correct_text_with_openai(
+        if !api_key.is_empty() && original.chars().count() <= app_settings.ai_max_input_chars {
+            match check_grammar_issues_with_ai(
                 app_settings.ai_api_base_url.trim(),
                 api_key,
                 model,
-                &corrected,
+                &original,
                 app_settings.ai_timeout_ms,
             )
             .await
             {
-                Ok(ai_text) => {
-                    if !ai_text.trim().is_empty() && ai_text != corrected {
-                        corrected = ai_text;
-                        ai_applied = true;
+                Ok(ai_typos) => {
+                    for t in ai_typos {
+                        let key = (t.typo.clone(), t.line, t.col);
+                        if !typos.iter().any(|e| (e.typo.clone(), e.line, e.col) == key) {
+                            typos.push(TypoSuggestion {
+                                typo: t.typo,
+                                suggestions: t.suggestions,
+                                line: t.line,
+                                col: t.col,
+                            });
+                        }
                     }
                 }
                 Err(e) => {
@@ -131,12 +139,6 @@ pub async fn spell_check(
         }
     }
 
-    // Keep change details coherent when AI rewrites content.
-    if ai_applied {
-        line_changes.clear();
-    }
-
-    let has_changes = original != corrected;
     if has_changes && line_changes.is_empty() {
         line_changes.push(LineChange {
             line: 1,

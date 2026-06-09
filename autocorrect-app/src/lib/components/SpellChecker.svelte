@@ -14,7 +14,7 @@
   import { Textarea } from "$lib/components/ui/textarea";
   import { Check, RefreshCw, Copy } from "lucide-svelte";
   import { locale, t } from "$lib/i18n";
-  import type { AppConfig, LineChange, TypoSuggestion, SpellCheckResult, AiTextTransformResponse } from "$lib/types/app";
+  import type { AppConfig, LineChange, TypoSuggestion, SpellCheckResult, AiTextTransformResponse, AiClarityCheckResponse, AiVocabularyEnhanceResponse } from "$lib/types/app";
 
   // Reactive translation helper
   const tr = $derived(
@@ -38,7 +38,11 @@
     | "translate"
     | "polish"
     | "summarize"
+    | "clarity"
+    | "vocabulary"
     | null = $state(null);
+  let clarityResult: AiClarityCheckResponse | null = $state(null);
+  let vocabularyResult: AiVocabularyEnhanceResponse | null = $state(null);
   let aiTargetLanguage = $state("English");
   let aiPolishStyles = $state<string[]>([]);
   let unlistenChunk: (() => void) | null = null;
@@ -81,9 +85,13 @@
     }
   }
 
+  function escapeRegExp(s: string): string {
+    return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  }
+
   function applyTypoSuggestion(typo: string, suggestion: string) {
     // Replace typo with suggestion in currentText (case-insensitive, whole word)
-    const regex = new RegExp(`\\b${typo}\\b`, "gi");
+    const regex = new RegExp(`\\b${escapeRegExp(typo)}\\b`, "gi");
     currentText = currentText.replace(regex, suggestion);
 
     // Update local typo list only; do not trigger spell_check again.
@@ -181,6 +189,10 @@
       return;
     }
 
+    // Clear non-transform results when running a transform operation.
+    clarityResult = null;
+    vocabularyResult = null;
+
     if (operation !== "grammar") {
       await runAiTransformStream(operation);
       return;
@@ -201,7 +213,7 @@
 
       if (operation === "grammar") {
         typos = result.typos || [];
-        correctedText = "";
+        correctedText = currentText;
         hasChanges = false;
         lineChanges = [];
       } else {
@@ -222,6 +234,56 @@
       }
     } catch (error) {
       console.error("AI transform failed:", error);
+      aiError = error instanceof Error ? error.message : String(error);
+    } finally {
+      aiBusy = false;
+      aiRunningOperation = null;
+    }
+  }
+
+  async function runAiClarityCheck() {
+    if (!currentText.trim() || aiBusy) return;
+    aiBusy = true;
+    aiError = null;
+    aiRunningOperation = "clarity";
+    clarityResult = null;
+    vocabularyResult = null;
+    try {
+      const config = await invoke<AppConfig>("get_config");
+      if (!config.aiGrammarEnabled) {
+        throw new Error(tr("spell.aiEnableHint"));
+      }
+      const result = await invoke<AiClarityCheckResponse>("ai_clarity_check", {
+        request: { text: currentText },
+      });
+      clarityResult = result;
+    } catch (error) {
+      console.error("AI clarity check failed:", error);
+      aiError = error instanceof Error ? error.message : String(error);
+    } finally {
+      aiBusy = false;
+      aiRunningOperation = null;
+    }
+  }
+
+  async function runAiVocabularyEnhance() {
+    if (!currentText.trim() || aiBusy) return;
+    aiBusy = true;
+    aiError = null;
+    aiRunningOperation = "vocabulary";
+    vocabularyResult = null;
+    clarityResult = null;
+    try {
+      const config = await invoke<AppConfig>("get_config");
+      if (!config.aiGrammarEnabled) {
+        throw new Error(tr("spell.aiEnableHint"));
+      }
+      const result = await invoke<AiVocabularyEnhanceResponse>("ai_vocabulary_enhance", {
+        request: { text: currentText },
+      });
+      vocabularyResult = result;
+    } catch (error) {
+      console.error("AI vocabulary enhance failed:", error);
       aiError = error instanceof Error ? error.message : String(error);
     } finally {
       aiBusy = false;
@@ -413,6 +475,24 @@
               ? tr("spell.running")
               : tr("spell.aiSummarize")}
           </Button>
+          <Button
+            onclick={runAiClarityCheck}
+            disabled={aiBusy || !currentText.trim()}
+            variant="outline"
+          >
+            {aiRunningOperation === "clarity"
+              ? tr("spell.running")
+              : tr("spell.aiClarity")}
+          </Button>
+          <Button
+            onclick={runAiVocabularyEnhance}
+            disabled={aiBusy || !currentText.trim()}
+            variant="outline"
+          >
+            {aiRunningOperation === "vocabulary"
+              ? tr("spell.running")
+              : tr("spell.aiVocabulary")}
+          </Button>
         </div>
         {#if aiError}
           <div
@@ -538,6 +618,87 @@
               </div>
             {/each}
           </div>
+        </div>
+      {/if}
+
+      <!-- AI Clarity Result -->
+      {#if clarityResult}
+        <div class="space-y-2">
+          <h3 class="text-sm font-medium">
+            {tr("aipopup.analysis.clarityTitle")}
+            {#if clarityResult.score > 0}
+              <span class="text-muted-foreground ml-2 text-xs">
+                {tr("aipopup.analysis.score")}: {clarityResult.score}
+              </span>
+            {/if}
+          </h3>
+          {#if clarityResult.stats}
+            <div class="flex flex-wrap gap-3 text-xs text-muted-foreground">
+              <span>{tr("aipopup.analysis.readability")}: {clarityResult.stats.readabilityGrade}</span>
+              <span>{tr("aipopup.analysis.avgSentence")}: {clarityResult.stats.avgSentenceLength.toFixed(1)}</span>
+              <span>{tr("aipopup.analysis.passiveVoice")}: {clarityResult.stats.passiveVoiceCount}</span>
+            </div>
+          {/if}
+          {#if clarityResult.issues.length > 0}
+            <div class="max-h-[300px] space-y-2 overflow-y-auto">
+              {#each clarityResult.issues as issue}
+                <div class="flex flex-col gap-1 rounded-md border p-3 text-sm">
+                  <div class="flex items-center gap-2">
+                    <span class="rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-800 dark:bg-amber-900/30 dark:text-amber-300">
+                      {tr("aipopup.analysis.issue." + issue.issueType.toLowerCase()) || issue.issueType}
+                    </span>
+                    <span class="text-muted-foreground text-xs">
+                      L{issue.line}:C{issue.col}
+                    </span>
+                  </div>
+                  <span class="text-red-600 dark:text-red-400">"{issue.text}"</span>
+                  <span class="text-green-600 dark:text-green-400">{tr("aipopup.analysis.suggestion")}: {issue.suggestion}</span>
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="text-sm text-muted-foreground">{tr("aipopup.analysis.noIssues")}</p>
+          {/if}
+        </div>
+      {/if}
+
+      <!-- AI Vocabulary Result -->
+      {#if vocabularyResult}
+        <div class="space-y-2">
+          <h3 class="text-sm font-medium">
+            {tr("aipopup.analysis.vocabTitle")}
+          </h3>
+          {#if vocabularyResult.suggestions.length > 0}
+            <div class="max-h-[300px] space-y-2 overflow-y-auto">
+              {#each vocabularyResult.suggestions as vocab}
+                <div class="flex flex-col gap-2 rounded-md border p-3 text-sm">
+                  <div class="flex items-center gap-2">
+                    <span class="font-semibold text-red-600 dark:text-red-400">
+                      "{vocab.original}"
+                    </span>
+                    <span class="text-muted-foreground text-xs">
+                      L{vocab.line}:C{vocab.col}
+                    </span>
+                  </div>
+                  {#if vocab.alternatives.length > 0}
+                    <div class="flex flex-wrap gap-2">
+                      {#each vocab.alternatives.slice(0, 3) as alt}
+                        <button
+                          onclick={() => applyTypoSuggestion(vocab.original, alt.word)}
+                          class="rounded bg-purple-600 px-2 py-1 text-xs text-white hover:bg-purple-700 dark:bg-purple-700 dark:hover:bg-purple-600"
+                          title={alt.reason}
+                        >
+                          {alt.word}
+                        </button>
+                      {/each}
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            </div>
+          {:else}
+            <p class="text-sm text-muted-foreground">{tr("aipopup.analysis.vocabNoSuggestions")}</p>
+          {/if}
         </div>
       {/if}
     </CardContent>

@@ -85,12 +85,14 @@ use popup::{
 };
 use text_utils::*;
 
+/// Shared state for the clipboard monitor so start/stop commands can manage
+/// its lifecycle without creating dangling threads.
+#[derive(Default)]
+pub struct ClipboardMonitorState(pub std::sync::Mutex<Option<clipboard::ClipboardHandle>>);
+
 #[allow(clippy::missing_panics_doc)]
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    // Create channel for clipboard events (hotkey channel is created below)
-    let (_clipboard_tx, clipboard_rx) = std::sync::mpsc::channel();
-
     tauri::Builder::default()
         .plugin(tauri_plugin_autostart::Builder::new().build())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -153,6 +155,9 @@ pub fn run() {
 
             // Store the hotkey handle in the app state for cleanup
             app.manage(hotkey_handle);
+
+            // Initialize clipboard monitor state (empty until started by command)
+            app.manage(ClipboardMonitorState::default());
 
             // 核心：启动系统级下划线同步循环
             let app_handle_for_sync = app.handle().clone();
@@ -455,43 +460,6 @@ pub fn run() {
                         }
                         Err(TryRecvError::Disconnected) => {
                             log::warn!("Hotkey channel disconnected");
-                            break;
-                        }
-                    }
-                }
-            });
-
-            // Spawn thread to handle clipboard events
-            let app_handle_for_clipboard = app.handle().clone();
-            thread::spawn(move || {
-                loop {
-                    match clipboard_rx.try_recv() {
-                        Ok(event) => {
-                            match event {
-                                clipboard::ClipboardEvent::NewText { text, has_cjk } => {
-                                    log::info!(
-                                        "Clipboard changed: {} chars, CJK: {}, emitting event",
-                                        text.chars().count(),
-                                        has_cjk
-                                    );
-                                    // Emit event to frontend with the text data
-                                    if let Err(e) = app_handle_for_clipboard.emit(
-                                        "clipboard-changed",
-                                        serde_json::json!({
-                                            "text": text,
-                                            "has_cjk": has_cjk
-                                        }),
-                                    ) {
-                                        log::error!("Failed to emit clipboard event: {}", e);
-                                    }
-                                }
-                            }
-                        }
-                        Err(TryRecvError::Empty) => {
-                            thread::sleep(std::time::Duration::from_millis(100));
-                        }
-                        Err(TryRecvError::Disconnected) => {
-                            log::warn!("Clipboard channel disconnected");
                             break;
                         }
                     }
@@ -961,6 +929,7 @@ fn get_cursor_pos_cmd() -> Result<(i32, i32), String> {
 /// Tauri command to start clipboard monitoring
 #[tauri::command]
 fn start_clipboard_monitor(
+    app: tauri::AppHandle,
     window: tauri::Window,
     cjk_only: Option<bool>,
     poll_interval_ms: Option<u64>,
@@ -973,25 +942,71 @@ fn start_clipboard_monitor(
 
     log::info!("Starting clipboard monitor with config: {:?}", config);
 
-    // Note: In a full implementation, we would store the monitor handle
-    // in a global state manager to allow stopping it later
-    // For now, this is a placeholder for the functionality
+    let (rx, handle) = clipboard::create_clipboard_channel(config)
+        .map_err(|e| format!("Failed to create clipboard monitor: {}", e))?;
+
+    // Forward clipboard events to the frontend
+    let app_handle = app.clone();
+    std::thread::spawn(move || {
+        loop {
+            match rx.recv() {
+                Ok(event) => {
+                    match event {
+                        clipboard::ClipboardEvent::NewText { text, has_cjk } => {
+                            log::info!(
+                                "Clipboard changed: {} chars, CJK: {}, emitting event",
+                                text.chars().count(),
+                                has_cjk
+                            );
+                            let _ = app_handle.emit(
+                                "clipboard-changed",
+                                serde_json::json!({
+                                    "text": text,
+                                    "has_cjk": has_cjk
+                                }),
+                            );
+                        }
+                    }
+                }
+                Err(_) => {
+                    log::info!("Clipboard monitor receiver disconnected");
+                    break;
+                }
+            }
+        }
+    });
+
+    // Atomically stop any existing monitor and store the new one.
+    if let Some(state) = app.try_state::<ClipboardMonitorState>() {
+        if let Ok(mut guard) = state.0.lock() {
+            if let Some(old) = guard.take() {
+                old.stop();
+            }
+            *guard = Some(handle);
+        }
+    }
 
     let _ = window.emit("clipboard-monitor-started", ());
-
     Ok(())
 }
 
 /// Tauri command to stop clipboard monitoring
 #[tauri::command]
-fn stop_clipboard_monitor(window: tauri::Window) -> Result<(), String> {
+fn stop_clipboard_monitor(
+    app: tauri::AppHandle,
+    window: tauri::Window,
+) -> Result<(), String> {
     log::info!("Stopping clipboard monitor");
 
-    // Note: In a full implementation, we would stop the stored monitor
-    // For now, this is a placeholder for the functionality
+    if let Some(state) = app.try_state::<ClipboardMonitorState>() {
+        if let Ok(mut guard) = state.0.lock() {
+            if let Some(handle) = guard.take() {
+                handle.stop();
+            }
+        }
+    }
 
     let _ = window.emit("clipboard-monitor-stopped", ());
-
     Ok(())
 }
 

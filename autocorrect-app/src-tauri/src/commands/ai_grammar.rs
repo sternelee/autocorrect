@@ -251,6 +251,84 @@ fn extract_json_object(content: &str) -> String {
     trimmed.to_string()
 }
 
+/// Call AI for structured grammar issues and return a list of `AiTypo`.
+/// This is the preferred way to get grammar feedback inside the spell-check
+/// flow because it preserves original text and returns per-issue positions
+/// instead of rewriting the whole document.
+pub async fn check_grammar_issues_with_ai(
+    api_base_url: &str,
+    api_key: &str,
+    model: &str,
+    text: &str,
+    timeout_ms: u64,
+) -> Result<Vec<AiTypo>, Error> {
+    let system_prompt = build_system_prompt("grammar", None, None)?;
+
+    let payload = json!({
+        "model": model,
+        "temperature": 0,
+        "messages": [
+            { "role": "system", "content": system_prompt },
+            { "role": "user", "content": text }
+        ]
+    });
+
+    let client = tauri_plugin_http::reqwest::Client::builder()
+        .timeout(std::time::Duration::from_millis(timeout_ms))
+        .build()
+        .map_err(|e| Error::Api(format!("Failed to build HTTP client: {}", e)))?;
+
+    let response = client
+        .post(api_base_url)
+        .header("Content-Type", "application/json")
+        .bearer_auth(api_key)
+        .body(payload.to_string())
+        .send()
+        .await
+        .map_err(|e| Error::Api(format!("HTTP request failed: {}", e)))?;
+
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .map_err(|e| Error::Api(format!("Failed to read HTTP response body: {}", e)))?;
+
+    if !status.is_success() {
+        return Err(Error::Api(format!(
+            "AI grammar request failed with status {}: {}",
+            status, body
+        )));
+    }
+
+    let value: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| Error::Api(format!("Invalid AI response JSON: {}", e)))?;
+
+    if let Some(err) = value.get("error") {
+        return Err(Error::Api(format!("AI returned error: {}", err)));
+    }
+
+    let content = extract_content(&value);
+    if content.trim().is_empty() {
+        return Err(Error::Api("AI returned empty content".to_string()));
+    }
+
+    let json_text = extract_json_object(&content);
+    let parsed: serde_json::Value = serde_json::from_str(&json_text).map_err(|e| {
+        Error::Api(format!(
+            "Grammar response is not valid JSON typos format: {}",
+            e
+        ))
+    })?;
+    let typos = parsed
+        .get("typos")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!([]));
+    let typos: Vec<AiTypo> = serde_json::from_value(typos)
+        .map_err(|e| Error::Api(format!("Invalid typos payload format: {}", e)))?;
+
+    Ok(typos)
+}
+
 /// Call OpenAI chat completions and return corrected text only.
 pub async fn correct_text_with_openai(
     api_base_url: &str,
@@ -475,19 +553,14 @@ pub async fn ai_text_transform(
     }
 
     if operation == "grammar" {
-        let json_text = extract_json_object(&content);
-        let parsed: serde_json::Value = serde_json::from_str(&json_text).map_err(|e| {
-            Error::Api(format!(
-                "Grammar response is not valid JSON typos format: {}",
-                e
-            ))
-        })?;
-        let typos = parsed
-            .get("typos")
-            .cloned()
-            .unwrap_or_else(|| serde_json::json!([]));
-        let typos: Vec<AiTypo> = serde_json::from_value(typos)
-            .map_err(|e| Error::Api(format!("Invalid typos payload format: {}", e)))?;
+        let typos = check_grammar_issues_with_ai(
+            &api_base_url,
+            &api_key,
+            &model,
+            &request.text,
+            timeout_ms,
+        )
+        .await?;
         return Ok(AiTextTransformResponse {
             output_text: None,
             typos,
