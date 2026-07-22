@@ -151,7 +151,7 @@ where
             .follow_links(false);
 
         // create ignorer for ignore directly file
-        let ignorer = autocorrect::ignorer::Ignorer::new(&PathBuf::from("./"));
+        let ignorer = autocorrect::ignorer::Ignorer::new(PathBuf::from("./"));
 
         for result in walker.build() {
             if let Err(err) = result {
@@ -305,7 +305,7 @@ fn read_stdin() -> String {
 pub fn load_config(filename: &str) {
     log::debug!("Load config: {}", filename);
 
-    autocorrect::config::load_file(&filename).unwrap_or_else(|e| {
+    autocorrect::config::load_file(filename).unwrap_or_else(|e| {
         panic!("Load config file: {}\nerror: {}", filename, e);
     });
 }
