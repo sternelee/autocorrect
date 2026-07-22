@@ -147,9 +147,7 @@ interface CSpellDictionaries {
 }
 
 let cspellEnabled = false;
-let cspellDictionaries: CSpellDictionaries = {
-  /* defaults */
-};
+let cspellDictionaries: CSpellDictionaries = {/* defaults */};
 ```
 
 **UI Components Added:**

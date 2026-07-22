@@ -2,6 +2,8 @@
   $locale;
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
+  import { homeDir } from "@tauri-apps/api/path";
   import { Button } from "$lib/components/ui/button";
   import {
     Card,
@@ -25,7 +27,15 @@
   import IgnoredAppsManager from "./IgnoredAppsManager.svelte";
   import type { ThemeMode } from "$lib/types/theme";
   import { locale, t, setLocale } from "$lib/i18n";
-  import type { AppConfig, RuleInfo, HotkeyConfig, Modifiers } from "$lib/types/app";
+  import type {
+    AppConfig,
+    RuleInfo,
+    HotkeyConfig,
+    Modifiers,
+    DownloadableTranslationModel,
+    TranslationModelStatus,
+    TranslateResponse,
+  } from "$lib/types/app";
 
   let { theme }: { theme: ThemeMode } = $props();
 
@@ -63,7 +73,24 @@
   let aiTimeoutMs = $state(12000);
   let aiApiBaseUrl = $state("https://openrouter.ai/api/v1/chat/completions");
   let aiTranslateTargetLanguage = $state("English");
+  let aiTranslationProvider = $state("openai");
+  let aiTranslationLocalModelPath = $state("");
+  let aiTranslateSourceLanguage = $state("auto");
   let aiPolishStyles = $state<string[]>([]);
+
+  // Local model download state
+  let downloadableModels = $state<DownloadableTranslationModel[]>([]);
+  let selectedDownloadModel = $state("");
+  let downloadTargetDir = $state("");
+  let isDownloading = $state(false);
+  let downloadProgress = $state<{ file: string; percent: number } | null>(null);
+  let modelStatus = $state<TranslationModelStatus | null>(null);
+
+  // Translation test state
+  let testTranslationInput = $state("");
+  let testTranslationResult = $state<TranslateResponse | null>(null);
+  let isTestTranslationLoading = $state(false);
+  let testTranslationError = $state<string | null>(null);
 
   // Available polish styles
   const POLISH_STYLES = [
@@ -192,6 +219,9 @@
       aiApiBaseUrl =
         config.aiApiBaseUrl ?? "https://openrouter.ai/api/v1/chat/completions";
       aiTranslateTargetLanguage = config.aiTranslateTargetLanguage ?? "English";
+      aiTranslationProvider = config.aiTranslationProvider ?? "openai";
+      aiTranslationLocalModelPath = config.aiTranslationLocalModelPath ?? "";
+      aiTranslateSourceLanguage = config.aiTranslateSourceLanguage ?? "auto";
       aiPolishStyles = config.aiPolishStyle?.length
         ? config.aiPolishStyle
         : config.aiPolishStyles?.length
@@ -203,12 +233,119 @@
       underlineColor = config.underlineColor ?? "#ff3b30";
 
       hasUnsavedChanges = false;
+
+      await loadDownloadableModels();
+      await refreshModelStatus();
     } catch (error) {
       console.error("Failed to load config:", error);
       loadError =
         error instanceof Error ? error.message : tr("settings.configError");
     } finally {
       isLoading = false;
+    }
+  }
+
+  async function loadDownloadableModels() {
+    try {
+      downloadableModels =
+        await invoke<DownloadableTranslationModel[]>(
+          "list_downloadable_translation_models",
+        );
+      if (downloadableModels.length > 0 && !selectedDownloadModel) {
+        selectedDownloadModel = downloadableModels[0].id;
+        await updateDefaultDownloadTarget();
+      }
+    } catch (e) {
+      console.error("Failed to load downloadable models:", e);
+    }
+  }
+
+  async function updateDefaultDownloadTarget() {
+    try {
+      const home = await homeDir();
+      downloadTargetDir = `${home}autocorrect-translations/${selectedDownloadModel}`;
+    } catch (e) {
+      console.error("Failed to get home dir:", e);
+    }
+  }
+
+  async function refreshModelStatus() {
+    if (!aiTranslationLocalModelPath) {
+      modelStatus = null;
+      return;
+    }
+    try {
+      modelStatus = await invoke<TranslationModelStatus>(
+        "get_translation_model_status",
+        { modelPath: aiTranslationLocalModelPath },
+      );
+    } catch (e) {
+      console.error("Failed to get model status:", e);
+      modelStatus = null;
+    }
+  }
+
+  async function downloadModel() {
+    if (!selectedDownloadModel || !downloadTargetDir) return;
+    isDownloading = true;
+    downloadProgress = null;
+    try {
+      const unlisten = await listen<{
+        file: string;
+        percent: number;
+      }>("translation-model-download-progress", (event) => {
+        downloadProgress = event.payload;
+      });
+      const finalPath = await invoke<string>("download_translation_model", {
+        request: {
+          modelId: selectedDownloadModel,
+          targetDir: downloadTargetDir,
+        },
+      });
+      unlisten();
+      aiTranslationLocalModelPath = finalPath;
+      await refreshModelStatus();
+      hasUnsavedChanges = true;
+    } catch (error) {
+      console.error("Failed to download model:", error);
+      loadError =
+        error instanceof Error ? error.message : tr("settings.configError");
+    } finally {
+      isDownloading = false;
+      downloadProgress = null;
+    }
+  }
+
+  async function testTranslation() {
+    if (!testTranslationInput.trim()) {
+      testTranslationError = null;
+      testTranslationResult = null;
+      return;
+    }
+    if (!aiTranslationProvider) {
+      testTranslationError = "no-provider";
+      testTranslationResult = null;
+      return;
+    }
+
+    isTestTranslationLoading = true;
+    testTranslationError = null;
+    testTranslationResult = null;
+    try {
+      const result = await invoke<TranslateResponse>("translate_text", {
+        request: {
+          text: testTranslationInput,
+          sourceLang: aiTranslateSourceLanguage === "auto" ? "" : aiTranslateSourceLanguage,
+          targetLang: aiTranslateTargetLanguage,
+          forceProvider: aiTranslationProvider,
+        },
+      });
+      testTranslationResult = result;
+    } catch (e: unknown) {
+      testTranslationError =
+        e instanceof Error ? e.message : String(e);
+    } finally {
+      isTestTranslationLoading = false;
     }
   }
 
@@ -256,6 +393,9 @@
           aiTimeoutMs: aiTimeoutMs,
           aiApiBaseUrl: aiApiBaseUrl,
           aiTranslateTargetLanguage: aiTranslateTargetLanguage,
+          aiTranslationProvider: aiTranslationProvider,
+          aiTranslationLocalModelPath: aiTranslationLocalModelPath,
+          aiTranslateSourceLanguage: aiTranslateSourceLanguage,
           aiPolishStyle: aiPolishStyles,
           uiLanguage: uiLanguage,
           underlineStyle: underlineStyle,
@@ -335,6 +475,9 @@
       aiTimeoutMs = 12000;
       aiApiBaseUrl = "https://openrouter.ai/api/v1/chat/completions";
       aiTranslateTargetLanguage = "English";
+      aiTranslationProvider = "openai";
+      aiTranslationLocalModelPath = "";
+      aiTranslateSourceLanguage = "auto";
       aiPolishStyles = ["formal"];
       underlineStyle = "wavy";
       underlineColor = "#ff3b30";
@@ -879,60 +1022,60 @@
 
         {#if aiGrammarEnabled}
           <div class="space-y-3 rounded-lg border p-4">
-            <div class="space-y-1">
-              <label class="text-sm font-medium" for="openai-api-key"
-                >{tr("settings.apiKey")}</label
-              >
-              <Input
-                id="openai-api-key"
-                type="password"
-                bind:value={openaiApiKey}
-                placeholder="sk-..."
-                oninput={() => (hasUnsavedChanges = true)}
-              />
-            </div>
-            <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+            {#if aiTranslationProvider === "openai"}
               <div class="space-y-1">
-                <label class="text-sm font-medium" for="openai-model"
-                  >{tr("settings.model")}</label
+                <label class="text-sm font-medium" for="openai-api-key"
+                  >{tr("settings.apiKey")}</label
                 >
                 <Input
-                  id="openai-model"
-                  bind:value={openaiModel}
-                  placeholder="gpt-4.1-mini"
+                  id="openai-api-key"
+                  type="password"
+                  bind:value={openaiApiKey}
+                  placeholder="sk-..."
                   oninput={() => (hasUnsavedChanges = true)}
                 />
               </div>
-              <div class="space-y-1">
-                <label class="text-sm font-medium" for="ai-max-input"
-                  >{tr("settings.maxInput")}</label
-                >
-                <Input
-                  id="ai-max-input"
-                  type="number"
-                  bind:value={aiMaxInputChars}
-                  min="200"
-                  max="20000"
-                  oninput={() => (hasUnsavedChanges = true)}
-                />
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div class="space-y-1">
+                  <label class="text-sm font-medium" for="openai-model"
+                    >{tr("settings.model")}</label
+                  >
+                  <Input
+                    id="openai-model"
+                    bind:value={openaiModel}
+                    placeholder="gpt-4.1-mini"
+                    oninput={() => (hasUnsavedChanges = true)}
+                  />
+                </div>
+                <div class="space-y-1">
+                  <label class="text-sm font-medium" for="ai-max-input"
+                    >{tr("settings.maxInput")}</label
+                  >
+                  <Input
+                    id="ai-max-input"
+                    type="number"
+                    bind:value={aiMaxInputChars}
+                    min="200"
+                    max="20000"
+                    oninput={() => (hasUnsavedChanges = true)}
+                  />
+                </div>
+                <div class="space-y-1">
+                  <label class="text-sm font-medium" for="ai-timeout-ms"
+                    >{tr("settings.timeout")}</label
+                  >
+                  <Input
+                    id="ai-timeout-ms"
+                    type="number"
+                    bind:value={aiTimeoutMs}
+                    min="1000"
+                    max="120000"
+                    step="500"
+                    oninput={() => (hasUnsavedChanges = true)}
+                  />
+                </div>
               </div>
               <div class="space-y-1">
-                <label class="text-sm font-medium" for="ai-timeout-ms"
-                  >{tr("settings.timeout")}</label
-                >
-                <Input
-                  id="ai-timeout-ms"
-                  type="number"
-                  bind:value={aiTimeoutMs}
-                  min="1000"
-                  max="120000"
-                  step="500"
-                  oninput={() => (hasUnsavedChanges = true)}
-                />
-              </div>
-            </div>
-            <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <div class="space-y-1 md:col-span-2">
                 <label class="text-sm font-medium" for="ai-api-base-url"
                   >{tr("settings.endpoint")}</label
                 >
@@ -942,6 +1085,44 @@
                   placeholder="https://openrouter.ai/api/v1/chat/completions"
                   oninput={() => (hasUnsavedChanges = true)}
                 />
+              </div>
+            {/if}
+            <!-- Translation Provider -->
+            <div class="space-y-2">
+              <label class="text-sm font-medium" for="ai-translation-provider"
+                >{tr("settings.translationProvider")}</label
+              >
+              <select
+                id="ai-translation-provider"
+                bind:value={aiTranslationProvider}
+                onchange={() => (hasUnsavedChanges = true)}
+                class="border-input bg-background ring-offset-background focus-visible:border-ring focus-visible:ring-ring/50 flex h-9 w-full min-w-0 rounded-md border px-3 py-1 text-sm outline-none focus-visible:ring-[3px]"
+              >
+                <option value="openai">{tr("settings.translationProvider.openai")}</option>
+                <option value="apple"
+                  >{tr("settings.translationProvider.apple")}</option
+                >
+                <option value="local"
+                  >{tr("settings.translationProvider.local")}</option
+                >
+              </select>
+            </div>
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div class="space-y-1">
+                <label class="text-sm font-medium" for="ai-source-language"
+                  >{tr("settings.sourceLanguage")}</label
+                >
+                <select
+                  id="ai-source-language"
+                  bind:value={aiTranslateSourceLanguage}
+                  onchange={() => (hasUnsavedChanges = true)}
+                  class="border-input bg-background ring-offset-background focus-visible:border-ring focus-visible:ring-ring/50 flex h-9 w-full min-w-0 rounded-md border px-3 py-1 text-sm outline-none focus-visible:ring-[3px]"
+                >
+                  <option value="auto">{tr("settings.autoDetect")}</option>
+                  {#each translateLanguageOptions as language}
+                    <option value={language}>{language}</option>
+                  {/each}
+                </select>
               </div>
               <div class="space-y-1">
                 <label class="text-sm font-medium" for="ai-target-language"
@@ -958,6 +1139,151 @@
                   {/each}
                 </select>
               </div>
+            </div>
+            {#if aiTranslationProvider === "local"}
+              <div class="space-y-3 rounded-md border p-3">
+                <div class="space-y-1">
+                  <label
+                    class="text-sm font-medium"
+                    for="ai-translation-local-model-path"
+                    >{tr("settings.translationModelPath")}</label
+                  >
+                  <Input
+                    id="ai-translation-local-model-path"
+                    bind:value={aiTranslationLocalModelPath}
+                    placeholder="/Users/you/models/opus-mt-zh-en"
+                    oninput={() => (hasUnsavedChanges = true)}
+                  />
+                  <p class="text-muted-foreground text-xs">
+                    {tr("settings.translationModelPathDesc")}
+                  </p>
+                </div>
+                {#if modelStatus}
+                  <div class="text-xs">
+                    <span class="font-medium"
+                      >{tr("settings.modelStatus")}:</span
+                    >
+                    {#if modelStatus.ready}
+                      <span class="text-green-600"
+                        >{tr("settings.modelReady")}</span
+                      >
+                    {:else}
+                      <span class="text-amber-600"
+                        >{tr("settings.modelNotReady")}</span
+                      >
+                    {/if}
+                  </div>
+                {/if}
+                <div class="space-y-2">
+                  <p class="text-sm font-medium">
+                    {tr("settings.downloadModel")}
+                  </p>
+                  <p class="text-muted-foreground text-xs">
+                    {tr("settings.downloadModelDesc")}
+                  </p>
+                  <select
+                    bind:value={selectedDownloadModel}
+                    onchange={updateDefaultDownloadTarget}
+                    class="border-input bg-background ring-offset-background focus-visible:border-ring focus-visible:ring-ring/50 flex h-9 w-full min-w-0 rounded-md border px-3 py-1 text-sm outline-none focus-visible:ring-[3px]"
+                  >
+                    {#each downloadableModels as model}
+                      <option value={model.id}>{model.name}</option>
+                    {/each}
+                  </select>
+                  <Input
+                    bind:value={downloadTargetDir}
+                    placeholder="/path/to/model"
+                    oninput={() => (hasUnsavedChanges = true)}
+                  />
+                  <button
+                    onclick={downloadModel}
+                    disabled={isDownloading || !selectedDownloadModel}
+                    class="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 inline-flex items-center rounded-md px-3 py-1.5 text-sm font-medium"
+                  >
+                    {#if isDownloading}
+                      {tr("settings.downloading")}
+                      {#if downloadProgress}
+                        ({downloadProgress.file}
+                        {downloadProgress.percent}%)
+                      {/if}
+                    {:else}
+                      {tr("settings.download")}
+                    {/if}
+                  </button>
+                  {#if downloadProgress && isDownloading}
+                    <div class="bg-secondary h-2 w-full overflow-hidden rounded-full">
+                      <div
+                        class="bg-primary h-full transition-all"
+                        style="width: {downloadProgress.percent}%"
+                      ></div>
+                    </div>
+                  {/if}
+                </div>
+              </div>
+            {/if}
+            <!-- Test Translation -->
+            <div class="space-y-3 rounded-md border p-3">
+              <div class="space-y-1">
+                <span class="text-sm font-medium">
+                  {tr("settings.testTranslation")}
+                </span>
+                <p class="text-muted-foreground text-xs">
+                  {tr("settings.testTranslationDesc")}
+                </p>
+              </div>
+              <textarea
+                bind:value={testTranslationInput}
+                rows={3}
+                placeholder={tr("settings.testTranslationPlaceholder")}
+                class="border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 flex min-h-[60px] w-full rounded-md border px-3 py-2 text-sm outline-none focus-visible:ring-[3px]"
+              ></textarea>
+              <div class="flex items-center gap-2">
+                <button
+                  onclick={testTranslation}
+                  disabled={isTestTranslationLoading || !testTranslationInput.trim()}
+                  class="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 inline-flex items-center rounded-md px-3 py-1.5 text-sm font-medium"
+                >
+                  {#if isTestTranslationLoading}
+                    {tr("settings.testTranslationLoading")}
+                  {:else}
+                    {tr("settings.testTranslationButton")}
+                  {/if}
+                </button>
+                {#if testTranslationError}
+                  <span class="text-xs text-destructive">
+                    {#if testTranslationError === "no-provider"}
+                      {tr("settings.testTranslationNoProvider")}
+                    {:else if testTranslationError === "no-text"}
+                      {tr("settings.testTranslationNoText")}
+                    {:else}
+                      {tr("settings.testTranslationError")}: {testTranslationError}
+                    {/if}
+                  </span>
+                {/if}
+              </div>
+              {#if testTranslationResult}
+                <div class="space-y-2 rounded-md border bg-muted/30 p-3">
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs font-medium">
+                      {tr("settings.testTranslationProviderUsed")}:
+                    </span>
+                    <span class="text-xs">
+                      {testTranslationResult.providerUsed}
+                      {#if testTranslationResult.fallbackUsed}
+                        <span class="text-muted-foreground">
+                          {tr("settings.testTranslationFallbackUsed")}
+                        </span>
+                      {/if}
+                    </span>
+                  </div>
+                  <div>
+                    <span class="text-xs font-medium">
+                      {tr("settings.testTranslationResult")}:
+                    </span>
+                    <p class="text-sm whitespace-pre-wrap">{testTranslationResult.translatedText}</p>
+                  </div>
+                </div>
+              {/if}
             </div>
             <div class="space-y-2">
               <span class="text-sm font-medium">

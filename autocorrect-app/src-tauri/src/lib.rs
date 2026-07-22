@@ -11,6 +11,7 @@ mod theme;
 mod theme_errors;
 mod text_utils;
 mod typocheck;
+mod translation;
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -53,6 +54,10 @@ use commands::ai_grammar::{
 use commands::config::{
     ensure_app_settings_initialized, get_config, get_default_config, get_polish_styles, get_rules,
     update_config,
+};
+use commands::translate::{
+    download_translation_model, get_translation_model_status,
+    list_downloadable_translation_models, list_translation_providers, translate_text,
 };
 use commands::custom_corrections::{
     add_custom_correction, delete_custom_correction, get_custom_corrections,
@@ -130,7 +135,7 @@ pub fn run() {
                 }
             }
 
-            ensure_app_settings_initialized(&app.handle())?;
+            ensure_app_settings_initialized(app.handle())?;
 
             // Initialize popup state
             app.manage(SharedPopupState::new());
@@ -554,6 +559,12 @@ pub fn run() {
             // Theme commands
             get_theme,
             set_theme,
+            // Translation commands
+            list_translation_providers,
+            translate_text,
+            list_downloadable_translation_models,
+            get_translation_model_status,
+            download_translation_model,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
@@ -920,7 +931,7 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                         icon_x,
                         icon_y
                     );
-                    ai_popup::show_ai_icon(app, icon_x, icon_y as i32, sel);
+                    ai_popup::show_ai_icon(app, icon_x, icon_y, sel);
                     icon_triggered = true;
                 }
             }
@@ -1083,7 +1094,7 @@ fn get_auto_launch() -> auto_launch::AutoLaunch {
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
     // macOS signature: new(app_name, app_path, hidden, args)
-    auto_launch::AutoLaunch::new(&app_name, &exec_path, false, &[""] as &[&str])
+    auto_launch::AutoLaunch::new(app_name, &exec_path, false, &[""] as &[&str])
 }
 
 /// Get the current autostart state

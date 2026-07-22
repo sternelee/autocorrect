@@ -91,8 +91,7 @@ pub fn show_popup(
         // Update state
         if let Some(state) = app.try_state::<SharedPopupState>() {
             let mut state = state.0.lock().map_err(|_| {
-                Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                Error::Io(std::io::Error::other(
                     "Failed to lock popup state",
                 ))
             })?;
@@ -199,8 +198,7 @@ pub fn hide_popup(app: AppHandle) -> Result<(), Error> {
         // Update state
         if let Some(state) = app.try_state::<SharedPopupState>() {
             let mut state = state.0.lock().map_err(|_| {
-                Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                Error::Io(std::io::Error::other(
                     "Failed to lock popup state",
                 ))
             })?;
@@ -231,8 +229,7 @@ pub fn position_popup(app: AppHandle, x: i32, y: i32) -> Result<(), Error> {
         // Update state
         if let Some(state) = app.try_state::<SharedPopupState>() {
             let mut state = state.0.lock().map_err(|_| {
-                Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                Error::Io(std::io::Error::other(
                     "Failed to lock popup state",
                 ))
             })?;
@@ -252,8 +249,7 @@ pub fn position_popup(app: AppHandle, x: i32, y: i32) -> Result<(), Error> {
 #[tauri::command]
 pub fn get_popup_state(state: State<SharedPopupState>) -> Result<serde_json::Value, Error> {
     let state = state.0.lock().map_err(|_| {
-        Error::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
+        Error::Io(std::io::Error::other(
             "Failed to lock popup state",
         ))
     })?;

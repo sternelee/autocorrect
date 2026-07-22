@@ -923,7 +923,7 @@ pub fn get_selected_text_bounds() -> Result<(i32, i32, i32, i32)> {
                         log::info!("[DIAG] AXBoundsForRange returned invalid bounds, using mouse position fallback");
                         let (mouse_x, mouse_y) = get_cursor_position_nsevent();
                         // 返回鼠标位置作为近似选区位置，使用固定的小宽度
-                        return Ok((mouse_x as i32, mouse_y as i32, 100, 20));
+                        return Ok((mouse_x, mouse_y, 100, 20));
                     }
                 }
             }

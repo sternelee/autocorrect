@@ -98,8 +98,8 @@ pub async fn spell_check(
         .await
         .map_err(|e| Error::Api(format!("Spell check task join error: {}", e)))?;
 
-    let mut corrected = local_corrected;
-    let mut has_changes = original != corrected;
+    let corrected = local_corrected;
+    let has_changes = original != corrected;
 
     // Optional AI grammar check: returns structured issues instead of rewriting.
     if enable_ai.unwrap_or(true) && app_settings.ai_grammar_enabled {

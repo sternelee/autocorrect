@@ -14,6 +14,10 @@ rust-version = "1.77.2"
 name = "autocorrect_app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+[features]
+default = ["local-translation"]
+local-translation = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
+
 [build-dependencies]
 tauri-build = { version = "2.2.0", features = [] }
 
@@ -25,9 +29,25 @@ tauri = { version = "2.6.2", features = ["macos-private-api"] }
 tauri-plugin-log = "2"
 tauri-plugin-http = "2"
 thiserror = "2.0.12"
-tokio = { version = "1", features = ["time"] }
+tokio = { version = "1", features = [
+  "rt",
+  "rt-multi-thread",
+  "time",
+  "fs",
+  "io-util",
+] }
 futures-util = "0.3"
 autocorrect = { path = "../../autocorrect" }
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "rustls-tls",
+  "stream",
+] }
+ndarray = { version = "0.17", optional = true }
+ort = { version = "2.0.0-rc.12", optional = true }
+tokenizers = { version = "0.21", default-features = false, features = [
+  "onig",
+], optional = true }
 enigo = "0.2"
 # Use forked rdev that fixes macOS crash issue (see Tauri discussion #7839)
 rdev = { git = "https://github.com/fufesou/rdev" }

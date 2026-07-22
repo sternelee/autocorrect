@@ -159,7 +159,9 @@ If this chain breaks, inspect `hotkey.rs` + `popup.rs` + `text_selection.rs` + `
 ```ts
 let count = $state(0);
 let doubled = $derived(count * 2);
-$effect(() => { /* side effect */ });
+$effect(() => {
+  /* side effect */
+});
 ```
 
 ### Rust error handling

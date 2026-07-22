@@ -86,7 +86,7 @@ fn load_custom_corrections() -> HashMap<String, String> {
 }
 
 static POLICY: LazyLock<typos_cli::policy::Policy> =
-    LazyLock::new(|| typos_cli::policy::Policy::default());
+    LazyLock::new(typos_cli::policy::Policy::default);
 
 // Use RwLock to allow reloading custom corrections at runtime
 static CUSTOM_CORRECTIONS: LazyLock<RwLock<HashMap<String, String>>> =
@@ -116,32 +116,29 @@ pub fn check_typos(text: &str) -> Vec<TypoError> {
     let mut typos_errors: Vec<TypoError> = Vec::new();
 
     // Pass 1: collect all typos from the typos library (byte offsets only, line/col deferred)
-    let results = typos::check_str(text, &POLICY.tokenizer, POLICY.dict);
+    let results = typos::check_str(text, POLICY.tokenizer, POLICY.dict);
 
     for typo in results {
-        match typo.corrections {
-            Status::Corrections(corrections) => {
-                let typo_word = typo.typo.to_string();
+        if let Status::Corrections(corrections) = typo.corrections {
+            let typo_word = typo.typo.to_string();
 
-                if is_bundled_word(&typo_word) {
-                    log::debug!("Skipping '{}' - found in bundled dictionary", typo_word);
-                    continue;
-                }
-
-                let suggestions = corrections
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect::<Vec<String>>();
-
-                typos_errors.push(TypoError {
-                    typo: typo_word,
-                    suggestions,
-                    byte_offset: typo.byte_offset,
-                    line: 0, // filled in batch below
-                    col: 0,
-                });
+            if is_bundled_word(&typo_word) {
+                log::debug!("Skipping '{}' - found in bundled dictionary", typo_word);
+                continue;
             }
-            _ => {}
+
+            let suggestions = corrections
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<String>>();
+
+            typos_errors.push(TypoError {
+                typo: typo_word,
+                suggestions,
+                byte_offset: typo.byte_offset,
+                line: 0, // filled in batch below
+                col: 0,
+            });
         }
     }
 

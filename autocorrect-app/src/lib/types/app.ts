@@ -16,6 +16,9 @@ export interface AppConfig {
   aiTimeoutMs?: number;
   aiApiBaseUrl?: string;
   aiTranslateTargetLanguage?: string;
+  aiTranslationProvider?: string;
+  aiTranslationLocalModelPath?: string;
+  aiTranslateSourceLanguage?: string;
   aiPolishStyle?: string[];
   aiPolishStyles?: string[];
   uiLanguage?: string;
@@ -105,4 +108,36 @@ export interface AiVocabSuggestion {
 
 export interface AiVocabularyEnhanceResponse {
   suggestions: AiVocabSuggestion[];
+}
+
+export interface TranslationProviderInfo {
+  id: string;
+  name: string;
+  available: boolean;
+  error?: string | null;
+}
+
+export interface TranslateResponse {
+  translatedText: string;
+  providerUsed: string;
+  fallbackUsed: boolean;
+}
+
+export interface DownloadableTranslationModel {
+  id: string;
+  name: string;
+  sourceLang: string;
+  targetLang: string;
+}
+
+export interface TranslationModelStatus {
+  ready: boolean;
+  path: string;
+  filesPresent: string[];
+  filesMissing: string[];
+}
+
+export interface DownloadTranslationModelRequest {
+  modelId: string;
+  targetDir: string;
 }

@@ -275,7 +275,7 @@ fn normalize_endpoint(endpoint: Option<String>) -> String {
     trimmed.to_string()
 }
 
-fn extract_content(value: &serde_json::Value) -> String {
+pub fn extract_content(value: &serde_json::Value) -> String {
     if let Some(content) = value
         .get("choices")
         .and_then(|c| c.get(0))
@@ -471,6 +471,15 @@ fn build_system_prompt(
         }
         _ => Err(Error::Api("Unsupported operation, expected grammar|translate|polish".to_string())),
     }
+}
+
+/// Build a system prompt specifically for the translation feature.
+/// Exported so the translate commands module can reuse it.
+pub fn build_system_prompt_for_translation(target_language: &str) -> Result<String, Error> {
+    Ok(format!(
+        "You are a professional translator. Translate the user text into {}. Return translated text only. No markdown, no explanations, no prefixes.",
+        target_language.trim()
+    ))
 }
 
 fn build_tone_detect_prompt() -> String {

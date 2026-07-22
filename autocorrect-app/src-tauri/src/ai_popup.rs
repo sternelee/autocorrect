@@ -526,7 +526,7 @@ pub fn accept_ai_result(app: AppHandle, text: String) -> Result<(), Error> {
         }
 
         let _ = app.emit("ai-result-accepted", serde_json::json!({ "text": text }));
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(target_os = "macos"))]
@@ -542,7 +542,7 @@ pub fn accept_ai_result(app: AppHandle, text: String) -> Result<(), Error> {
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 fn io_err(msg: &str) -> Error {
-    Error::Io(std::io::Error::new(std::io::ErrorKind::Other, msg))
+    Error::Io(std::io::Error::other(msg))
 }
 
 #[cfg(target_os = "macos")]

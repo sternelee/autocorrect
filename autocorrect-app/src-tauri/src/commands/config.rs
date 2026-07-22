@@ -56,6 +56,12 @@ pub struct AppSettings {
     pub ai_api_base_url: String,
     #[serde(default = "default_ai_translate_target_language")]
     pub ai_translate_target_language: String,
+    #[serde(default = "default_ai_translation_provider")]
+    pub ai_translation_provider: String,
+    #[serde(default = "default_ai_translation_local_model_path")]
+    pub ai_translation_local_model_path: String,
+    #[serde(default = "default_ai_translate_source_language")]
+    pub ai_translate_source_language: String,
     #[serde(
         default = "default_ai_polish_styles",
         deserialize_with = "deserialize_polish_styles"
@@ -83,6 +89,9 @@ impl Default for AppSettings {
             ai_timeout_ms: default_ai_timeout_ms(),
             ai_api_base_url: default_ai_api_base_url(),
             ai_translate_target_language: default_ai_translate_target_language(),
+            ai_translation_provider: default_ai_translation_provider(),
+            ai_translation_local_model_path: default_ai_translation_local_model_path(),
+            ai_translate_source_language: default_ai_translate_source_language(),
             ai_polish_style: default_ai_polish_styles(),
             underline_style: default_underline_style(),
             underline_color: default_underline_color(),
@@ -118,6 +127,18 @@ fn default_ai_api_base_url() -> String {
 
 fn default_ai_translate_target_language() -> String {
     "English".to_string()
+}
+
+fn default_ai_translation_provider() -> String {
+    "openai".to_string()
+}
+
+fn default_ai_translation_local_model_path() -> String {
+    String::new()
+}
+
+fn default_ai_translate_source_language() -> String {
+    "auto".to_string()
 }
 
 fn default_ai_polish_styles() -> Vec<String> {
@@ -178,6 +199,12 @@ pub struct AppConfig {
     pub ai_api_base_url: String,
     /// Default translation target language
     pub ai_translate_target_language: String,
+    /// Translation provider: openai, apple, local
+    pub ai_translation_provider: String,
+    /// Path to a local Marian/NLLB ONNX model directory
+    pub ai_translation_local_model_path: String,
+    /// Translation source language (auto for system detection)
+    pub ai_translate_source_language: String,
     /// Default polish styles
     pub ai_polish_style: Vec<String>,
     /// Underline style: "wavy" | "solid" | "dashed" | "dotted"
@@ -228,6 +255,12 @@ pub struct ConfigUpdates {
     pub ai_api_base_url: Option<String>,
     /// Default translation target language
     pub ai_translate_target_language: Option<String>,
+    /// Translation provider: openai, apple, local
+    pub ai_translation_provider: Option<String>,
+    /// Path to a local Marian/NLLB ONNX model directory
+    pub ai_translation_local_model_path: Option<String>,
+    /// Translation source language (auto for system detection)
+    pub ai_translate_source_language: Option<String>,
     /// Default polish styles
     pub ai_polish_style: Option<Vec<String>>,
     /// Underline style
@@ -299,6 +332,9 @@ pub fn get_config(app: tauri::AppHandle) -> Result<AppConfig, Error> {
         ai_timeout_ms: app_settings.ai_timeout_ms,
         ai_api_base_url: app_settings.ai_api_base_url,
         ai_translate_target_language: app_settings.ai_translate_target_language,
+        ai_translation_provider: app_settings.ai_translation_provider,
+        ai_translation_local_model_path: app_settings.ai_translation_local_model_path,
+        ai_translate_source_language: app_settings.ai_translate_source_language,
         ai_polish_style: app_settings.ai_polish_style,
         underline_style: app_settings.underline_style,
         underline_color: app_settings.underline_color,
@@ -460,6 +496,21 @@ pub fn update_config(app: tauri::AppHandle, updates: ConfigUpdates) -> Result<()
 
     if let Some(ai_translate_target_language) = updates.ai_translate_target_language {
         app_settings.ai_translate_target_language = ai_translate_target_language;
+        app_settings_changed = true;
+    }
+
+    if let Some(ai_translation_provider) = updates.ai_translation_provider {
+        app_settings.ai_translation_provider = ai_translation_provider;
+        app_settings_changed = true;
+    }
+
+    if let Some(ai_translation_local_model_path) = updates.ai_translation_local_model_path {
+        app_settings.ai_translation_local_model_path = ai_translation_local_model_path;
+        app_settings_changed = true;
+    }
+
+    if let Some(ai_translate_source_language) = updates.ai_translate_source_language {
+        app_settings.ai_translate_source_language = ai_translate_source_language;
         app_settings_changed = true;
     }
 

@@ -7,3 +7,4 @@ pub mod hotkey_config;
 pub mod ignored_apps;
 pub mod shortcut_recorder;
 pub mod spellcheck;
+pub mod translate;
