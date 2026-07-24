@@ -1227,6 +1227,14 @@
                   >{tr("settings.translationProvider.local")}</option
                 >
               </select>
+              {#if aiTranslationProvider === "apple" || aiTranslationProvider === "local"}
+                <p
+                  class="text-muted-foreground text-xs"
+                  data-testid="translation-provider-nmt-note"
+                >
+                  {tr("settings.translationProvider.nmtNote")}
+                </p>
+              {/if}
             </div>
             <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div class="space-y-1">

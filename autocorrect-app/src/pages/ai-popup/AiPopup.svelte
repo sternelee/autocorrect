@@ -22,6 +22,13 @@
   import type { AppConfig } from "$lib/types/app";
   import type { ThemeMode } from "$lib/types/theme";
   import {
+    disabledReason,
+    isCapHidden,
+    isCapDisabled,
+    type CapabilityKey,
+    type TranslationProviderId,
+  } from "$lib/ai-capabilities";
+  import {
     applyThemeToDom,
     isThemeMode,
     loadThemeFromLocalStorage,
@@ -138,6 +145,31 @@
   let clarityResult = $state<AiClarityCheckResponse | null>(null);
   let vocabResult = $state<AiVocabularyEnhanceResponse | null>(null);
   let clarityStreamBuffer = $state("");
+  let aiTranslationProvider = $state("openai");
+  let openaiApiKey = $state("");
+  // Map each AiPopup tool to the AiCapabilities key that gates it.
+  const TOOL_CAPABILITY: Record<Tool, CapabilityKey> = {
+    translate: "translate",
+    rewrite: "rewrite",
+    paraphrase: "paraphrase",
+    concise: "simplify",
+    tone: "tone",
+    clarity: "clarity",
+    vocabulary: "vocabulary",
+  };
+  function provider(): TranslationProviderId {
+    const p = aiTranslationProvider;
+    return p === "apple" || p === "local" ? p : "openai";
+  }
+  function isToolHidden(tool: Tool): boolean {
+    return isCapHidden(TOOL_CAPABILITY[tool], provider());
+  }
+  function isToolDisabled(tool: Tool): boolean {
+    return isCapDisabled(TOOL_CAPABILITY[tool], provider(), openaiApiKey);
+  }
+  function toolDisabledTitle(tool: Tool): string {
+    return disabledReason(TOOL_CAPABILITY[tool], provider(), openaiApiKey) ?? "";
+  }
 
   let sourceAppName = $state("");
   let sourceBundleId = $state("");
@@ -250,6 +282,13 @@
     try {
       const config = await invoke<AppConfig>("get_config");
       translateLang = config.aiTranslateTargetLanguage ?? "English";
+      const provider = (config.aiTranslationProvider ?? "openai")
+        .toString()
+        .trim()
+        .toLowerCase();
+      aiTranslationProvider =
+        provider === "apple" || provider === "local" ? provider : "openai";
+      openaiApiKey = config.openaiApiKey ?? "";
     } catch (configError) {
       console.warn("Failed to load AI popup defaults:", configError);
     }
@@ -689,12 +728,13 @@
       <span class="section-subtitle">{tr("aipopup.rewriteSectionDesc")}</span>
     </div>
     <div class="tool-grid tool-grid-assist">
-      {#each assistTools as tool}
+      {#each assistTools.filter((tool) => !isToolHidden(tool.id)) as tool}
         <button
           class="tool-card"
           class:active={activeTool === tool.id}
           onclick={() => runTool(tool.id)}
-          disabled={loading}
+          disabled={loading || isToolDisabled(tool.id)}
+          title={toolDisabledTitle(tool.id)}
         >
           <span class="tool-icon">{tool.icon}</span>
           <span class="tool-title">{tool.label()}</span>
@@ -710,12 +750,13 @@
       <span class="section-subtitle">{tr("aipopup.analysisSectionDesc")}</span>
     </div>
     <div class="tool-grid tool-grid-analysis">
-      {#each analysisTools as tool}
+      {#each analysisTools.filter((tool) => !isToolHidden(tool.id)) as tool}
         <button
           class="tool-card tool-card-compact"
           class:active={activeTool === tool.id}
           onclick={() => runTool(tool.id)}
-          disabled={loading}
+          disabled={loading || isToolDisabled(tool.id)}
+          title={toolDisabledTitle(tool.id)}
         >
           <span class="tool-icon">{tool.icon}</span>
           <span class="tool-title">{tool.label()}</span>

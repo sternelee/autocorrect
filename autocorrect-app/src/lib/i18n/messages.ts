@@ -123,6 +123,8 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
     "settings.translationProvider.openai": "OpenAI / API",
     "settings.translationProvider.apple": "Apple Translation (on-device)",
     "settings.translationProvider.local": "Local Model (ONNX)",
+    "settings.translationProvider.nmtNote":
+      "Apple Translation and Local NLLB / Marian are translation-only. AI grammar, polish, rewrite, paraphrase, clarity, tone and vocabulary buttons will be disabled in the Spell Checker and AI popup because they require an OpenAI-compatible LLM.",
     "settings.translationModelPath": "Local Model Path",
     "settings.translationModelPathDesc":
       "Path to a Marian or NLLB ONNX model directory (e.g. opus-mt-zh-en, nllb-200-distilled-600M)",
@@ -428,6 +430,8 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
     "settings.translationProvider.openai": "OpenAI / API",
     "settings.translationProvider.apple": "Apple 翻译 (本地)",
     "settings.translationProvider.local": "本地模型 (ONNX)",
+    "settings.translationProvider.nmtNote":
+      "Apple 翻译与本地 NLLB / Marian 仅支持翻译。AI 语法、改写、润色、复述、清晰度、语气和词汇按钮将在拼写检查窗口和 AI 弹窗中被禁用，因为这些功能需要 OpenAI 兼容的大模型。",
     "settings.translationModelPath": "本地模型路径",
     "settings.translationModelPathDesc":
       "Marian 或 NLLB ONNX 模型目录路径 (例如 opus-mt-zh-en, nllb-200-distilled-600M)",
