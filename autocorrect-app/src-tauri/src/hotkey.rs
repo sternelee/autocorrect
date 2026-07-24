@@ -235,8 +235,26 @@ impl HotkeyConfig {
 /// This is the preferred way to create a hotkey listener as it provides
 /// a proper receiver channel for the main thread.
 ///
+/// Shared, mutable `HotkeyConfig` used by the running rdev listener.
+///
+/// The listener clones the currently bound key/modifiers on every event
+/// so that updates through `HotkeyConfigCell` (e.g. from
+/// `update_hotkey_config`) take effect without restarting the listener
+/// thread. Manage a `HotkeyConfigCell` in Tauri App state so commands
+/// can write through to it.
+pub type SharedHotkeyConfig = std::sync::Arc<std::sync::Mutex<HotkeyConfig>>;
+
+pub struct HotkeyConfigCell(pub SharedHotkeyConfig);
+
+/// Convenience constructor for the shared hotkey config.
+pub fn shared_hotkey_config(config: HotkeyConfig) -> SharedHotkeyConfig {
+    std::sync::Arc::new(std::sync::Mutex::new(config))
+}
+
 /// # Arguments
-/// * `config` - Hotkey configuration specifying the key combination to listen for
+/// * `config_cell` - Shared, mutable hotkey configuration. The listener
+///   reads from it on every key event so updates take effect without a
+///   restart.
 ///
 /// # Returns
 /// A tuple containing:
@@ -245,17 +263,18 @@ impl HotkeyConfig {
 ///
 /// # Example
 /// ```ignore
-/// use autocorrect_app_lib::hotkey::{create_hotkey_channel, HotkeyConfig};
+/// use autocorrect_app_lib::hotkey::{create_hotkey_channel, shared_hotkey_config, HotkeyConfig};
 /// use rdev::Key;
 ///
-/// let config = HotkeyConfig {
+/// let shared = shared_hotkey_config(HotkeyConfig {
 ///     key: Key::KeyA,
 ///     ..Default::default()
-/// };
-///
-/// let (rx, handle) = create_hotkey_channel(config);
+/// });
+/// let (rx, handle) = create_hotkey_channel(shared);
 /// ```
-pub fn create_hotkey_channel(config: HotkeyConfig) -> (Receiver<HotkeyEvent>, HotkeyHandle) {
+pub fn create_hotkey_channel(
+    config_cell: SharedHotkeyConfig,
+) -> (Receiver<HotkeyEvent>, HotkeyHandle) {
     let (tx, rx) = mpsc::channel();
     let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let running_clone = running.clone();
@@ -264,8 +283,15 @@ pub fn create_hotkey_channel(config: HotkeyConfig) -> (Receiver<HotkeyEvent>, Ho
     let modifiers = std::sync::Arc::new(Mutex::new(Modifiers::default()));
     let modifiers_clone = modifiers.clone();
 
+    let config_clone = config_cell.clone();
     let handle = thread::spawn(move || {
-        log::info!("Hotkey listener started with config: {:?}", config);
+        log::info!(
+            "Hotkey listener started with config: {}",
+            config_clone
+                .lock()
+                .map(|c| c.to_display_string())
+                .unwrap_or_else(|_| "<poisoned>".to_string())
+        );
 
         #[cfg(target_os = "macos")]
         use crate::macos_text::update_mouse_position;
@@ -283,6 +309,18 @@ pub fn create_hotkey_channel(config: HotkeyConfig) -> (Receiver<HotkeyEvent>, Ho
                 }
             }
 
+            // Snapshot the currently active hotkey binding before matching.
+            // This makes config swaps from `update_hotkey_config` visible
+            // without restarting the listener thread.
+            let (cfg_key, cfg_modifiers) = match config_clone.lock() {
+                Ok(guard) => (guard.key, guard.modifiers.clone()),
+                Err(poisoned) => {
+                    log::error!("Hotkey config lock poisoned; recovering");
+                    let guard = poisoned.into_inner();
+                    (guard.key, guard.modifiers.clone())
+                }
+            };
+
             // Lock the mutex to safely modify the modifiers state
             if let Ok(mut modifiers_guard) = modifiers_clone.lock() {
                 match event.event_type {
@@ -292,11 +330,16 @@ pub fn create_hotkey_channel(config: HotkeyConfig) -> (Receiver<HotkeyEvent>, Ho
                             Key::ShiftLeft | Key::ShiftRight => modifiers_guard.shift = true,
                             Key::ControlLeft | Key::ControlRight => modifiers_guard.ctrl = true,
                             Key::MetaLeft | Key::MetaRight => modifiers_guard.meta = true,
-                            Key::Alt => modifiers_guard.alt = true,
+                            // On macOS the rdev fork (fufesou/rdev) maps the
+                            // left Option to `Key::Alt` and the right Option
+                            // to `Key::AltGr`. Treat both as the Alt modifier
+                            // so users pressing either Option key trigger
+                            // the configured hotkey.
+                            Key::Alt | Key::AltGr => modifiers_guard.alt = true,
                             _ => {
                                 // Check if this is our hotkey combination
-                                if key == config.key
-                                    && modifiers_guard.has_required(&config.modifiers)
+                                if key == cfg_key
+                                    && modifiers_guard.has_required(&cfg_modifiers)
                                 {
                                     log::debug!("Hotkey triggered: {:?}", key);
                                     let _ = tx.send(HotkeyEvent::SpellCheckTriggered);
@@ -310,7 +353,7 @@ pub fn create_hotkey_channel(config: HotkeyConfig) -> (Receiver<HotkeyEvent>, Ho
                             Key::ShiftLeft | Key::ShiftRight => modifiers_guard.shift = false,
                             Key::ControlLeft | Key::ControlRight => modifiers_guard.ctrl = false,
                             Key::MetaLeft | Key::MetaRight => modifiers_guard.meta = false,
-                            Key::Alt => modifiers_guard.alt = false,
+                            Key::Alt | Key::AltGr => modifiers_guard.alt = false,
                             _ => {}
                         }
                     }

@@ -3,10 +3,34 @@
 //! This module provides Tauri commands for managing the global hotkey configuration.
 
 use crate::commands::errors::Error;
-use crate::hotkey::HotkeyConfig;
+use crate::hotkey::{HotkeyConfig, HotkeyConfigCell};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use tauri::Manager;
+
+/// Push a new binding into the shared config cell so the running rdev
+/// listener picks it up on the next event without a restart.
+fn apply_to_live_listener(
+    app: &tauri::AppHandle,
+    config: &HotkeyConfig,
+) {
+    if let Some(cell) = app.try_state::<HotkeyConfigCell>() {
+        if let Ok(mut guard) = cell.0.lock() {
+            *guard = config.clone();
+            log::info!(
+                "Hotkey config swapped live: {}",
+                guard.to_display_string()
+            );
+        } else {
+            log::error!("Failed to lock HotkeyConfigCell; live update skipped.");
+        }
+    } else {
+        log::warn!(
+            "HotkeyConfigCell not managed yet; live update skipped (startup race?"
+        );
+    }
+}
 
 /// Hotkey configuration file name
 const CONFIG_FILE: &str = "hotkey-config.json";
@@ -114,6 +138,7 @@ pub struct UpdateHotkeyConfigRequest {
 /// Update the hotkey configuration
 #[tauri::command]
 pub fn update_hotkey_config(
+    app: tauri::AppHandle,
     request: UpdateHotkeyConfigRequest,
 ) -> Result<HotkeyConfigResponse, Error> {
     let config = HotkeyConfig::new(request.key.clone(), request.modifiers);
@@ -129,6 +154,10 @@ pub fn update_hotkey_config(
     // Save the configuration
     save_config_to_file(&config)?;
 
+    // Push the new binding into the running rdev listener so the change
+    // takes effect immediately, without restarting the app.
+    apply_to_live_listener(&app, &config);
+
     log::info!("Hotkey configuration updated: {:?}", config);
 
     Ok(HotkeyConfigResponse {
@@ -140,11 +169,15 @@ pub fn update_hotkey_config(
 
 /// Reset hotkey configuration to default
 #[tauri::command]
-pub fn reset_hotkey_config() -> Result<HotkeyConfigResponse, Error> {
+pub fn reset_hotkey_config(
+    app: tauri::AppHandle,
+) -> Result<HotkeyConfigResponse, Error> {
     let config = HotkeyConfig::default();
 
     // Save the default configuration
     save_config_to_file(&config)?;
+
+    apply_to_live_listener(&app, &config);
 
     log::info!("Hotkey configuration reset to default");
 

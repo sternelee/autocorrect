@@ -154,12 +154,18 @@ pub fn run() {
                 "Loading hotkey config: {}",
                 hotkey_config.to_display_string()
             );
-            let (hotkey_rx, hotkey_handle) = hotkey::create_hotkey_channel(hotkey_config);
+            // Wrap the active binding in a shared cell so update / reset
+            // commands can swap it without restarting the rdev listener.
+            let shared_hotkey_config = hotkey::shared_hotkey_config(hotkey_config);
+            let (hotkey_rx, hotkey_handle) =
+                hotkey::create_hotkey_channel(shared_hotkey_config.clone());
 
             log::info!("Global hotkey listener started");
 
-            // Store the hotkey handle in the app state for cleanup
+            // Store the hotkey handle for cleanup and a writeable handle to
+            // the current binding so commands can mutate it at runtime.
             app.manage(hotkey_handle);
+            app.manage(hotkey::HotkeyConfigCell(shared_hotkey_config));
 
             // Initialize clipboard monitor state (empty until started by command)
             app.manage(ClipboardMonitorState::default());
