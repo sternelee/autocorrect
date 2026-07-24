@@ -65,6 +65,12 @@
   // Autostart configuration
   let autostartEnabled = $state(false);
 
+  // Accessibility permission status (macOS). Polls while not granted so the
+  // status flips automatically once the user enables it in System Settings.
+  let accessibilityGranted = $state(false);
+  let isCheckingAccessibility = $state(false);
+  let accessibilityPollId: ReturnType<typeof setInterval> | null = null;
+
   // AI grammar configuration
   let aiGrammarEnabled = $state(false);
   let openaiApiKey = $state("");
@@ -358,6 +364,56 @@
     }
   }
 
+  // Re-read Accessibility permission status. Backend no-ops to `true` on
+  // non-macOS so the card stays "Granted" there without extra branching.
+  async function checkAccessibility() {
+    if (isCheckingAccessibility) return;
+    isCheckingAccessibility = true;
+    try {
+      accessibilityGranted =
+        (await invoke<boolean>("check_accessibility_permission")) ?? false;
+      if (accessibilityGranted) {
+        stopAccessibilityPoll();
+      }
+    } catch (e) {
+      console.error("Failed to check accessibility permission:", e);
+      accessibilityGranted = false;
+    } finally {
+      isCheckingAccessibility = false;
+    }
+  }
+
+  // Open the macOS Accessibility pane. Backend returns `true` if the user
+  // already trusts us (no need to open the pane). We schedule a delayed
+  // re-check so the badge flips if the user granted and came back quickly.
+  async function requestAccessibility() {
+    try {
+      await invoke("request_accessibility_permission");
+    } catch (e) {
+      console.error("Failed to request accessibility permission:", e);
+    }
+    // After returning from System Settings, the AX trust flag needs a moment
+    // to propagate; poll shortly so the UI matches reality.
+    setTimeout(() => {
+      void checkAccessibility();
+      if (!accessibilityGranted) startAccessibilityPoll();
+    }, 1500);
+  }
+
+  function startAccessibilityPoll() {
+    if (accessibilityPollId !== null) return;
+    accessibilityPollId = setInterval(() => {
+      void checkAccessibility();
+    }, 2000);
+  }
+
+  function stopAccessibilityPoll() {
+    if (accessibilityPollId !== null) {
+      clearInterval(accessibilityPollId);
+      accessibilityPollId = null;
+    }
+  }
+
   async function saveConfiguration() {
     isLoading = true;
     loadError = null;
@@ -521,10 +577,14 @@
     const frameId = requestAnimationFrame(() => {
       void loadConfiguration();
       void loadHotkeyConfiguration();
+      void checkAccessibility().then(() => {
+        if (!accessibilityGranted) startAccessibilityPoll();
+      });
     });
 
     return () => {
       cancelAnimationFrame(frameId);
+      stopAccessibilityPoll();
     };
   });
 
@@ -963,6 +1023,67 @@
         <h3 class="text-sm font-semibold">
           {tr("settings.general") || "General"}
         </h3>
+
+        <!-- Accessibility Permission -->
+        <div
+          class="rounded-lg border p-3"
+          data-testid="accessibility-permission-card"
+        >
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0 flex-1 space-y-0.5">
+              <label class="text-sm font-medium" for="accessibility-status">
+                {tr("settings.accessibility")}
+              </label>
+              <p class="text-muted-foreground text-xs">
+                {tr("settings.accessibilityDesc")}
+              </p>
+              <p class="text-muted-foreground text-xs">
+                {tr("settings.accessibility.required")}
+              </p>
+            </div>
+            <div class="flex shrink-0 flex-col items-end gap-2">
+              <!-- Status badge -->
+              <div
+                id="accessibility-status"
+                class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium {accessibilityGranted
+                  ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                  : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'}"
+              >
+                <span
+                  class={'h-1.5 w-1.5 rounded-full ' +
+                    (accessibilityGranted ? 'bg-green-600' : 'bg-red-600')}
+                ></span>
+                <span>
+                  {#if isCheckingAccessibility}
+                    {tr("settings.loading")}
+                  {:else if accessibilityGranted}
+                    {tr("settings.accessibility.granted")}
+                  {:else}
+                    {tr("settings.accessibility.denied")}
+                  {/if}
+                </span>
+              </div>
+              <div class="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={accessibilityGranted}
+                  onclick={requestAccessibility}
+                >
+                  {tr("settings.accessibility.openSettings")}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={isCheckingAccessibility}
+                  onclick={() => void checkAccessibility()}
+                >
+                  {tr("settings.accessibility.refresh")}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
 
         <!-- Launch at Login -->
         <div class="flex items-center justify-between rounded-lg border p-3">

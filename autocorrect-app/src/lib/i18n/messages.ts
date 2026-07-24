@@ -98,6 +98,15 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
     "settings.typoToggle": "Enable Advanced Typo Detection",
     "settings.typoToggleDesc":
       "Use the typos library to detect and suggest fixes for English spelling errors",
+    "settings.accessibility": "Accessibility Permission",
+    "settings.accessibilityDesc":
+      "Required for system-wide spell checking and text replacement. macOS only.",
+    "settings.accessibility.granted": "Granted",
+    "settings.accessibility.denied": "Not Granted",
+    "settings.accessibility.openSettings": "Open System Settings",
+    "settings.accessibility.refresh": "Recheck",
+    "settings.accessibility.required":
+      "Required to highlight misspellings and replace selected text across apps.",
     "settings.autostart": "Launch at Login",
     "settings.autostartDesc":
       "Automatically start AutoCorrect when you log in to your computer",
@@ -397,6 +406,13 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
     "settings.spellConfig": "拼写检查配置",
     "settings.typoToggle": "启用高级拼写错误检测",
     "settings.typoToggleDesc": "使用 typos 库检测并建议英文拼写错误修复。",
+    "settings.accessibility": "辅助功能权限",
+    "settings.accessibilityDesc": "系统级拼写检查与文本替换所必需。仅 macOS。",
+    "settings.accessibility.granted": "已授权",
+    "settings.accessibility.denied": "未授权",
+    "settings.accessibility.openSettings": "打开系统设置",
+    "settings.accessibility.refresh": "重新检测",
+    "settings.accessibility.required": "用于跨应用拼写下划线与文本替换。",
     "settings.autostart": "开机自启动",
     "settings.autostartDesc": "登录时自动启动 AutoCorrect",
     "settings.aiToggle": "启用 AI 语法检查（OpenAI）",
