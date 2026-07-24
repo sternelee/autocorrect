@@ -494,6 +494,23 @@ pub fn run() {
 
             Ok(())
         })
+        // On macOS, Tauri 2's default behavior when the user clicks the close
+        // (red traffic-light) button is to *destroy* the window, which breaks
+        // the Dock-click → Show flow. Match native macOS convention by
+        // intercepting CloseRequested on the main window: prevent_close +
+        // hide. The existing RunEvent::Reopen handler below then restores
+        // it when the user clicks the Dock icon.
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "main" {
+                    #[cfg(target_os = "macos")]
+                    {
+                        api.prevent_close();
+                        let _ = window.hide();
+                    }
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             read,
             write,
