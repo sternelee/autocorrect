@@ -379,14 +379,6 @@ fn apply_suggestion_to_selection_macos(
         })
         .unwrap_or((None, None));
 
-    let mut clipboard = arboard::Clipboard::new()
-        .map_err(|e| Error::Clipboard(format!("Failed to access clipboard: {e}")))?;
-    let previous_clipboard = clipboard.get_text().ok();
-
-    clipboard
-        .set_text(text.to_string())
-        .map_err(|e| Error::Clipboard(format!("Failed to set clipboard text: {e}")))?;
-
     // Hide popup so focus can return to the source app.
     hide_popup(app.clone())?;
     thread::sleep(Duration::from_millis(80));
@@ -407,12 +399,13 @@ fn apply_suggestion_to_selection_macos(
             600,
             "[accept]",
         )?;
-        // Extra settle time so the AX focused-element state catches up.
-        thread::sleep(Duration::from_millis(80));
+        // Continue once the AX focused-element state is actually ready
+        // instead of guessing a fixed settle delay.
+        crate::macos_text::wait_focused_element_ready(600);
     }
 
     // Now that the source app has focus, select the exact typo range so the
-    // paste replaces the word rather than inserting at the cursor.
+    // replacement covers the word rather than inserting at the cursor.
     if let (Some(start), Some(len)) = (offset, char_length) {
         log::info!("[accept] select_text_range: offset={} len={}", start, len);
         // Retry for up to 600 ms in case the AX focus is still settling.
@@ -428,7 +421,7 @@ fn apply_suggestion_to_selection_macos(
                     log::warn!("[accept] select_text_range failed: {}", e);
                     if sel_deadline.elapsed().as_millis() > 600 {
                         log::warn!(
-                            "[accept] select_text_range timed out, paste will insert at caret"
+                            "[accept] select_text_range timed out, replacement will insert at caret"
                         );
                         break;
                     }
@@ -441,20 +434,49 @@ fn apply_suggestion_to_selection_macos(
     // Capture original word before replacing (selection is already active).
     let original_word = crate::macos_text::get_selected_text().unwrap_or_default();
 
-    let status = std::process::Command::new("osascript")
-        .arg("-e")
-        .arg("tell application \"System Events\" to keystroke \"v\" using command down")
-        .status()
-        .map_err(|e| Error::InputSimulation(format!("Failed to trigger paste: {e}")))?;
+    // Primary replacement path: write AXSelectedText directly. No clipboard
+    // roundtrip, no simulated keystrokes, no clipboard to restore.
+    if let Err(e) = crate::macos_text::set_selected_text(text) {
+        // Fallback: clipboard + simulated ⌘V paste for apps whose text views
+        // do not accept AXSelectedText writes.
+        log::warn!(
+            "[accept] AXSelectedText write failed ({}), falling back to clipboard paste",
+            e
+        );
 
-    if !status.success() {
-        restore_clipboard(&mut clipboard, previous_clipboard);
-        return Err(Error::InputSimulation(
-            "Paste simulation command failed".to_string(),
-        ));
+        let mut clipboard = arboard::Clipboard::new()
+            .map_err(|e| Error::Clipboard(format!("Failed to access clipboard: {e}")))?;
+        let previous_clipboard = clipboard.get_text().ok();
+
+        clipboard
+            .set_text(text.to_string())
+            .map_err(|e| Error::Clipboard(format!("Failed to set clipboard text: {e}")))?;
+        // Snapshot the changeCount AFTER our write; restore only if the user
+        // did not copy something else in the meantime.
+        let our_change_count = crate::macos_text::pasteboard_change_count();
+
+        let status = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg("tell application \"System Events\" to keystroke \"v\" using command down")
+            .status()
+            .map_err(|e| Error::InputSimulation(format!("Failed to trigger paste: {e}")))?;
+
+        if !status.success() {
+            restore_clipboard(&mut clipboard, previous_clipboard);
+            return Err(Error::InputSimulation(
+                "Paste simulation command failed".to_string(),
+            ));
+        }
+
+        thread::sleep(Duration::from_millis(80));
+        if crate::macos_text::pasteboard_change_count() == our_change_count {
+            restore_clipboard(&mut clipboard, previous_clipboard);
+        } else {
+            log::info!("[accept] pasteboard changed by someone else, keeping current clipboard");
+        }
+    } else {
+        log::info!("[accept] replaced selection via AXSelectedText");
     }
-
-    thread::sleep(Duration::from_millis(80));
 
     // Save undo snapshot.
     if let (Some(start), Some(len)) = (offset, char_length) {
@@ -473,7 +495,7 @@ fn apply_suggestion_to_selection_macos(
             text
         );
 
-        // Restore caret to end of pasted text so the user can keep typing.
+        // Restore caret to end of replaced text so the user can keep typing.
         let replacement_utf16_len = text.encode_utf16().count();
         let caret_pos = start + replacement_utf16_len;
         if let Err(e) = crate::macos_text::select_text_range(caret_pos, 0) {
@@ -481,7 +503,6 @@ fn apply_suggestion_to_selection_macos(
         }
     }
 
-    restore_clipboard(&mut clipboard, previous_clipboard);
     Ok(())
 }
 
@@ -778,16 +799,9 @@ fn undo_last_replacement_blocking(app: AppHandle) -> Result<(), Error> {
                 600,
                 "[undo]",
             )?;
-            thread::sleep(Duration::from_millis(80));
+            // Continue once the AX focused-element state is actually ready.
+            crate::macos_text::wait_focused_element_ready(600);
         }
-
-        let mut clipboard = arboard::Clipboard::new()
-            .map_err(|e| Error::Clipboard(format!("Clipboard init failed: {e}")))?;
-        let previous_clipboard = clipboard.get_text().ok();
-
-        clipboard
-            .set_text(entry.original_word.clone())
-            .map_err(|e| Error::Clipboard(format!("Clipboard write failed: {e}")))?;
 
         let replacement_utf16_len = entry.replacement.encode_utf16().count();
         let undo_offset = entry.offset;
@@ -810,19 +824,42 @@ fn undo_last_replacement_blocking(app: AppHandle) -> Result<(), Error> {
             }
         }
 
-        let status = std::process::Command::new("osascript")
-            .arg("-e")
-            .arg("tell application \"System Events\" to keystroke \"v\" using command down")
-            .status()
-            .map_err(|e| Error::InputSimulation(format!("Paste simulation failed: {e}")))?;
+        // Primary path: write AXSelectedText directly, no clipboard involved.
+        if let Err(e) = crate::macos_text::set_selected_text(&entry.original_word) {
+            log::warn!(
+                "[undo] AXSelectedText write failed ({}), falling back to clipboard paste",
+                e
+            );
 
-        if !status.success() {
-            restore_clipboard(&mut clipboard, previous_clipboard);
-            return Err(Error::InputSimulation("Undo paste failed".to_string()));
+            let mut clipboard = arboard::Clipboard::new()
+                .map_err(|e| Error::Clipboard(format!("Clipboard init failed: {e}")))?;
+            let previous_clipboard = clipboard.get_text().ok();
+
+            clipboard
+                .set_text(entry.original_word.clone())
+                .map_err(|e| Error::Clipboard(format!("Clipboard write failed: {e}")))?;
+            let our_change_count = crate::macos_text::pasteboard_change_count();
+
+            let status = std::process::Command::new("osascript")
+                .arg("-e")
+                .arg("tell application \"System Events\" to keystroke \"v\" using command down")
+                .status()
+                .map_err(|e| Error::InputSimulation(format!("Paste simulation failed: {e}")))?;
+
+            if !status.success() {
+                restore_clipboard(&mut clipboard, previous_clipboard);
+                return Err(Error::InputSimulation("Undo paste failed".to_string()));
+            }
+
+            thread::sleep(Duration::from_millis(80));
+            if crate::macos_text::pasteboard_change_count() == our_change_count {
+                restore_clipboard(&mut clipboard, previous_clipboard);
+            } else {
+                log::info!("[undo] pasteboard changed by someone else, keeping it");
+            }
+        } else {
+            log::info!("[undo] reverted text via AXSelectedText");
         }
-
-        thread::sleep(Duration::from_millis(80));
-        restore_clipboard(&mut clipboard, previous_clipboard);
 
         // Restore caret to end of reverted text.
         let original_utf16_len = entry.original_word.encode_utf16().count();

@@ -68,10 +68,30 @@ fn get_selected_text_via_clipboard_fallback() -> Result<String> {
         ));
     }
 
-    thread::sleep(Duration::from_millis(150));
+    // Poll until the simulated ⌘C actually lands in the pasteboard (up to
+    // 600ms) instead of a fixed 150ms sleep: fast apps return earlier, slow
+    // apps no longer race the read.
+    let mut copied = String::new();
+    let deadline = std::time::Instant::now();
+    loop {
+        copied = clipboard.get_text().unwrap_or_default();
+        if !copied.trim().is_empty() && copied != sentinel {
+            break;
+        }
+        if deadline.elapsed().as_millis() > 600 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    let after_copy_count = macos_text::pasteboard_change_count();
 
-    let copied = clipboard.get_text().unwrap_or_default();
-    restore_clipboard(&mut clipboard, old_clipboard);
+    // Restore the user's previous clipboard, but only when nobody else wrote
+    // the pasteboard while we were here (never clobber a newer user copy).
+    if macos_text::pasteboard_change_count() == after_copy_count {
+        restore_clipboard(&mut clipboard, old_clipboard);
+    } else {
+        log::info!("Pasteboard changed during copy fallback, keeping current clipboard");
+    }
 
     if copied.trim().is_empty() || copied == sentinel {
         log::warn!("Clipboard fallback did not capture selected text");

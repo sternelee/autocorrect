@@ -1267,6 +1267,95 @@ pub fn update_mouse_position(_x: i32, _y: i32) {
     // No-op: we now fetch dynamically
 }
 
+/// Replace the currently selected text of the focused element by writing
+/// `AXSelectedText` directly. This is the primary replacement path: no
+/// clipboard roundtrip, no simulated keystrokes, nothing to restore.
+pub fn set_selected_text(text: &str) -> Result<()> {
+    if !unsafe { AXIsProcessTrusted() } {
+        return Err(AccessibilityError::PermissionDenied);
+    }
+
+    unsafe {
+        let system_element = AXUIElementCreateSystemWide();
+        let mut focused_element: Id = NIL;
+        let err = AXUIElementCopyAttributeValue(
+            system_element,
+            to_ax_string("AXFocusedUIElement"),
+            &mut focused_element,
+        );
+
+        if err != 0 || focused_element.is_null() {
+            return Err(AccessibilityError::NoFocusedElement);
+        }
+
+        let err_set = AXUIElementSetAttributeValue(
+            focused_element,
+            to_ax_string("AXSelectedText"),
+            to_ax_string(text),
+        );
+
+        if err_set != 0 {
+            log::warn!("[DIAG] set_selected_text failed with err={}", err_set);
+            return Err(AccessibilityError::ApiError(format!(
+                "Failed to set selected text: {}",
+                err_set
+            )));
+        }
+
+        Ok(())
+    }
+}
+
+/// True when the system-wide focused AX element is available (non-null).
+fn focused_element_available() -> bool {
+    if !unsafe { AXIsProcessTrusted() } {
+        return false;
+    }
+
+    unsafe {
+        let system_element = AXUIElementCreateSystemWide();
+        let mut focused: Id = NIL;
+        let err = AXUIElementCopyAttributeValue(
+            system_element,
+            to_ax_string("AXFocusedUIElement"),
+            &mut focused,
+        );
+        err == 0 && !focused.is_null()
+    }
+}
+
+/// Poll until the system-wide focused AX element is available, up to
+/// `timeout_ms`. Replaces fixed settle sleeps after focus switches: we
+/// continue as soon as the AX state is actually ready instead of guessing.
+pub fn wait_focused_element_ready(timeout_ms: u128) -> bool {
+    let deadline = std::time::Instant::now();
+    loop {
+        if focused_element_available() {
+            return true;
+        }
+        if deadline.elapsed().as_millis() > timeout_ms {
+            log::warn!(
+                "[DIAG] wait_focused_element_ready timed out after {}ms",
+                timeout_ms
+            );
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    }
+}
+
+/// The `changeCount` of the general pasteboard. Used to detect whether anyone
+/// else wrote the pasteboard between our write and a restore, so we never
+/// clobber a newer user copy.
+pub fn pasteboard_change_count() -> i64 {
+    unsafe {
+        let class = AnyClass::get("NSPasteboard").expect("NSPasteboard not found");
+        let board: Id = msg_send![class, generalPasteboard];
+        let count: i64 = msg_send![board, changeCount];
+        count
+    }
+}
+
 pub fn get_cursor_position_nsevent() -> (i32, i32) {
     #[cfg(target_os = "macos")]
     {
