@@ -47,8 +47,12 @@ fn get_cached<T: serde::de::DeserializeOwned>(key: &str) -> Option<T> {
 
 /// Store a result in the cache, evicting the oldest entry if at capacity.
 fn set_cache<T: serde::Serialize>(key: &str, value: &T) {
-    let Ok(mut cache) = ai_cache().lock() else { return };
-    let Ok(json_value) = serde_json::to_value(value) else { return };
+    let Ok(mut cache) = ai_cache().lock() else {
+        return;
+    };
+    let Ok(json_value) = serde_json::to_value(value) else {
+        return;
+    };
 
     if cache.len() >= CACHE_MAX_ENTRIES {
         let oldest = cache
@@ -321,7 +325,10 @@ pub async fn check_grammar_issues_with_ai(
 ) -> Result<Vec<AiTypo>, Error> {
     let cache_key = build_cache_key("grammar", text, model, api_base_url);
     if let Some(cached) = get_cached::<Vec<AiTypo>>(&cache_key) {
-        log::info!("[AI_CACHE] grammar hit for key={}", &cache_key[..cache_key.len().min(20)]);
+        log::info!(
+            "[AI_CACHE] grammar hit for key={}",
+            &cache_key[..cache_key.len().min(20)]
+        );
         return Ok(cached);
     }
 

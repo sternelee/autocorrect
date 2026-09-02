@@ -338,9 +338,7 @@ pub fn create_hotkey_channel(
                             Key::Alt | Key::AltGr => modifiers_guard.alt = true,
                             _ => {
                                 // Check if this is our hotkey combination
-                                if key == cfg_key
-                                    && modifiers_guard.has_required(&cfg_modifiers)
-                                {
+                                if key == cfg_key && modifiers_guard.has_required(&cfg_modifiers) {
                                     log::debug!("Hotkey triggered: {:?}", key);
                                     let _ = tx.send(HotkeyEvent::SpellCheckTriggered);
                                 }

@@ -56,11 +56,9 @@ impl Translator {
         }
 
         match self.provider {
-            TranslationProvider::OpenAi => {
-                Err(Error::Api(
-                    "OpenAI translation should be handled by the caller".to_string(),
-                ))
-            }
+            TranslationProvider::OpenAi => Err(Error::Api(
+                "OpenAI translation should be handled by the caller".to_string(),
+            )),
             TranslationProvider::Apple => {
                 let text = trimmed.to_string();
                 let source = source_lang.to_string();
@@ -89,13 +87,11 @@ impl Translator {
                     } else {
                         Some(source_lang)
                     };
-                let backend = local_mt::load_backend_cached(&self.local_model_path,
-                    source,
-                )?;
+                let backend = local_mt::load_backend_cached(&self.local_model_path, source)?;
                 let backend = Arc::clone(&backend);
                 let text = trimmed.to_string();
-                let target = normalize_language_code(target_lang)
-                    .unwrap_or_else(|| target_lang.to_string());
+                let target =
+                    normalize_language_code(target_lang).unwrap_or_else(|| target_lang.to_string());
                 tokio::task::spawn_blocking(move || backend.translate(&text, &target))
                     .await
                     .map_err(|e| Error::Api(format!("local MT task failed: {e}")))?
@@ -154,12 +150,18 @@ pub fn list_providers(settings: &AppSettings) -> Vec<TranslationProviderInfo> {
 
     let local_path = PathBuf::from(&settings.ai_translation_local_model_path);
     let (available, error) = if local_path.as_os_str().is_empty() {
-        (false, Some("Local model path is not configured".to_string()))
+        (
+            false,
+            Some("Local model path is not configured".to_string()),
+        )
     } else if !local_path.exists() {
-        (false, Some(format!(
-            "Local model path does not exist: {}",
-            local_path.display()
-        )))
+        (
+            false,
+            Some(format!(
+                "Local model path does not exist: {}",
+                local_path.display()
+            )),
+        )
     } else {
         (local_mt::model_files_ready(&local_path), None)
     };
@@ -220,16 +222,28 @@ mod tests {
 
     #[test]
     fn parse_provider_recognizes_ids() {
-        assert!(matches!(parse_provider("apple"), TranslationProvider::Apple));
-        assert!(matches!(parse_provider("local"), TranslationProvider::Local));
-        assert!(matches!(parse_provider("OpenAI"), TranslationProvider::OpenAi));
+        assert!(matches!(
+            parse_provider("apple"),
+            TranslationProvider::Apple
+        ));
+        assert!(matches!(
+            parse_provider("local"),
+            TranslationProvider::Local
+        ));
+        assert!(matches!(
+            parse_provider("OpenAI"),
+            TranslationProvider::OpenAi
+        ));
         assert!(matches!(parse_provider(""), TranslationProvider::OpenAi));
     }
 
     #[test]
     fn normalize_language_code_maps_names() {
         assert_eq!(normalize_language_code("English").as_deref(), Some("en"));
-        assert_eq!(normalize_language_code("简体中文").as_deref(), Some("zh-Hans"));
+        assert_eq!(
+            normalize_language_code("简体中文").as_deref(),
+            Some("zh-Hans")
+        );
         assert_eq!(normalize_language_code("auto"), None);
         assert_eq!(normalize_language_code(""), None);
     }

@@ -1,7 +1,7 @@
 use super::config::load_app_settings;
 use super::errors::Error;
 use crate::translation::local_mt::model_files_ready;
-use crate::translation::translator::{list_providers, Translator, TranslationProviderInfo};
+use crate::translation::translator::{list_providers, TranslationProviderInfo, Translator};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -78,13 +78,8 @@ pub async fn translate_text(
             let api_key = settings.openai_api_key.trim();
             if api_key.is_empty() {
                 // Fallback to Apple or local if configured
-                return fallback_translate(
-                    &settings,
-                    &request.text,
-                    source_lang,
-                    target_lang,
-                )
-                .await;
+                return fallback_translate(&settings, &request.text, source_lang, target_lang)
+                    .await;
             }
 
             let model = settings.openai_model.clone();
@@ -92,9 +87,8 @@ pub async fn translate_text(
             let timeout_ms = settings.ai_timeout_ms;
             let operation = "translate";
 
-            let system_prompt = super::ai_grammar::build_system_prompt_for_translation(
-                target_lang,
-            )?;
+            let system_prompt =
+                super::ai_grammar::build_system_prompt_for_translation(target_lang)?;
 
             let payload = serde_json::json!({
                 "model": model,
@@ -241,11 +235,15 @@ pub fn get_translation_model_status(model_path: String) -> Result<TranslationMod
     }
 
     // `decoder_model_merged.onnx` OR `decoder_model.onnx` is sufficient.
-    let has_decoder = files_present.iter().any(|f| {
-        f == "decoder_model_merged.onnx" || f == "decoder_model.onnx"
-    });
+    let has_decoder = files_present
+        .iter()
+        .any(|f| f == "decoder_model_merged.onnx" || f == "decoder_model.onnx");
 
-    let ready = model_files_ready(&path) || (path.exists() && files_present.contains(&"encoder_model.onnx".to_string()) && has_decoder && files_present.contains(&"tokenizer.json".to_string()));
+    let ready = model_files_ready(&path)
+        || (path.exists()
+            && files_present.contains(&"encoder_model.onnx".to_string())
+            && has_decoder
+            && files_present.contains(&"tokenizer.json".to_string()));
 
     Ok(TranslationModelStatus {
         ready,
@@ -271,8 +269,7 @@ pub async fn download_translation_model(
         return Err(Error::Config("target directory is required".to_string()));
     }
 
-    std::fs::create_dir_all(&target_dir)
-        .map_err(Error::Io)?;
+    std::fs::create_dir_all(&target_dir).map_err(Error::Io)?;
 
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(600))
@@ -358,9 +355,7 @@ async fn download_file_with_progress(
 
     let total = response.content_length();
     let mut stream = response.bytes_stream();
-    let mut file = tokio::fs::File::create(dest)
-        .await
-        .map_err(Error::Io)?;
+    let mut file = tokio::fs::File::create(dest).await.map_err(Error::Io)?;
     let mut downloaded: u64 = 0;
 
     while let Some(chunk) = stream.next().await {

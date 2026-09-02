@@ -80,7 +80,10 @@ impl AXPollSession {
                 return None;
             }
             let window_pos = ax_window_pos_for_element(focused);
-            Some(Self { focused, window_pos })
+            Some(Self {
+                focused,
+                window_pos,
+            })
         }
     }
 
@@ -93,7 +96,9 @@ impl AXPollSession {
     /// Get the bounds of a text range using the cached element and window position.
     #[cfg(target_os = "macos")]
     pub fn get_range_bounds(&self, range_start: usize, range_len: usize) -> Result<CGRect> {
-        unsafe { ax_range_bounds_for_element(self.focused, self.window_pos, range_start, range_len) }
+        unsafe {
+            ax_range_bounds_for_element(self.focused, self.window_pos, range_start, range_len)
+        }
     }
 
     /// Get the currently selected text using the cached element.
@@ -125,8 +130,6 @@ impl AXPollSession {
 /// Returns `None` if the window cannot be found within 10 levels.
 #[cfg(target_os = "macos")]
 unsafe fn ax_window_pos_for_element(focused: Id) -> Option<(f64, f64)> {
-    
-    
     type Id = *mut objc2::runtime::AnyObject;
     const NIL: Id = std::ptr::null_mut();
 
@@ -134,7 +137,11 @@ unsafe fn ax_window_pos_for_element(focused: Id) -> Option<(f64, f64)> {
     for _ in 0..10 {
         let mut role_value: Id = NIL;
         AXUIElementCopyAttributeValue(current, to_ax_string("AXRole"), &mut role_value);
-        let role = if !role_value.is_null() { from_ax_string(role_value) } else { String::new() };
+        let role = if !role_value.is_null() {
+            from_ax_string(role_value)
+        } else {
+            String::new()
+        };
 
         if role == "AXWindow" {
             let mut position_value: Id = NIL;
@@ -191,7 +198,11 @@ unsafe fn ax_text_context_for_element(focused_element: Id) -> Result<FocusedText
 
     let mut role_value: Id = NIL;
     AXUIElementCopyAttributeValue(focused_element, to_ax_string("AXRole"), &mut role_value);
-    let role = if !role_value.is_null() { from_ax_string(role_value) } else { String::new() };
+    let role = if !role_value.is_null() {
+        from_ax_string(role_value)
+    } else {
+        String::new()
+    };
 
     let mut editable_value: Id = NIL;
     AXUIElementCopyAttributeValue(
@@ -230,7 +241,10 @@ unsafe fn ax_text_context_for_element(focused_element: Id) -> Result<FocusedText
                     &mut selected_range_value,
                 );
 
-                let mut selected_range = CFRange { location: 0, length: 0 };
+                let mut selected_range = CFRange {
+                    location: 0,
+                    length: 0,
+                };
                 if !selected_range_value.is_null() {
                     let _ = AXValueGetValue(
                         selected_range_value,
@@ -323,7 +337,9 @@ unsafe fn ax_range_bounds_for_element(
     if err_bounds != 0 {
         log::debug!(
             "[AX] AXBoundsForRange err={} range={}-{}",
-            err_bounds, range_start, range_len
+            err_bounds,
+            range_start,
+            range_len
         );
     }
 
@@ -339,7 +355,8 @@ unsafe fn ax_range_bounds_for_element(
                 if is_window_relative_coords(rect, win_pos) {
                     log::debug!(
                         "[AX] window-relative coord fix: adding ({:.0},{:.0})",
-                        win_pos.0, win_pos.1
+                        win_pos.0,
+                        win_pos.1
                     );
                     final_rect.origin.x += win_pos.0;
                     final_rect.origin.y += win_pos.1;
@@ -387,7 +404,10 @@ unsafe fn ax_selected_text_bounds_for_element(
         return Err(AccessibilityError::NoTextSelected);
     }
 
-    let mut selected_range = CFRange { location: 0, length: 0 };
+    let mut selected_range = CFRange {
+        location: 0,
+        length: 0,
+    };
     if AXValueGetValue(
         selected_range_value,
         K_AXVALUE_CFRANGE_TYPE,
@@ -463,7 +483,10 @@ unsafe fn ax_caret_bounds_for_element(focused_element: Id) -> Result<CGRect> {
         to_ax_string("AXSelectedTextRange"),
         &mut selected_range_value,
     );
-    let mut selected_range = CFRange { location: 0, length: 0 };
+    let mut selected_range = CFRange {
+        location: 0,
+        length: 0,
+    };
     if !selected_range_value.is_null() {
         let _ = AXValueGetValue(
             selected_range_value,
@@ -1125,7 +1148,11 @@ fn snap_utf16_to_word_start(s: &str, utf16_offset: usize) -> usize {
         u16_pos += ch.len_utf16();
     }
     // If no whitespace found before offset, return the original (best effort)
-    if snap_u16 == 0 { utf16_offset } else { snap_u16 }
+    if snap_u16 == 0 {
+        utf16_offset
+    } else {
+        snap_u16
+    }
 }
 
 /// Snap a UTF-16 offset **forward** to the nearest word boundary.
@@ -1262,7 +1289,12 @@ pub fn get_cursor_position_nsevent() -> (i32, i32) {
 pub fn seconds_since_last_keydown() -> f64 {
     const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
     const K_CG_EVENT_KEY_DOWN: u32 = 10;
-    unsafe { CGEventSourceSecondsSinceLastEventType(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE, K_CG_EVENT_KEY_DOWN) }
+    unsafe {
+        CGEventSourceSecondsSinceLastEventType(
+            K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE,
+            K_CG_EVENT_KEY_DOWN,
+        )
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1276,7 +1308,12 @@ pub fn seconds_since_last_keydown() -> f64 {
 pub fn seconds_since_last_mouse_down() -> f64 {
     const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
     const K_CG_EVENT_LEFT_MOUSE_DOWN: u32 = 1;
-    unsafe { CGEventSourceSecondsSinceLastEventType(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE, K_CG_EVENT_LEFT_MOUSE_DOWN) }
+    unsafe {
+        CGEventSourceSecondsSinceLastEventType(
+            K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE,
+            K_CG_EVENT_LEFT_MOUSE_DOWN,
+        )
+    }
 }
 
 #[cfg(not(target_os = "macos"))]

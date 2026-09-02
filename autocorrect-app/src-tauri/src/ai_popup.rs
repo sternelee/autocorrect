@@ -9,7 +9,6 @@ use tauri::{AppHandle, Emitter, Manager, State};
 #[cfg(target_os = "macos")]
 use crate::macos_geom::*;
 
-
 // ── Shared state ──────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
