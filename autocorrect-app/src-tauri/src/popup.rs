@@ -613,7 +613,9 @@ pub fn activate_app_bundle_macos(bundle_id: &str) -> bool {
         let count = CFArrayGetCount(apps as CFArrayRef);
 
         for idx in 0..count {
-            let app: Id = msg_send![apps, objectAtIndex: idx];
+            // objectAtIndex: expects a NSUInteger ('Q'); count is a CFIndex
+            // (isize, 'q'), so cast explicitly for objc2's type check.
+            let app: Id = msg_send![apps, objectAtIndex: idx as u64];
             let bundle: Id = msg_send![app, bundleIdentifier];
             if bundle.is_null() {
                 continue;
