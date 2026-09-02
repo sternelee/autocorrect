@@ -7,11 +7,11 @@ mod objc2_compat;
 mod overlay;
 mod popup;
 mod text_selection;
+mod text_utils;
 mod theme;
 mod theme_errors;
-mod text_utils;
-mod typocheck;
 mod translation;
+mod typocheck;
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -55,10 +55,6 @@ use commands::config::{
     ensure_app_settings_initialized, get_config, get_default_config, get_polish_styles, get_rules,
     update_config,
 };
-use commands::translate::{
-    download_translation_model, get_translation_model_status,
-    list_downloadable_translation_models, list_translation_providers, translate_text,
-};
 use commands::custom_corrections::{
     add_custom_correction, delete_custom_correction, get_custom_corrections,
     get_custom_corrections_path_cmd, update_custom_correction,
@@ -74,6 +70,10 @@ use commands::ignored_apps::{
 use commands::spellcheck::{
     get_clipboard_text, load_config, save_config, set_clipboard_text, spell_check,
 };
+use commands::translate::{
+    download_translation_model, get_translation_model_status, list_downloadable_translation_models,
+    list_translation_providers, translate_text,
+};
 use hotkey::HotkeyEvent;
 use overlay::{OverlayManager, TypoMarker};
 use popup::SharedPopupState;
@@ -85,8 +85,8 @@ use theme::{get_theme, set_theme};
 
 // Import popup commands for the invoke handler
 use popup::{
-    accept_suggestion, get_popup_state, hide_popup, position_popup, reject_suggestion,
-    show_popup, trigger_spell_check_workflow, undo_last_replacement,
+    accept_suggestion, get_popup_state, hide_popup, position_popup, reject_suggestion, show_popup,
+    trigger_spell_check_workflow, undo_last_replacement,
 };
 use text_utils::*;
 
@@ -445,9 +445,18 @@ pub fn run() {
                         Ok(HotkeyEvent::SpellCheckTriggered) => {
                             log::info!("Hotkey triggered, starting spell check workflow");
 
-                            // Check if frontmost app is ignored for popup
-                            let should_trigger = match commands::ignored_apps::get_frontmost_bundle_id_macos()
-                            {
+                            // Check if frontmost app is ignored for popup.
+                            // Fast NSWorkspace call — the previous osascript
+                            // lookup added 100-300ms to every hotkey trigger.
+                            #[cfg(target_os = "macos")]
+                            let frontmost_bundle = popup::frontmost_app_info_nsworkspace()
+                                .map(|(_, b)| b)
+                                .filter(|b| !b.is_empty());
+                            #[cfg(not(target_os = "macos"))]
+                            let frontmost_bundle =
+                                commands::ignored_apps::get_frontmost_bundle_id_macos();
+
+                            let should_trigger = match frontmost_bundle {
                                 Some(bundle_id) => !is_app_ignored(&app_handle, &bundle_id, true, false),
                                 None => true, // Trigger if we can't get bundle ID
                             };
@@ -733,18 +742,17 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                 // Pre-compute all UTF-16 offsets in one O(text_len) pass
                 // instead of N separate O(text_len) scans.
                 let capped_typos: Vec<_> = typos.iter().take(10).collect();
-                let utf16_offsets =
-                    batch_byte_to_utf16_offsets(&ctx.text,
-                        capped_typos.iter().map(|t| t.byte_offset));
+                let utf16_offsets = batch_byte_to_utf16_offsets(
+                    &ctx.text,
+                    capped_typos.iter().map(|t| t.byte_offset),
+                );
 
                 // 3. 为每个错误获取屏幕坐标（复用会话内的 focused element + window_pos）
                 for (typo, typo_u16_offset) in capped_typos.iter().zip(utf16_offsets.iter()) {
                     let absolute_offset = ctx.base_offset.saturating_add(*typo_u16_offset);
                     let typo_u16_len = typo.typo.encode_utf16().count();
 
-                    if let Ok(rect) =
-                        ax_session.get_range_bounds(absolute_offset, typo_u16_len)
-                    {
+                    if let Ok(rect) = ax_session.get_range_bounds(absolute_offset, typo_u16_len) {
                         if rect.size.width > 0.0 {
                             markers.push(TypoMarker {
                                 id: format!("{}-{}", absolute_offset, typo.typo),
@@ -764,9 +772,10 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                 // Fallback mechanism if no markers found but typos exist
                 if !typos.is_empty() && markers.is_empty() {
                     // Pre-compute UTF-16 offsets for fallback path too
-                    let fallback_utf16_offsets =
-                        batch_byte_to_utf16_offsets(&ctx.text,
-                            typos.iter().take(10).map(|t| t.byte_offset));
+                    let fallback_utf16_offsets = batch_byte_to_utf16_offsets(
+                        &ctx.text,
+                        typos.iter().take(10).map(|t| t.byte_offset),
+                    );
 
                     let frame_rect = ax_session.get_element_bounds().ok();
                     let caret_rect = ax_session.get_caret_bounds().ok();
@@ -1003,31 +1012,27 @@ fn start_clipboard_monitor(
 
     // Forward clipboard events to the frontend
     let app_handle = app.clone();
-    std::thread::spawn(move || {
-        loop {
-            match rx.recv() {
-                Ok(event) => {
-                    match event {
-                        clipboard::ClipboardEvent::NewText { text, has_cjk } => {
-                            log::info!(
-                                "Clipboard changed: {} chars, CJK: {}, emitting event",
-                                text.chars().count(),
-                                has_cjk
-                            );
-                            let _ = app_handle.emit(
-                                "clipboard-changed",
-                                serde_json::json!({
-                                    "text": text,
-                                    "has_cjk": has_cjk
-                                }),
-                            );
-                        }
-                    }
+    std::thread::spawn(move || loop {
+        match rx.recv() {
+            Ok(event) => match event {
+                clipboard::ClipboardEvent::NewText { text, has_cjk } => {
+                    log::info!(
+                        "Clipboard changed: {} chars, CJK: {}, emitting event",
+                        text.chars().count(),
+                        has_cjk
+                    );
+                    let _ = app_handle.emit(
+                        "clipboard-changed",
+                        serde_json::json!({
+                            "text": text,
+                            "has_cjk": has_cjk
+                        }),
+                    );
                 }
-                Err(_) => {
-                    log::info!("Clipboard monitor receiver disconnected");
-                    break;
-                }
+            },
+            Err(_) => {
+                log::info!("Clipboard monitor receiver disconnected");
+                break;
             }
         }
     });
@@ -1048,10 +1053,7 @@ fn start_clipboard_monitor(
 
 /// Tauri command to stop clipboard monitoring
 #[tauri::command]
-fn stop_clipboard_monitor(
-    app: tauri::AppHandle,
-    window: tauri::Window,
-) -> Result<(), String> {
+fn stop_clipboard_monitor(app: tauri::AppHandle, window: tauri::Window) -> Result<(), String> {
     log::info!("Stopping clipboard monitor");
 
     if let Some(state) = app.try_state::<ClipboardMonitorState>() {

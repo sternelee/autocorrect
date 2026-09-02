@@ -2,10 +2,19 @@
 
 use crate::commands::errors::Error;
 use crate::commands::spellcheck::TypoSuggestion;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
+
+/// Guard so overlapping accept/undo choreographies cannot interleave
+/// (e.g. Enter + click firing twice, or undo racing an accept).
+static REPLACEMENT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// Guard so a slow spell-check workflow drops later hotkey triggers
+/// instead of queueing ghost popups that fire after the first one.
+static WORKFLOW_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 /// Popup state shared across the application
 #[derive(Debug, Clone)]
@@ -48,10 +57,10 @@ pub struct LastReplacement {
     pub offset: usize,
     pub char_length: usize,
     pub source_app_name: Option<String>,
+    pub source_bundle_id: Option<String>,
 }
 
-static LAST_REPLACEMENT: std::sync::Mutex<Option<LastReplacement>> =
-    std::sync::Mutex::new(None);
+static LAST_REPLACEMENT: std::sync::Mutex<Option<LastReplacement>> = std::sync::Mutex::new(None);
 
 /// Push a replacement snapshot (only the most recent is kept).
 fn push_last_replacement(entry: LastReplacement) {
@@ -90,19 +99,22 @@ pub fn show_popup(
     if let Some(popup_window) = app.get_webview_window("popup") {
         // Update state
         if let Some(state) = app.try_state::<SharedPopupState>() {
-            let mut state = state.0.lock().map_err(|_| {
-                Error::Io(std::io::Error::other(
-                    "Failed to lock popup state",
-                ))
-            })?;
+            let mut state = state
+                .0
+                .lock()
+                .map_err(|_| Error::Io(std::io::Error::other("Failed to lock popup state")))?;
             state.is_visible = true;
             state.position = (x, y);
             state.original_text = original_text.clone();
             state.suggestion = suggestion.clone();
             #[cfg(target_os = "macos")]
             {
-                state.source_app_name = get_frontmost_app_name_macos();
-                state.source_bundle_id = get_frontmost_app_bundle_id_macos();
+                // Single fast NSWorkspace call (no osascript subprocess, which
+                // added 100-300ms latency to every popup show).
+                if let Some((name, bundle_id)) = frontmost_app_info_nsworkspace() {
+                    state.source_app_name = Some(name);
+                    state.source_bundle_id = Some(bundle_id);
+                }
             }
         }
 
@@ -197,11 +209,10 @@ pub fn hide_popup(app: AppHandle) -> Result<(), Error> {
     if let Some(popup_window) = app.get_webview_window("popup") {
         // Update state
         if let Some(state) = app.try_state::<SharedPopupState>() {
-            let mut state = state.0.lock().map_err(|_| {
-                Error::Io(std::io::Error::other(
-                    "Failed to lock popup state",
-                ))
-            })?;
+            let mut state = state
+                .0
+                .lock()
+                .map_err(|_| Error::Io(std::io::Error::other("Failed to lock popup state")))?;
             state.is_visible = false;
         }
 
@@ -228,11 +239,10 @@ pub fn position_popup(app: AppHandle, x: i32, y: i32) -> Result<(), Error> {
 
         // Update state
         if let Some(state) = app.try_state::<SharedPopupState>() {
-            let mut state = state.0.lock().map_err(|_| {
-                Error::Io(std::io::Error::other(
-                    "Failed to lock popup state",
-                ))
-            })?;
+            let mut state = state
+                .0
+                .lock()
+                .map_err(|_| Error::Io(std::io::Error::other("Failed to lock popup state")))?;
             state.position = (x, y);
         }
 
@@ -248,11 +258,10 @@ pub fn position_popup(app: AppHandle, x: i32, y: i32) -> Result<(), Error> {
 /// Get the current popup state
 #[tauri::command]
 pub fn get_popup_state(state: State<SharedPopupState>) -> Result<serde_json::Value, Error> {
-    let state = state.0.lock().map_err(|_| {
-        Error::Io(std::io::Error::other(
-            "Failed to lock popup state",
-        ))
-    })?;
+    let state = state
+        .0
+        .lock()
+        .map_err(|_| Error::Io(std::io::Error::other("Failed to lock popup state")))?;
 
     Ok(serde_json::json!({
         "isVisible": state.is_visible,
@@ -266,8 +275,44 @@ pub fn get_popup_state(state: State<SharedPopupState>) -> Result<serde_json::Val
 }
 
 /// Accept the suggestion and apply to the currently selected text.
+///
+/// The macOS focus-return + paste choreography involves sleeps and blocking
+/// subprocess calls that can take over a second. This command is `async` and
+/// runs that work on a blocking worker thread so the main thread (NSWindow
+/// event processing, other commands) stays responsive.
 #[tauri::command]
-pub fn accept_suggestion(
+pub async fn accept_suggestion(
+    app: AppHandle,
+    text: String,
+    offset: Option<usize>,
+    char_length: Option<usize>,
+) -> Result<(), Error> {
+    // Drop duplicate accepts (Enter + click firing twice) instead of running
+    // two paste choreographies back to back.
+    if REPLACEMENT_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        log::warn!("accept_suggestion already in progress, ignoring duplicate");
+        return Ok(());
+    }
+
+    let result = match tauri::async_runtime::spawn_blocking(move || {
+        accept_suggestion_blocking(app, text, offset, char_length)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(e) => Err(Error::InputSimulation(format!(
+            "accept task join failed: {e}"
+        ))),
+    };
+
+    REPLACEMENT_IN_FLIGHT.store(false, Ordering::SeqCst);
+    result
+}
+
+fn accept_suggestion_blocking(
     app: AppHandle,
     text: String,
     offset: Option<usize>,
@@ -323,9 +368,16 @@ fn apply_suggestion_to_selection_macos(
     offset: Option<usize>,
     char_length: Option<usize>,
 ) -> Result<(), Error> {
-    let source_app_name = app
+    let (source_app_name, source_bundle_id) = app
         .try_state::<SharedPopupState>()
-        .and_then(|state| state.0.lock().ok().and_then(|s| s.source_app_name.clone()));
+        .and_then(|state| {
+            state
+                .0
+                .lock()
+                .ok()
+                .map(|s| (s.source_app_name.clone(), s.source_bundle_id.clone()))
+        })
+        .unwrap_or((None, None));
 
     let mut clipboard = arboard::Clipboard::new()
         .map_err(|e| Error::Clipboard(format!("Failed to access clipboard: {e}")))?;
@@ -336,32 +388,27 @@ fn apply_suggestion_to_selection_macos(
         .map_err(|e| Error::Clipboard(format!("Failed to set clipboard text: {e}")))?;
 
     // Hide popup so focus can return to the source app.
-    hide_popup(app)?;
+    hide_popup(app.clone())?;
     thread::sleep(Duration::from_millis(80));
 
-    if let Some(ref app_name) = source_app_name {
-        if app_name != "autocorrect-app" && app_name != "AutoCorrect" {
-            activate_app_macos(app_name)?;
+    if !source_is_self_macos(&app, &source_app_name, &source_bundle_id) {
+        // Bring the source app back to the front. Prefer the exact bundle id
+        // (single NSRunningApplication call); fall back to the name-based
+        // osascript for state captured before bundle ids were tracked.
+        activate_source_app_macos(source_bundle_id.as_deref(), source_app_name.as_deref())?;
 
-            // Wait until the source app is actually frontmost using NSWorkspace
-            // (instant ObjC call, no subprocess overhead).
-            let deadline = std::time::Instant::now();
-            loop {
-                thread::sleep(Duration::from_millis(30));
-                if is_app_frontmost_macos_pub(app_name) {
-                    break;
-                }
-                if deadline.elapsed().as_millis() > 600 {
-                    log::warn!(
-                        "[accept] activate timeout: {} still not frontmost",
-                        app_name
-                    );
-                    break;
-                }
-            }
-            // Extra settle time so the AX focused-element state catches up.
-            thread::sleep(Duration::from_millis(80));
-        }
+        // Wait until the source app is actually frontmost (instant ObjC call,
+        // no subprocess overhead). On timeout we ABORT instead of pasting:
+        // pasting into whatever app happens to be frontmost would corrupt
+        // the wrong app's text.
+        wait_source_frontmost_macos(
+            source_bundle_id.as_deref(),
+            source_app_name.as_deref(),
+            600,
+            "[accept]",
+        )?;
+        // Extra settle time so the AX focused-element state catches up.
+        thread::sleep(Duration::from_millis(80));
     }
 
     // Now that the source app has focus, select the exact typo range so the
@@ -417,6 +464,7 @@ fn apply_suggestion_to_selection_macos(
             offset: start,
             char_length: len,
             source_app_name: source_app_name.clone(),
+            source_bundle_id: source_bundle_id.clone(),
         });
         log::info!(
             "[accept] saved undo: offset={} len={} replacement='{}'",
@@ -469,6 +517,161 @@ pub fn is_app_frontmost_macos_pub(app_name: &str) -> bool {
         }
         let rust_str = std::ffi::CStr::from_ptr(ns_str).to_string_lossy();
         rust_str.contains(app_name) || app_name.contains(rust_str.as_ref())
+    }
+}
+
+/// Fast NSWorkspace-based frontmost app info: `(localizedName, bundleIdentifier)`.
+/// No subprocess — replaces the two osascript calls that added 100-300ms to
+/// every popup show.
+#[cfg(target_os = "macos")]
+pub fn frontmost_app_info_nsworkspace() -> Option<(String, String)> {
+    use objc2::msg_send;
+    use objc2::runtime::AnyClass;
+
+    type Id = *mut objc2::runtime::AnyObject;
+
+    unsafe {
+        let workspace_class = AnyClass::get("NSWorkspace").expect("NSWorkspace not found");
+        let workspace: Id = msg_send![workspace_class, sharedWorkspace];
+        let front_app: Id = msg_send![workspace, frontmostApplication];
+        if front_app.is_null() {
+            return None;
+        }
+
+        let ns_to_string = |obj: Id| -> Option<String> {
+            if obj.is_null() {
+                return None;
+            }
+            let utf8: *const std::os::raw::c_char = msg_send![obj, UTF8String];
+            if utf8.is_null() {
+                return None;
+            }
+            Some(
+                std::ffi::CStr::from_ptr(utf8)
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        };
+
+        let name: Id = msg_send![front_app, localizedName];
+        let bundle: Id = msg_send![front_app, bundleIdentifier];
+        let name = ns_to_string(name)?;
+        let bundle = ns_to_string(bundle)?;
+        Some((name, bundle))
+    }
+}
+
+/// Exact bundle-id frontmost check (no substring matching).
+#[cfg(target_os = "macos")]
+pub fn is_bundle_frontmost_macos(bundle_id: &str) -> bool {
+    frontmost_app_info_nsworkspace().is_some_and(|(_, b)| b == bundle_id)
+}
+
+/// Activate the running app with the given bundle id via NSRunningApplication.
+/// Returns false when no running app matches (caller falls back to name-based
+/// activation).
+#[cfg(target_os = "macos")]
+pub fn activate_app_bundle_macos(bundle_id: &str) -> bool {
+    use objc2::msg_send;
+    use objc2::runtime::AnyClass;
+
+    type Id = *mut objc2::runtime::AnyObject;
+
+    let c_bundle = match std::ffi::CString::new(bundle_id) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    unsafe {
+        let nsstring_class = AnyClass::get("NSString").expect("NSString not found");
+        let ns_bundle: Id = msg_send![nsstring_class, stringWithUTF8String: c_bundle.as_ptr()];
+        let running_class =
+            AnyClass::get("NSRunningApplication").expect("NSRunningApplication not found");
+        let app: Id = msg_send![running_class, runningApplicationWithBundleIdentifier: ns_bundle];
+        if app.is_null() {
+            return false;
+        }
+        // NSApplicationActivateIgnoringOtherApps
+        let ok: bool = msg_send![app, activateWithOptions: 4u64];
+        ok
+    }
+}
+
+/// True when the recorded source app is AutoCorrect itself, in which case we
+/// skip the activate/frontmost dance (the popup was triggered from our own
+/// window, e.g. the spell checker tab).
+#[cfg(target_os = "macos")]
+fn source_is_self_macos(
+    app: &AppHandle,
+    source_app_name: &Option<String>,
+    source_bundle_id: &Option<String>,
+) -> bool {
+    let name_is_self = source_app_name
+        .as_deref()
+        .is_some_and(|n| n == "autocorrect-app" || n == "AutoCorrect");
+    let self_bundle = app.config().identifier.clone();
+    let bundle_is_self = source_bundle_id
+        .as_deref()
+        .is_some_and(|b| !b.is_empty() && b == self_bundle);
+    name_is_self || bundle_is_self
+}
+
+/// Activate the source app, preferring the exact bundle id over the
+/// name-based osascript fallback.
+#[cfg(target_os = "macos")]
+fn activate_source_app_macos(
+    source_bundle_id: Option<&str>,
+    source_app_name: Option<&str>,
+) -> Result<(), Error> {
+    if let Some(bundle) = source_bundle_id {
+        if !bundle.is_empty() && activate_app_bundle_macos(bundle) {
+            return Ok(());
+        }
+    }
+    if let Some(name) = source_app_name {
+        if !name.is_empty() {
+            return activate_app_macos(name);
+        }
+    }
+    Ok(())
+}
+
+/// Poll until the source app is frontmost (exact bundle-id match when
+/// available, name-based otherwise). Returns `Err` on timeout so the caller
+/// can abort instead of pasting into the wrong app.
+#[cfg(target_os = "macos")]
+fn wait_source_frontmost_macos(
+    source_bundle_id: Option<&str>,
+    source_app_name: Option<&str>,
+    timeout_ms: u128,
+    context: &str,
+) -> Result<(), Error> {
+    let is_frontmost = |bundle: Option<&str>, name: Option<&str>| -> bool {
+        if let Some(b) = bundle.filter(|b| !b.is_empty()) {
+            return is_bundle_frontmost_macos(b);
+        }
+        if let Some(n) = name {
+            return is_app_frontmost_macos_pub(n);
+        }
+        // Nothing known about the source app; assume we can proceed.
+        true
+    };
+
+    let deadline = std::time::Instant::now();
+    loop {
+        thread::sleep(Duration::from_millis(30));
+        if is_frontmost(source_bundle_id, source_app_name) {
+            return Ok(());
+        }
+        if deadline.elapsed().as_millis() > timeout_ms {
+            log::warn!(
+                "{context}: source app still not frontmost after {}ms, aborting",
+                timeout_ms
+            );
+            return Err(Error::InputSimulation(
+                "Source app is not frontmost; paste aborted".to_string(),
+            ));
+        }
     }
 }
 
@@ -529,30 +732,53 @@ fn activate_app_macos(app_name: &str) -> Result<(), Error> {
 
 /// Undo the last auto-applied replacement by reverting the text at the
 /// recorded offset. Only the most recent replacement is remembered.
+///
+/// Like `accept_suggestion`, the choreography runs on a blocking worker
+/// thread so the main thread stays responsive.
 #[tauri::command]
-pub fn undo_last_replacement(app: AppHandle) -> Result<(), Error> {
-    let entry = peek_last_replacement().ok_or_else(|| {
-        Error::InputSimulation("No recent replacement to undo".to_string())
-    })?;
+pub async fn undo_last_replacement(app: AppHandle) -> Result<(), Error> {
+    if REPLACEMENT_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        log::warn!("A replacement operation is already in progress, ignoring undo");
+        return Ok(());
+    }
+
+    let result =
+        match tauri::async_runtime::spawn_blocking(move || undo_last_replacement_blocking(app))
+            .await
+        {
+            Ok(result) => result,
+            Err(e) => Err(Error::InputSimulation(format!(
+                "undo task join failed: {e}"
+            ))),
+        };
+
+    REPLACEMENT_IN_FLIGHT.store(false, Ordering::SeqCst);
+    result
+}
+
+fn undo_last_replacement_blocking(app: AppHandle) -> Result<(), Error> {
+    let entry = peek_last_replacement()
+        .ok_or_else(|| Error::InputSimulation("No recent replacement to undo".to_string()))?;
 
     #[cfg(target_os = "macos")]
     {
-        if let Some(ref app_name) = entry.source_app_name {
-            if app_name != "autocorrect-app" && app_name != "AutoCorrect" {
-                let _ = activate_app_macos(app_name);
-                let deadline = std::time::Instant::now();
-                loop {
-                    thread::sleep(Duration::from_millis(30));
-                    if is_app_frontmost_macos_pub(app_name) {
-                        break;
-                    }
-                    if deadline.elapsed().as_millis() > 600 {
-                        log::warn!("[undo] activate timeout");
-                        break;
-                    }
-                }
-                thread::sleep(Duration::from_millis(80));
-            }
+        if !source_is_self_macos(&app, &entry.source_app_name, &entry.source_bundle_id) {
+            activate_source_app_macos(
+                entry.source_bundle_id.as_deref(),
+                entry.source_app_name.as_deref(),
+            )?;
+            // Abort on timeout: reverting text into the wrong app would
+            // silently corrupt it.
+            wait_source_frontmost_macos(
+                entry.source_bundle_id.as_deref(),
+                entry.source_app_name.as_deref(),
+                600,
+                "[undo]",
+            )?;
+            thread::sleep(Duration::from_millis(80));
         }
 
         let mut clipboard = arboard::Clipboard::new()
@@ -646,8 +872,25 @@ pub fn reject_suggestion(app: AppHandle) -> Result<(), Error> {
 /// 2. Falls back to clipboard if Accessibility is unavailable
 /// 3. Runs spell check on the text
 /// 4. Shows popup with suggestions if corrections are needed
+///
+/// Re-entrant triggers (hotkey pressed while a previous run is still in
+/// flight, e.g. a slow AI-enabled check) are dropped instead of queueing
+/// ghost popups that would appear after the first one completes.
 #[tauri::command]
 pub fn trigger_spell_check_workflow(app: AppHandle, x: i32, y: i32) -> Result<(), Error> {
+    if WORKFLOW_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        log::info!("Spell check workflow already in progress, dropping trigger");
+        return Ok(());
+    }
+    let result = trigger_spell_check_workflow_inner(app, x, y);
+    WORKFLOW_IN_FLIGHT.store(false, Ordering::SeqCst);
+    result
+}
+
+fn trigger_spell_check_workflow_inner(app: AppHandle, x: i32, y: i32) -> Result<(), Error> {
     use crate::commands::spellcheck::spell_check_sync;
     use crate::text_selection::{get_selected_text, TextSelectionError};
 
