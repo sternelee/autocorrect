@@ -593,28 +593,44 @@ pub fn is_bundle_frontmost_macos(bundle_id: &str) -> bool {
 /// activation).
 #[cfg(target_os = "macos")]
 pub fn activate_app_bundle_macos(bundle_id: &str) -> bool {
+    use core_foundation::array::{CFArrayGetCount, CFArrayRef};
     use objc2::msg_send;
     use objc2::runtime::AnyClass;
 
     type Id = *mut objc2::runtime::AnyObject;
 
-    let c_bundle = match std::ffi::CString::new(bundle_id) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-
     unsafe {
-        let nsstring_class = AnyClass::get("NSString").expect("NSString not found");
-        let ns_bundle: Id = msg_send![nsstring_class, stringWithUTF8String: c_bundle.as_ptr()];
-        let running_class =
-            AnyClass::get("NSRunningApplication").expect("NSRunningApplication not found");
-        let app: Id = msg_send![running_class, runningApplicationWithBundleIdentifier: ns_bundle];
-        if app.is_null() {
-            return false;
+        // NOTE: `+[NSRunningApplication runningApplicationWithBundleIdentifier:]`
+        // is rejected by objc2's message-send verification ("method not
+        // found"), so enumerate NSWorkspace.runningApplications instead.
+        // All messages below are instance methods.
+        let workspace_class = AnyClass::get("NSWorkspace").expect("NSWorkspace not found");
+        let workspace: Id = msg_send![workspace_class, sharedWorkspace];
+        let apps: Id = msg_send![workspace, runningApplications];
+
+        // On modern macOS some NSWorkspace collections are Swift Arrays
+        // bridged to CFArray; use CFArrayGetCount for a safe count.
+        let count = CFArrayGetCount(apps as CFArrayRef);
+
+        for idx in 0..count {
+            let app: Id = msg_send![apps, objectAtIndex: idx];
+            let bundle: Id = msg_send![app, bundleIdentifier];
+            if bundle.is_null() {
+                continue;
+            }
+            let utf8: *const std::os::raw::c_char = msg_send![bundle, UTF8String];
+            if utf8.is_null() {
+                continue;
+            }
+            let current = std::ffi::CStr::from_ptr(utf8).to_string_lossy();
+            if current == bundle_id {
+                // NSApplicationActivateIgnoringOtherApps
+                let ok: bool = msg_send![app, activateWithOptions: 4u64];
+                return ok;
+            }
         }
-        // NSApplicationActivateIgnoringOtherApps
-        let ok: bool = msg_send![app, activateWithOptions: 4u64];
-        ok
+
+        false
     }
 }
 
