@@ -361,6 +361,96 @@ fn accept_suggestion_blocking(
     Ok(())
 }
 
+/// Verify the replacement actually landed in the focused element's value.
+/// Requires BOTH a change from the pre-write snapshot AND the replacement
+/// text at the expected UTF-16 offset. The change check is mandatory: for
+/// doubled-letter fixes the replacement is a prefix of the typo
+/// ("helloo" -> "hello"), so the UNCHANGED text also passes a bare offset
+/// check. When the value cannot be read at all, assumes success to preserve
+/// behaviour for apps that don't expose AXValue.
+#[cfg(target_os = "macos")]
+fn replacement_landed(
+    value_before: Option<&str>,
+    replacement: &str,
+    offset: Option<usize>,
+) -> bool {
+    let current = match crate::macos_text::get_focused_element_value() {
+        Ok(v) => v,
+        Err(_) => {
+            log::info!("[accept] cannot read value to verify, assuming replaced");
+            return true;
+        }
+    };
+    verify_replacement(&current, value_before, replacement, offset)
+}
+
+/// Pure decision core of [`replacement_landed`] so the verification matrix
+/// (dropped write / landed write / prefix-typo pitfall) is unit-testable.
+#[cfg(target_os = "macos")]
+fn verify_replacement(
+    current: &str,
+    value_before: Option<&str>,
+    replacement: &str,
+    offset: Option<usize>,
+) -> bool {
+    // The value must differ from the pre-write snapshot, otherwise the write
+    // was silently dropped (Electron/Chromium report success without
+    // applying).
+    if let Some(before) = value_before {
+        if current == before {
+            return false;
+        }
+    }
+
+    let current_u16: Vec<u16> = current.encode_utf16().collect();
+    if let Some(start) = offset {
+        let repl_len = replacement.encode_utf16().count();
+        if start + repl_len <= current_u16.len() {
+            let slice = String::from_utf16_lossy(&current_u16[start..start + repl_len]);
+            return slice == replacement;
+        }
+    }
+    // Offset out of range (e.g. partial-text AX fallback) — the change
+    // detection above is the best we can do; treat any change as landed.
+    true
+}
+
+/// Rewrite `full_text` replacing the UTF-16 range [offset, offset+char_length)
+/// with `replacement`. Only proceeds when the current slice equals
+/// `expected_original`, so a stale/misaligned offset can never corrupt the
+/// user's text.
+#[cfg(target_os = "macos")]
+fn rewrite_utf16_range(
+    full_text: &str,
+    offset: Option<usize>,
+    char_length: Option<usize>,
+    expected_original: &str,
+    replacement: &str,
+) -> Option<String> {
+    let (start, len) = (offset?, char_length?);
+    if expected_original.is_empty() {
+        return None;
+    }
+    let units: Vec<u16> = full_text.encode_utf16().collect();
+    if start + len > units.len() {
+        return None;
+    }
+    let slice = String::from_utf16_lossy(&units[start..start + len]);
+    if slice != expected_original {
+        log::warn!(
+            "[accept] AXValue rewrite skipped: slice {:?} != selected {:?}",
+            slice,
+            expected_original
+        );
+        return None;
+    }
+    let mut out = String::with_capacity(full_text.len());
+    out.push_str(&String::from_utf16_lossy(&units[..start]));
+    out.push_str(replacement);
+    out.push_str(&String::from_utf16_lossy(&units[start + len..]));
+    Some(out)
+}
+
 #[cfg(target_os = "macos")]
 fn apply_suggestion_to_selection_macos(
     app: AppHandle,
@@ -433,16 +523,64 @@ fn apply_suggestion_to_selection_macos(
 
     // Capture original word before replacing (selection is already active).
     let original_word = crate::macos_text::get_selected_text().unwrap_or_default();
+    log::info!("[accept] original selection: {:?}", original_word);
+
+    // Snapshot the pre-replacement value so we can verify the write landed.
+    let value_before = crate::macos_text::get_focused_element_value().ok();
+    if let Some(v) = value_before.as_ref() {
+        log::info!("[accept] focused value before write: {:?}", v);
+    }
 
     // Primary replacement path: write AXSelectedText directly. No clipboard
     // roundtrip, no simulated keystrokes, no clipboard to restore.
-    if let Err(e) = crate::macos_text::set_selected_text(text) {
-        // Fallback: clipboard + simulated ⌘V paste for apps whose text views
-        // do not accept AXSelectedText writes.
-        log::warn!(
-            "[accept] AXSelectedText write failed ({}), falling back to clipboard paste",
-            e
-        );
+    //
+    // Electron/Chromium text fields sometimes return kAXErrorSuccess for
+    // AXSelectedText writes they silently drop, so err==0 is NOT proof the
+    // text changed — always verify against the element's value afterwards.
+    let mut replaced = false;
+    match crate::macos_text::set_selected_text(text) {
+        Ok(()) => {
+            thread::sleep(Duration::from_millis(60));
+            if replacement_landed(value_before.as_deref(), text, offset) {
+                log::info!("[accept] replaced selection via AXSelectedText (verified)");
+                replaced = true;
+            } else {
+                log::warn!("[accept] AXSelectedText write reported success but text unchanged");
+            }
+        }
+        Err(e) => {
+            log::warn!("[accept] AXSelectedText write failed ({e})");
+        }
+    }
+
+    // Fallback 1: rewrite the full AXValue with the typo replaced. Works on
+    // Chromium/Electron contenteditable fields that ignore AXSelectedText.
+    if !replaced {
+        if let Some(rewritten) = value_before
+            .as_deref()
+            .and_then(|v| rewrite_utf16_range(v, offset, char_length, &original_word, text))
+        {
+            match crate::macos_text::set_focused_element_value(&rewritten) {
+                Ok(()) => {
+                    thread::sleep(Duration::from_millis(60));
+                    if replacement_landed(value_before.as_deref(), text, offset) {
+                        log::info!("[accept] replaced via AXValue rewrite (verified)");
+                        replaced = true;
+                    } else {
+                        log::warn!("[accept] AXValue rewrite reported success but text unchanged");
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[accept] AXValue rewrite failed ({e})");
+                }
+            }
+        }
+    }
+
+    // Fallback 2: clipboard + simulated ⌘V paste for apps whose text views
+    // do not accept any AX writes.
+    if !replaced {
+        log::warn!("[accept] falling back to clipboard paste");
 
         let mut clipboard = arboard::Clipboard::new()
             .map_err(|e| Error::Clipboard(format!("Failed to access clipboard: {e}")))?;
@@ -474,8 +612,6 @@ fn apply_suggestion_to_selection_macos(
         } else {
             log::info!("[accept] pasteboard changed by someone else, keeping current clipboard");
         }
-    } else {
-        log::info!("[accept] replaced selection via AXSelectedText");
     }
 
     // Save undo snapshot.
@@ -1024,4 +1160,94 @@ fn trigger_spell_check_workflow_inner(app: AppHandle, x: i32, y: i32) -> Result<
     }
 
     Ok(())
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_verify_replacement_rejects_silently_dropped_write() {
+        // Regression: Electron accepts the AXSelectedText write (err=0) but
+        // drops it. The replacement "hello" is a prefix of the typo "helloo",
+        // so a bare offset check falsely passes — the change check must win.
+        assert!(!verify_replacement(
+            "helloo",
+            Some("helloo"),
+            "hello",
+            Some(0)
+        ));
+        assert!(!verify_replacement(
+            "worldd",
+            Some("worldd"),
+            "world",
+            Some(0)
+        ));
+    }
+
+    #[test]
+    fn test_verify_replacement_accepts_landed_write() {
+        assert!(verify_replacement(
+            "hello",
+            Some("helloo"),
+            "hello",
+            Some(0)
+        ));
+        // Typo mid-sentence: "see helloo there" -> "see hello there"
+        assert!(verify_replacement(
+            "see hello there",
+            Some("see helloo there"),
+            "hello",
+            Some(4)
+        ));
+    }
+
+    #[test]
+    fn test_verify_replacement_rejects_wrong_position() {
+        // Value changed but the replacement is not at the expected offset.
+        assert!(!verify_replacement(
+            "xxhelloo",
+            Some("helloo"),
+            "hello",
+            Some(0)
+        ));
+    }
+
+    #[test]
+    fn test_verify_replacement_without_snapshot_falls_back_to_offset() {
+        // Apps whose AXValue could not be read before the write: trust the
+        // offset check alone.
+        assert!(verify_replacement("hello", None, "hello", Some(0)));
+    }
+
+    #[test]
+    fn test_rewrite_utf16_range() {
+        assert_eq!(
+            rewrite_utf16_range("helloo world", Some(0), Some(6), "helloo", "hello"),
+            Some("hello world".to_string())
+        );
+        assert_eq!(
+            rewrite_utf16_range("see helloo there", Some(4), Some(6), "helloo", "hello"),
+            Some("see hello there".to_string())
+        );
+    }
+
+    #[test]
+    fn test_rewrite_utf16_range_guards() {
+        // Original word mismatch at the slice — refuse to rewrite.
+        assert_eq!(
+            rewrite_utf16_range("helloo", Some(0), Some(6), "wrong", "hello"),
+            None
+        );
+        // Out-of-range offset — refuse.
+        assert_eq!(
+            rewrite_utf16_range("hi", Some(5), Some(2), "hi", "hello"),
+            None
+        );
+        // Empty expected original — refuse (selection was never verified).
+        assert_eq!(
+            rewrite_utf16_range("helloo", Some(0), Some(6), "", "hello"),
+            None
+        );
+    }
 }

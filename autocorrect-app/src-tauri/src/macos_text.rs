@@ -44,7 +44,22 @@ pub struct FocusedTextContext {
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXUIElementCreateSystemWide() -> Id;
+    fn AXUIElementSetMessagingTimeout(element: Id, timeout: f64) -> i32;
     fn AXIsProcessTrusted() -> bool;
+}
+
+/// Per-message timeout for AX calls. Without it, a hung target app (e.g. a
+/// busy Electron renderer mid-restart) can block an AXUIElement call — and
+/// with it the whole poll loop — indefinitely.
+const AX_MESSAGING_TIMEOUT_SECS: f64 = 1.5;
+
+/// Create the system-wide AX element with the messaging timeout applied.
+fn create_system_wide() -> Id {
+    unsafe {
+        let el = AXUIElementCreateSystemWide();
+        AXUIElementSetMessagingTimeout(el, AX_MESSAGING_TIMEOUT_SECS);
+        el
+    }
 }
 
 /// A handle to the focused AX element captured once per poll cycle.
@@ -69,7 +84,7 @@ impl AXPollSession {
             return None;
         }
         unsafe {
-            let system = AXUIElementCreateSystemWide();
+            let system = create_system_wide();
             let mut focused: Id = NIL;
             let err = AXUIElementCopyAttributeValue(
                 system,
@@ -522,7 +537,7 @@ pub fn get_focused_element_data(range_start: usize, range_len: usize) -> Result<
     }
 
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
 
         // 1. 获取焦点元素
@@ -598,7 +613,7 @@ pub fn get_focused_text_context() -> Result<FocusedTextContext> {
         return Err(AccessibilityError::PermissionDenied);
     }
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
         let err = AXUIElementCopyAttributeValue(
             system_element,
@@ -622,7 +637,7 @@ pub fn get_focused_range_bounds(range_start: usize, range_len: usize) -> Result<
     }
 
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
         let err = AXUIElementCopyAttributeValue(
             system_element,
@@ -702,7 +717,7 @@ pub fn get_focused_caret_bounds() -> Result<CGRect> {
     }
 
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
         let err = AXUIElementCopyAttributeValue(
             system_element,
@@ -755,7 +770,7 @@ pub fn get_focused_element_bounds() -> Result<CGRect> {
     }
 
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
         let err = AXUIElementCopyAttributeValue(
             system_element,
@@ -799,7 +814,7 @@ pub fn get_selected_text() -> Result<String> {
     }
 
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
 
         let err = AXUIElementCopyAttributeValue(
@@ -841,7 +856,7 @@ pub fn get_selected_text_bounds() -> Result<(i32, i32, i32, i32)> {
     }
 
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
 
         let err = AXUIElementCopyAttributeValue(
@@ -965,7 +980,7 @@ pub fn get_focused_window_position() -> Result<(f64, f64)> {
     }
 
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
 
         let err = AXUIElementCopyAttributeValue(
@@ -1223,7 +1238,7 @@ pub fn select_text_range(start: usize, length: usize) -> Result<()> {
     }
 
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
         let err = AXUIElementCopyAttributeValue(
             system_element,
@@ -1276,7 +1291,7 @@ pub fn set_selected_text(text: &str) -> Result<()> {
     }
 
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
         let err = AXUIElementCopyAttributeValue(
             system_element,
@@ -1306,6 +1321,79 @@ pub fn set_selected_text(text: &str) -> Result<()> {
     }
 }
 
+/// Read the full text (AXValue) of the system-wide focused element.
+/// Used to verify whether an AX write actually landed — Electron/Chromium
+/// sometimes report kAXErrorSuccess for `AXSelectedText` writes it silently
+/// drops.
+pub fn get_focused_element_value() -> Result<String> {
+    if !unsafe { AXIsProcessTrusted() } {
+        return Err(AccessibilityError::PermissionDenied);
+    }
+
+    unsafe {
+        let system_element = create_system_wide();
+        let mut focused_element: Id = NIL;
+        let err = AXUIElementCopyAttributeValue(
+            system_element,
+            to_ax_string("AXFocusedUIElement"),
+            &mut focused_element,
+        );
+        if err != 0 || focused_element.is_null() {
+            return Err(AccessibilityError::NoFocusedElement);
+        }
+
+        let mut value: Id = NIL;
+        let err_val =
+            AXUIElementCopyAttributeValue(focused_element, to_ax_string("AXValue"), &mut value);
+        if err_val != 0 || value.is_null() {
+            return Err(AccessibilityError::ApiError(format!(
+                "AXValue read failed: {}",
+                err_val
+            )));
+        }
+        Ok(from_ax_string(value))
+    }
+}
+
+/// Replace the entire text (AXValue) of the system-wide focused element.
+/// Fallback path for apps that accept-but-ignore `AXSelectedText` writes;
+/// Chromium/Electron text fields honour AXValue writes.
+pub fn set_focused_element_value(text: &str) -> Result<()> {
+    if !unsafe { AXIsProcessTrusted() } {
+        return Err(AccessibilityError::PermissionDenied);
+    }
+
+    unsafe {
+        let system_element = create_system_wide();
+        let mut focused_element: Id = NIL;
+        let err = AXUIElementCopyAttributeValue(
+            system_element,
+            to_ax_string("AXFocusedUIElement"),
+            &mut focused_element,
+        );
+        if err != 0 || focused_element.is_null() {
+            return Err(AccessibilityError::NoFocusedElement);
+        }
+
+        let err_set = AXUIElementSetAttributeValue(
+            focused_element,
+            to_ax_string("AXValue"),
+            to_ax_string(text),
+        );
+        if err_set != 0 {
+            log::warn!(
+                "[DIAG] set_focused_element_value failed with err={}",
+                err_set
+            );
+            return Err(AccessibilityError::ApiError(format!(
+                "AXValue write failed: {}",
+                err_set
+            )));
+        }
+        Ok(())
+    }
+}
+
 /// True when the system-wide focused AX element is available (non-null).
 fn focused_element_available() -> bool {
     if !unsafe { AXIsProcessTrusted() } {
@@ -1313,7 +1401,7 @@ fn focused_element_available() -> bool {
     }
 
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused: Id = NIL;
         let err = AXUIElementCopyAttributeValue(
             system_element,
@@ -1413,4 +1501,85 @@ pub fn seconds_since_last_mouse_down() -> f64 {
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod ax_probe_tests {
+    use super::*;
+
+    fn focused() -> Id {
+        unsafe {
+            let system_element = create_system_wide();
+            let mut focused_element: Id = NIL;
+            let err = AXUIElementCopyAttributeValue(
+                system_element,
+                to_ax_string("AXFocusedUIElement"),
+                &mut focused_element,
+            );
+            assert_eq!(err, 0, "AXFocusedUIElement copy failed");
+            focused_element
+        }
+    }
+
+    fn read_attr(element: Id, attr: &str) -> Option<String> {
+        unsafe {
+            let mut value: Id = NIL;
+            let err = AXUIElementCopyAttributeValue(element, to_ax_string(attr), &mut value);
+            if err != 0 || value.is_null() {
+                return None;
+            }
+            Some(from_ax_string(value))
+        }
+    }
+
+    /// Manual probe against the live focused element (run with a text field
+    /// focused, e.g. Slack draft): cargo test --lib probe_ax_writes -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn probe_ax_writes() {
+        unsafe {
+            let el = focused();
+            println!("role  = {:?}", read_attr(el, "AXRole"));
+            println!("subrole = {:?}", read_attr(el, "AXSubrole"));
+            let value_before = read_attr(el, "AXValue").expect("focused element has no AXValue");
+            println!("value_before = {:?}", value_before);
+
+            // 1) Select the whole text via AXSelectedTextRange
+            let len = value_before.encode_utf16().count() as i64;
+            let range = CFRange {
+                location: 0,
+                length: len,
+            };
+            let ax_range = AXValueCreate(
+                K_AXVALUE_CFRANGE_TYPE,
+                &range as *const _ as *const std::ffi::c_void,
+            );
+            let err_sel =
+                AXUIElementSetAttributeValue(el, to_ax_string("AXSelectedTextRange"), ax_range);
+            println!("set AXSelectedTextRange(0,{len}) -> err={err_sel}");
+            println!(
+                "AXSelectedText after range set = {:?}",
+                read_attr(el, "AXSelectedText")
+            );
+
+            // 2) Replace the selection via AXSelectedText
+            let err_txt = AXUIElementSetAttributeValue(
+                el,
+                to_ax_string("AXSelectedText"),
+                to_ax_string("PROBE-REPLACED"),
+            );
+            println!("set AXSelectedText('PROBE-REPLACED') -> err={err_txt}");
+            let value_after = read_attr(el, "AXValue");
+            println!("value_after_selected_text_write = {:?}", value_after);
+
+            // 3) Try a full AXValue write (restore original text)
+            let err_val = AXUIElementSetAttributeValue(
+                el,
+                to_ax_string("AXValue"),
+                to_ax_string(&value_before),
+            );
+            println!("set AXValue(original) -> err={err_val}");
+            println!("value_after_axvalue_write = {:?}", read_attr(el, "AXValue"));
+        }
+    }
 }
