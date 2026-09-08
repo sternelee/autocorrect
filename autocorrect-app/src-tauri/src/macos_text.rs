@@ -460,15 +460,147 @@ unsafe fn ax_selected_text_bounds_for_element(
                         final_rect.size.width as i32,
                         final_rect.size.height as i32,
                     ));
-                } else {
-                    // Fallback: mouse position
-                    let (mx, my) = get_cursor_position_nsevent();
-                    return Ok((mx, my, 100, 20));
                 }
             }
         }
     }
-    Err(AccessibilityError::NoTextSelected)
+    ax_selection_bounds_fallback(
+        focused_element,
+        window_pos,
+        selected_range.location,
+        selected_range.length,
+    )
+}
+
+/// Fallback chain for selection bounds when AXBoundsForRange fails for the
+/// whole selection — Electron/Chromium often return a 0x0 rect for
+/// multi-character ranges. Try the FIRST CHARACTER of the selection, then
+/// the focused element's own frame (so the AI icon lands at the input
+/// instead of chasing the mouse), and only then the pointer.
+#[cfg(target_os = "macos")]
+unsafe fn ax_selection_bounds_fallback(
+    focused_element: Id,
+    window_pos: Option<(f64, f64)>,
+    selection_start: i64,
+    selection_len: i64,
+) -> Result<(i32, i32, i32, i32)> {
+    // 1) Bounds of just the first character of the selection.
+    let char_range = CFRange {
+        location: selection_start,
+        length: 1,
+    };
+    let ax_range = AXValueCreate(
+        K_AXVALUE_CFRANGE_TYPE,
+        &char_range as *const _ as *const std::ffi::c_void,
+    );
+    let mut bounds_value: Id = NIL;
+    let err_bounds = AXUIElementCopyParameterizedAttributeValue(
+        focused_element,
+        to_ax_string("AXBoundsForRange"),
+        ax_range,
+        &mut bounds_value,
+    );
+    if err_bounds == 0 && !bounds_value.is_null() {
+        let mut rect = CGRect::default();
+        if AXValueGetValue(
+            bounds_value,
+            K_AXVALUE_CGRECT_TYPE,
+            &mut rect as *mut _ as *mut std::ffi::c_void,
+        ) && rect.size.width > 0.0
+            && rect.size.height > 0.0
+        {
+            let mut final_rect = rect;
+            if let Some(win_pos) = window_pos {
+                if is_window_relative_coords(rect, win_pos) {
+                    final_rect.origin.x += win_pos.0;
+                    final_rect.origin.y += win_pos.1;
+                }
+            }
+            log::info!(
+                "[DIAG] selection bounds via first char: ({:.0},{:.0},{:.0},{:.0})",
+                final_rect.origin.x,
+                final_rect.origin.y,
+                final_rect.size.width,
+                final_rect.size.height
+            );
+            return Ok((
+                final_rect.origin.x as i32,
+                final_rect.origin.y as i32,
+                final_rect.size.width as i32,
+                final_rect.size.height as i32,
+            ));
+        }
+    }
+
+    // 2) The focused element's own frame, with the selection's position
+    // ESTIMATED inside it. Returning the full frame would place the icon at
+    // the input's far right edge — over a thousand px away from a selection
+    // at the start of the text (observed on Slack's Electron composer).
+    if let Ok(frame) = ax_element_bounds_for_element(focused_element) {
+        if frame.size.width > 0.0 && frame.size.height > 0.0 {
+            let sel_x = estimate_selection_x_in_frame(
+                focused_element,
+                &frame,
+                selection_start,
+                selection_len,
+            );
+            log::info!(
+                "[DIAG] selection bounds via element frame: frame=({:.0},{:.0},{:.0},{:.0}) est_sel_x={:.0}",
+                frame.origin.x,
+                frame.origin.y,
+                frame.size.width,
+                frame.size.height,
+                sel_x
+            );
+            // Width is a small nominal value: callers anchor the icon at
+            // x + width, and the estimate is already where the selection
+            // ENDS visually.
+            return Ok((
+                sel_x as i32,
+                frame.origin.y as i32,
+                20,
+                frame.size.height as i32,
+            ));
+        }
+    }
+
+    // 3) Mouse as a last resort.
+    log::info!("[DIAG] selection bounds via mouse fallback");
+    let (mx, my) = get_cursor_position_nsevent();
+    Ok((mx, my, 100, 20))
+}
+
+/// Estimate the x position of the selection's END inside the input frame.
+/// Prefers the mouse pointer when it rests on the input's line (right after
+/// a drag/double-click selection the pointer sits at the selection's end);
+/// otherwise advances by rendered character width (~8px, matching the
+/// overlay's base_char_width) from the input's leading padding. A
+/// character-share-of-frame interpolation would assume the text fills the
+/// whole — often very wide — input and drift far to the right for short
+/// drafts.
+#[cfg(target_os = "macos")]
+unsafe fn estimate_selection_x_in_frame(
+    _focused_element: Id,
+    frame: &CGRect,
+    selection_start: i64,
+    selection_len: i64,
+) -> f64 {
+    let (mx, my) = get_cursor_position_nsevent();
+    let (mxf, myf) = (mx as f64, my as f64);
+    if mxf >= frame.origin.x
+        && mxf <= frame.origin.x + frame.size.width
+        && myf >= frame.origin.y - 40.0
+        && myf <= frame.origin.y + frame.size.height + 40.0
+    {
+        return mxf;
+    }
+
+    let pad = 16.0;
+    let avg_char_w = 8.0;
+    let end = (selection_start + selection_len).max(0) as f64;
+    (frame.origin.x + pad + end * avg_char_w)
+        .min(frame.origin.x + frame.size.width - pad)
+        .max(frame.origin.x + pad)
 }
 
 /// Core implementation: get element frame bounds.
@@ -957,11 +1089,14 @@ pub fn get_selected_text_bounds() -> Result<(i32, i32, i32, i32)> {
                         );
                         return Ok((sx, sy, sw, sh));
                     } else {
-                        // Bounds 无效，回退到使用鼠标位置
-                        log::info!("[DIAG] AXBoundsForRange returned invalid bounds, using mouse position fallback");
-                        let (mouse_x, mouse_y) = get_cursor_position_nsevent();
-                        // 返回鼠标位置作为近似选区位置，使用固定的小宽度
-                        return Ok((mouse_x, mouse_y, 100, 20));
+                        // Bounds 无效（Electron 常见）：逐级回退 —— 首字符 → 元素 frame → 鼠标
+                        let window_pos = get_focused_window_position().ok();
+                        return ax_selection_bounds_fallback(
+                            focused_element,
+                            window_pos,
+                            selected_range.location,
+                            selected_range.length,
+                        );
                     }
                 }
             }
@@ -1391,6 +1526,17 @@ pub fn set_focused_element_value(text: &str) -> Result<()> {
             )));
         }
         Ok(())
+    }
+}
+
+/// Size of the main display in logical points, top-left origin space.
+/// Used to clamp popup positioning so windows never detach from the text
+/// they belong to by being shoved on-screen by the window server.
+pub fn main_display_size() -> (i32, i32) {
+    unsafe {
+        let id = core_graphics::display::CGMainDisplayID();
+        let bounds = core_graphics::display::CGDisplayBounds(id);
+        (bounds.size.width as i32, bounds.size.height as i32)
     }
 }
 

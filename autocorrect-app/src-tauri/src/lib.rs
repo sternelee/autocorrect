@@ -79,7 +79,7 @@ use overlay::{OverlayManager, TypoMarker};
 use popup::SharedPopupState;
 use std::sync::mpsc::TryRecvError;
 use std::thread;
-use tauri::{Emitter, Manager};
+use tauri::{Emitter, Listener, Manager};
 use text_selection::get_cursor_position;
 use theme::{get_theme, set_theme};
 
@@ -142,6 +142,15 @@ pub fn run() {
             app.manage(SharedAiPopupState::new());
             #[cfg(target_os = "macos")]
             app.manage(SharedNativeIconWindow::new());
+
+            // Diagnostic bridge: the ai-popup webview reports its adaptive
+            // height-fit steps so sizing issues are visible in the app log.
+            {
+                let handle = app.handle().clone();
+                let _ = handle.listen("ai-popup-fit-diag", move |event| {
+                    log::info!("[AIPOP-FIT] {}", event.payload());
+                });
+            }
 
             // Initialize Overlay Manager
             let overlay_manager = OverlayManager::new(app.handle().clone());
@@ -464,6 +473,43 @@ pub fn run() {
                             if !should_trigger {
                                 log::info!("App is ignored for popup, skipping hotkey trigger");
                                 continue;
+                            }
+
+                            // With a live text selection, the hotkey opens the
+                            // AI tools popup (translate/polish/rewrite) instead
+                            // of the spell-check suggestion popup. Uses the
+                            // pure-AX selection read — no ⌘C clipboard
+                            // fallback — so nothing here can clobber the
+                            // user's clipboard.
+                            #[cfg(target_os = "macos")]
+                            {
+                                let selection =
+                                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(
+                                        macos_text::get_selected_text,
+                                    ))
+                                    .ok()
+                                    .and_then(|r| r.ok())
+                                    .filter(|t| !t.trim().is_empty());
+
+                                if let Some(text) = selection {
+                                    let (icon_x, icon_y) =
+                                        match macos_text::get_selected_text_bounds() {
+                                            Ok((sx, sy, sw, _sh)) => (sx + sw + 4, sy - 18),
+                                            Err(_) => {
+                                                let (cx, cy) = get_cursor_position();
+                                                (cx + 10, cy - 18)
+                                            }
+                                        };
+                                    log::info!(
+                                        "[HOTKEY] selection {} chars, AI popup at ({},{})",
+                                        text.chars().count(),
+                                        icon_x,
+                                        icon_y
+                                    );
+                                    ai_popup::show_ai_icon(&app_handle, icon_x, icon_y, text);
+                                    ai_popup::show_ai_popup_from_hover(&app_handle);
+                                    continue;
+                                }
                             }
 
                             // Catch any panics to prevent app crashes

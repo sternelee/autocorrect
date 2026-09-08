@@ -340,10 +340,70 @@ pub fn show_ai_popup_from_hover(app: &AppHandle) {
         (s.selected_text.clone(), s.icon_position)
     };
 
-    // Place popup to the right of the icon, similar to popup positioning
-    let popup_x = icon_pos.0 + 46; // icon size 36 + 10px gap
-    let popup_y = icon_pos.1 - 100; // vertically centered on icon
+    let (popup_x, popup_y) = position_popup_near_icon(app, icon_pos.0, icon_pos.1);
     let _ = show_ai_popup_at(app, popup_x, popup_y, selected_text);
+}
+
+/// Keep in sync with the `ai-popup` window size in tauri.conf.json.
+const AI_POPUP_W: i32 = 460;
+const AI_POPUP_H: i32 = 320;
+
+/// Current logical height of the ai-popup window (the frontend resizes it
+/// adaptively); falls back to the config default when unavailable.
+fn ai_popup_height(app: &AppHandle) -> i32 {
+    app.get_webview_window("ai-popup")
+        .and_then(|w| {
+            let scale = w.scale_factor().unwrap_or(1.0);
+            w.inner_size()
+                .ok()
+                .map(|s| (s.height as f64 / scale) as i32)
+        })
+        .filter(|h| *h > 0)
+        .unwrap_or(AI_POPUP_H)
+}
+
+/// Position the AI popup next to the icon, clamped to the main display.
+/// Prefers to the right of the icon (vertically centered on it); flips to
+/// the left when there is no room, and slides fully above the icon when the
+/// centered position would overflow the bottom of the screen — otherwise
+/// macOS clamps the window and it visually detaches from the selection.
+fn position_popup_near_icon(app: &AppHandle, icon_x: i32, icon_y: i32) -> (i32, i32) {
+    let (screen_w, screen_h) = crate::macos_text::main_display_size();
+    let popup_h = ai_popup_height(app);
+    let margin = 8;
+    let menu_bar_h = 28;
+
+    let mut x = icon_x + 46; // icon width 36 + 10px gap
+    if x + AI_POPUP_W > screen_w - margin {
+        // Not enough room on the right — flip to the left of the icon.
+        x = icon_x - AI_POPUP_W - 10;
+    }
+
+    let mut y = icon_y - popup_h / 2;
+    if y + popup_h > screen_h - margin {
+        // Would overflow the bottom — place fully above the icon instead.
+        y = icon_y - 8 - popup_h;
+    }
+    if y < menu_bar_h {
+        y = menu_bar_h;
+    }
+    if y + popup_h > screen_h - margin {
+        y = (screen_h - margin - popup_h).max(menu_bar_h);
+    }
+    if x < margin {
+        x = margin;
+    }
+    log::info!(
+        "[AI] popup positioned at ({},{}) h={} for icon ({},{}) screen {}x{}",
+        x,
+        y,
+        popup_h,
+        icon_x,
+        icon_y,
+        screen_w,
+        screen_h
+    );
+    (x, y)
 }
 
 fn show_ai_popup_at(app: &AppHandle, x: i32, y: i32, selected_text: String) -> Result<(), Error> {
@@ -436,7 +496,8 @@ pub fn show_ai_popup(app: AppHandle) -> Result<(), Error> {
         let s = state.0.lock().map_err(|_| io_err("lock failed"))?;
         (s.selected_text.clone(), s.icon_position)
     };
-    show_ai_popup_at(&app, pos.0, pos.1 + 40, text)
+    let (x, y) = position_popup_near_icon(&app, pos.0, pos.1);
+    show_ai_popup_at(&app, x, y, text)
 }
 
 #[tauri::command]
