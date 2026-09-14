@@ -489,6 +489,7 @@ dependencies = [
  "ort",
  "rdev",
  "reqwest 0.12.20",
+ "security-framework",
  "serde",
  "serde_json",
  "tauri",

@@ -44,7 +44,8 @@ pub struct AppSettings {
     pub typo_checking_enabled: bool,
     #[serde(default)]
     pub ai_grammar_enabled: bool,
-    #[serde(default)]
+    #[cfg_attr(target_os = "macos", serde(default, skip_serializing))]
+    #[cfg_attr(not(target_os = "macos"), serde(default))]
     pub openai_api_key: String,
     #[serde(default = "default_openai_model")]
     pub openai_model: String,
@@ -470,6 +471,7 @@ pub fn update_config(app: tauri::AppHandle, updates: ConfigUpdates) -> Result<()
     }
 
     if let Some(openai_api_key) = updates.openai_api_key {
+        save_keychain_openai_api_key(&openai_api_key)?;
         app_settings.openai_api_key = openai_api_key;
         app_settings_changed = true;
     }
@@ -589,6 +591,79 @@ fn get_user_config_path() -> PathBuf {
 
 const APP_SETTINGS_STORE_FILE: &str = "app-settings.json";
 const APP_SETTINGS_STORE_KEY: &str = "appSettings";
+const OPENAI_API_KEY_SERVICE: &str = "com.autocorrect.app";
+const OPENAI_API_KEY_ACCOUNT: &str = "openai-api-key";
+
+#[cfg(target_os = "macos")]
+fn get_keychain_openai_api_key() -> Option<String> {
+    security_framework::passwords::get_generic_password(
+        OPENAI_API_KEY_SERVICE,
+        OPENAI_API_KEY_ACCOUNT,
+    )
+    .ok()
+    .and_then(|bytes| String::from_utf8(bytes).ok())
+    .filter(|key| !key.trim().is_empty())
+}
+
+#[cfg(target_os = "macos")]
+fn save_keychain_openai_api_key(api_key: &str) -> Result<(), Error> {
+    use security_framework::passwords::{delete_generic_password, set_generic_password};
+
+    if api_key.trim().is_empty() {
+        // Deleting a missing item is fine for a user clearing the field.
+        let _ = delete_generic_password(OPENAI_API_KEY_SERVICE, OPENAI_API_KEY_ACCOUNT);
+        return Ok(());
+    }
+
+    set_generic_password(
+        OPENAI_API_KEY_SERVICE,
+        OPENAI_API_KEY_ACCOUNT,
+        api_key.trim().as_bytes(),
+    )
+    .map_err(|e| Error::Config(format!("Failed to save API key to keychain: {}", e)))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn get_keychain_openai_api_key() -> Option<String> {
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+fn save_keychain_openai_api_key(_api_key: &str) -> Result<(), Error> {
+    Ok(())
+}
+
+/// Move a legacy plaintext key from app settings into the OS keychain.
+/// Returns true when the in-memory settings changed and should be persisted.
+fn migrate_openai_api_key_to_keychain(settings: &mut AppSettings) -> bool {
+    if let Some(key) = get_keychain_openai_api_key() {
+        let changed = !settings.openai_api_key.is_empty();
+        settings.openai_api_key = key;
+        return changed;
+    }
+
+    if settings.openai_api_key.trim().is_empty() {
+        return false;
+    }
+
+    match save_keychain_openai_api_key(&settings.openai_api_key) {
+        Ok(()) => {
+            // Keep the migrated key available to this in-memory snapshot; it
+            // is skipped when serialized so the store is scrubbed on save.
+            true
+        }
+        Err(e) => {
+            log::warn!("Failed to migrate OpenAI API key to keychain: {}", e);
+            false
+        }
+    }
+}
+
+fn hydrate_openai_api_key(settings: &mut AppSettings) {
+    if let Some(key) = get_keychain_openai_api_key() {
+        settings.openai_api_key = key;
+    }
+}
 
 /// Get the path to the legacy app settings file.
 fn get_legacy_app_settings_path() -> PathBuf {
@@ -618,7 +693,8 @@ pub fn ensure_app_settings_initialized(app: &tauri::AppHandle) -> Result<(), Err
         return Ok(());
     }
 
-    let settings = read_legacy_app_settings().unwrap_or_default();
+    let mut settings = read_legacy_app_settings().unwrap_or_default();
+    migrate_openai_api_key_to_keychain(&mut settings);
     let value = serde_json::to_value(&settings)
         .map_err(|e| Error::Config(format!("Failed to serialize settings: {}", e)))?;
     store.set(APP_SETTINGS_STORE_KEY, value);
@@ -638,8 +714,13 @@ pub fn load_app_settings(app: &tauri::AppHandle) -> Result<AppSettings, Error> {
         .map_err(|e| Error::Config(format!("Failed to access settings store: {}", e)))?;
 
     if let Some(value) = store.get(APP_SETTINGS_STORE_KEY) {
-        serde_json::from_value(value)
-            .map_err(|e| Error::Config(format!("Failed to parse settings from store: {}", e)))
+        let mut settings: AppSettings = serde_json::from_value(value)
+            .map_err(|e| Error::Config(format!("Failed to parse settings from store: {}", e)))?;
+        if migrate_openai_api_key_to_keychain(&mut settings) {
+            save_app_settings(app, &settings)?;
+        }
+        hydrate_openai_api_key(&mut settings);
+        Ok(settings)
     } else {
         Ok(AppSettings::default())
     }

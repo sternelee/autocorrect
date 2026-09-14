@@ -14,6 +14,7 @@
   } from "$lib/components/ui/tooltip";
   import { Button } from "$lib/components/ui/button";
   import { Textarea } from "$lib/components/ui/textarea";
+  import TextDiff from "$lib/components/TextDiff.svelte";
   import type {
     AiAssistResponse,
     AiClarityCheckResponse,
@@ -138,6 +139,7 @@
   let error = $state("");
   let activeTool = $state<Tool | null>(null);
   let translateLang = $state("English");
+  let aiEndpoint = $state("configured endpoint");
   let ignoreMessage = $state("");
   let ignoreError = $state(false);
   let assistResult = $state<AiAssistResponse | null>(null);
@@ -294,6 +296,12 @@
         .toLowerCase();
       aiTranslationProvider =
         provider === "apple" || provider === "local" ? provider : "openai";
+      aiEndpoint =
+        aiTranslationProvider === "apple"
+          ? "Apple Intelligence (on-device)"
+          : aiTranslationProvider === "local"
+            ? "Local translation model (on-device)"
+            : config.aiApiBaseUrl || "configured endpoint";
       openaiApiKey = config.openaiApiKey ?? "";
     } catch (configError) {
       console.warn("Failed to load AI popup defaults:", configError);
@@ -445,9 +453,20 @@
     result = text;
   }
 
+  function applyReplacement(original: string, replacement: string) {
+    if (!original) return;
+    const source = result.trim() ? result : selectedText;
+    result = source.split(original).join(replacement);
+  }
+
   function applyVocabularySuggestion(original: string, replacement: string) {
     if (!selectedText || !original) return;
-    result = selectedText.split(original).join(replacement);
+    applyReplacement(original, replacement);
+  }
+
+  function applyClaritySuggestion(original: string, replacement: string) {
+    if (!selectedText || !original || !replacement) return;
+    applyReplacement(original, replacement);
   }
 
   function getIssueTypeLabel(type: string): string {
@@ -505,7 +524,7 @@
       if (!window.confirm(tr("aipopup.analysis.confirmApplyAll"))) {
         return;
       }
-      result = buildClarityAppliedText();
+      result = result.trim() ? result : buildClarityAppliedText();
       void acceptResult();
     }
   }
@@ -801,6 +820,9 @@
   </div>
 
   {#if selectedText}
+    <div class="privacy-note">
+      {tr("aipopup.privacyNotice", { endpoint: aiEndpoint })}
+    </div>
     <div class="preview">
       <div class="preview-meta">
         <span class="preview-label">{tr("aipopup.selected")}</span>
@@ -904,6 +926,12 @@
           rows={2}
           spellcheck={false}
         />
+        {#if result !== selectedText}
+          <div class="diff-block">
+            <div class="diff-label">{tr("aipopup.changes")}</div>
+            <TextDiff original={selectedText} revised={result} />
+          </div>
+        {/if}
       </div>
 
       {#if assistResult.alternatives.length > 0}
@@ -991,6 +1019,13 @@
                   <div class="issue-suggestion">
                     {tr("aipopup.analysis.suggestion")}: {issue.suggestion}
                   </div>
+                  <button
+                    class="mini-apply"
+                    onclick={() =>
+                      applyClaritySuggestion(issue.text, issue.suggestion)}
+                  >
+                    {tr("aipopup.analysis.apply")}
+                  </button>
                 </div>
               {/each}
             </div>
@@ -1045,6 +1080,12 @@
         rows={2}
         spellcheck={false}
       />
+      {#if result !== selectedText}
+        <div class="diff-block">
+          <div class="diff-label">{tr("aipopup.changes")}</div>
+          <TextDiff original={selectedText} revised={result} />
+        </div>
+      {/if}
       <div class="result-actions">
         <Button size="sm" onclick={acceptResult}>
           {tr("aipopup.accept")}
@@ -1181,6 +1222,17 @@
   .icon-btn.close:hover {
     background: var(--popup-hover-close-bg);
     color: var(--popup-hover-close-fg);
+  }
+
+  .privacy-note {
+    padding: 7px 9px;
+    background: var(--popup-muted-surface);
+    border: 1px solid var(--popup-border);
+    border-radius: 8px;
+    color: var(--popup-muted-label);
+    font-size: 11px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
   }
 
   .preview {
@@ -1464,6 +1516,22 @@
 
   :global(.result-area:focus) {
     border-color: var(--popup-ai-focus-border);
+  }
+
+  .diff-block {
+    padding: 8px;
+    border: 1px solid var(--popup-border);
+    border-radius: 8px;
+    background: var(--popup-muted-surface);
+  }
+
+  .diff-label {
+    margin-bottom: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--popup-muted-label);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
   }
 
   .result-actions,

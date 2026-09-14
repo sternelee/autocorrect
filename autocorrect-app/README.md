@@ -170,11 +170,16 @@ Access the Settings panel to configure:
 
 - **Enable/Disable AutoCorrect**: Toggle the entire correction system
 - **Hotkey Configuration**: Change the global hotkey combination
-- **Clipboard Monitor**: Enable automatic clipboard monitoring
-  -CJK Only: Only monitor text containing CJK characters
-  -Poll Interval: Adjust clipboard check frequency (ms)
+- **Runtime Health**: Inspect Accessibility, Input Monitoring / hotkey, overlay, and Clipboard Monitor status
+- **Clipboard Monitor**: Enable clipboard monitoring and inspect the latest detected text change
+  - Automatic clipboard correction/replacement is not enabled yet
+- **Secure AI Credentials**: OpenAI-compatible API keys are stored in the macOS Keychain
 - **Correction Rules**: View and customize correction rules
 - **Language Settings**: Configure language-specific options
+
+### AI Review
+
+AI rewrite and analysis results include an inline diff before replacement. Clarity and vocabulary findings can be applied individually or as a reviewed batch.
 
 ### System Tray
 

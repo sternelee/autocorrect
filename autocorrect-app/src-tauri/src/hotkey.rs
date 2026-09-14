@@ -443,6 +443,11 @@ pub struct HotkeyHandle {
 }
 
 impl HotkeyHandle {
+    /// Whether the listener loop is still marked active.
+    pub fn is_running(&self) -> bool {
+        self.running.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Stop the hotkey listener
     ///
     /// This sets the running flag to false and waits for the listener thread to finish.

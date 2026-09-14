@@ -22,6 +22,8 @@
     RotateCcw,
     AlertCircle,
     Keyboard,
+    ClipboardList,
+    Activity,
   } from "lucide-svelte";
   import CustomCorrectionsManager from "./CustomCorrectionsManager.svelte";
   import IgnoredAppsManager from "./IgnoredAppsManager.svelte";
@@ -35,6 +37,8 @@
     DownloadableTranslationModel,
     TranslationModelStatus,
     TranslateResponse,
+    ClipboardChangedEvent,
+    SystemHealth,
   } from "$lib/types/app";
 
   let { theme }: { theme: ThemeMode } = $props();
@@ -70,6 +74,17 @@
   let accessibilityGranted = $state(false);
   let isCheckingAccessibility = $state(false);
   let accessibilityPollId: ReturnType<typeof setInterval> | null = null;
+
+  // Clipboard monitor configuration
+  let clipboardMonitorRunning = $state(false);
+  let clipboardMonitorBusy = $state(false);
+  let clipboardLastText = $state("");
+  let clipboardLastHasCjk = $state(false);
+  let clipboardLastAt = $state<Date | null>(null);
+  let unlistenClipboardChanged: (() => void) | null = null;
+  let unlistenClipboardStarted: (() => void) | null = null;
+  let unlistenClipboardStopped: (() => void) | null = null;
+  let systemHealth: SystemHealth | null = $state(null);
 
   // AI grammar configuration
   let aiGrammarEnabled = $state(false);
@@ -364,6 +379,68 @@
     }
   }
 
+  async function refreshClipboardMonitorStatus() {
+    try {
+      clipboardMonitorRunning = await invoke<boolean>(
+        "is_clipboard_monitor_running",
+      );
+    } catch (e) {
+      console.error("Failed to check clipboard monitor status:", e);
+    }
+  }
+
+  async function toggleClipboardMonitor() {
+    if (clipboardMonitorBusy) return;
+    clipboardMonitorBusy = true;
+    const requestedState = clipboardMonitorRunning;
+    try {
+      if (requestedState) {
+        await invoke("start_clipboard_monitor", {
+          cjkOnly: false,
+          pollIntervalMs: 300,
+        });
+      } else {
+        await invoke("stop_clipboard_monitor");
+      }
+      await refreshClipboardMonitorStatus();
+      await refreshSystemHealth();
+    } catch (e) {
+      console.error("Failed to toggle clipboard monitor:", e);
+      clipboardMonitorRunning = !requestedState;
+      loadError = e instanceof Error ? e.message : String(e);
+    } finally {
+      clipboardMonitorBusy = false;
+    }
+  }
+
+  async function refreshSystemHealth() {
+    try {
+      systemHealth = await invoke<SystemHealth>("get_system_health");
+    } catch (e) {
+      console.error("Failed to load system health:", e);
+    }
+  }
+
+  async function setupClipboardMonitorListeners() {
+    unlistenClipboardChanged = await listen<ClipboardChangedEvent>(
+      "clipboard-changed",
+      (event) => {
+        clipboardLastText = event.payload.text.slice(0, 500);
+        clipboardLastHasCjk =
+          event.payload.hasCjk ?? event.payload.has_cjk ?? false;
+        clipboardLastAt = new Date();
+      },
+    );
+    unlistenClipboardStarted = await listen("clipboard-monitor-started", () => {
+      clipboardMonitorRunning = true;
+      void refreshSystemHealth();
+    });
+    unlistenClipboardStopped = await listen("clipboard-monitor-stopped", () => {
+      clipboardMonitorRunning = false;
+      void refreshSystemHealth();
+    });
+  }
+
   // Re-read Accessibility permission status. Backend no-ops to `true` on
   // non-macOS so the card stays "Granted" there without extra branching.
   async function checkAccessibility() {
@@ -577,6 +654,9 @@
     const frameId = requestAnimationFrame(() => {
       void loadConfiguration();
       void loadHotkeyConfiguration();
+      void refreshClipboardMonitorStatus();
+      void refreshSystemHealth();
+      void setupClipboardMonitorListeners();
       void checkAccessibility().then(() => {
         if (!accessibilityGranted) startAccessibilityPoll();
       });
@@ -585,6 +665,9 @@
     return () => {
       cancelAnimationFrame(frameId);
       stopAccessibilityPoll();
+      unlistenClipboardChanged?.();
+      unlistenClipboardStarted?.();
+      unlistenClipboardStopped?.();
     };
   });
 
@@ -1085,6 +1168,72 @@
           </div>
         </div>
 
+        <!-- Runtime Health -->
+        <div class="rounded-lg border p-3">
+          <div class="mb-3 flex items-start justify-between gap-3">
+            <div class="space-y-0.5">
+              <div class="flex items-center gap-2 text-sm font-medium">
+                <Activity class="h-4 w-4" />
+                <span>{tr("settings.health")}</span>
+              </div>
+              <p class="text-muted-foreground text-xs">
+                {tr("settings.healthDesc")}
+              </p>
+            </div>
+            <Button variant="ghost" size="sm" onclick={refreshSystemHealth}>
+              {tr("settings.accessibility.refresh")}
+            </Button>
+          </div>
+          {#if systemHealth}
+            <div class="grid grid-cols-1 gap-2 text-xs md:grid-cols-2">
+              <div class="rounded-md bg-muted/40 p-2">
+                <span class="text-muted-foreground"
+                  >{tr("settings.health.accessibility")}</span
+                >
+                <p class="mt-1 font-medium">
+                  {systemHealth.accessibilityGranted
+                    ? tr("settings.accessibility.granted")
+                    : tr("settings.accessibility.denied")}
+                </p>
+              </div>
+              <div class="rounded-md bg-muted/40 p-2">
+                <span class="text-muted-foreground"
+                  >{tr("settings.health.hotkey")}</span
+                >
+                <p class="mt-1 font-medium">
+                  {systemHealth.hotkeyRunning
+                    ? `${tr("settings.health.ready")} · ${systemHealth.hotkeyBinding}`
+                    : tr("settings.health.unavailable")}
+                </p>
+              </div>
+              <div class="rounded-md bg-muted/40 p-2">
+                <span class="text-muted-foreground"
+                  >{tr("settings.health.overlay")}</span
+                >
+                <p class="mt-1 font-medium">
+                  {systemHealth.overlayReady
+                    ? tr("settings.health.markers", {
+                        count: systemHealth.overlayMarkerCount,
+                      })
+                    : tr("settings.health.unavailable")}
+                </p>
+              </div>
+              <div class="rounded-md bg-muted/40 p-2">
+                <span class="text-muted-foreground"
+                  >{tr("settings.health.clipboard")}</span
+                >
+                <p class="mt-1 font-medium">
+                  {systemHealth.clipboardMonitorRunning
+                    ? tr("settings.clipboardMonitor.running")
+                    : tr("settings.clipboardMonitor.stopped")}
+                </p>
+              </div>
+            </div>
+          {:else}
+            <p class="text-muted-foreground text-xs">{tr("common.loading")}</p>
+          {/if}
+        </div>
+
         <!-- Launch at Login -->
         <div class="flex items-center justify-between rounded-lg border p-3">
           <div class="space-y-0.5">
@@ -1100,6 +1249,53 @@
             id="autostart-enabled"
             onchange={() => toggleAutostart()}
           />
+        </div>
+        <!-- Clipboard Monitor -->
+        <div class="rounded-lg border p-3">
+          <div class="flex items-center justify-between gap-3">
+            <div class="space-y-0.5">
+              <label class="text-sm font-medium" for="clipboard-monitor-enabled"
+                >{tr("settings.clipboardMonitor")}</label
+              >
+              <p class="text-muted-foreground text-xs">
+                {tr("settings.clipboardMonitorDesc")}
+              </p>
+            </div>
+            <Switch
+              bind:checked={clipboardMonitorRunning}
+              id="clipboard-monitor-enabled"
+              disabled={clipboardMonitorBusy}
+              onchange={() => toggleClipboardMonitor()}
+            />
+          </div>
+          <div class="mt-3 rounded-md bg-muted/40 p-3 text-xs">
+            <div class="flex items-center gap-2 font-medium">
+              <ClipboardList class="h-3.5 w-3.5" />
+              <span>
+                {clipboardMonitorRunning
+                  ? tr("settings.clipboardMonitor.running")
+                  : tr("settings.clipboardMonitor.stopped")}
+              </span>
+            </div>
+            <p class="text-muted-foreground mt-2">
+              {tr("settings.clipboardMonitor.lastChange")}
+            </p>
+            {#if clipboardLastText}
+              <p class="mt-1 line-clamp-3 whitespace-pre-wrap break-words">
+                {clipboardLastText}
+              </p>
+              <p class="text-muted-foreground mt-1">
+                {clipboardLastAt?.toLocaleTimeString()}
+                {#if clipboardLastHasCjk}
+                  · {tr("settings.clipboardMonitor.cjk")}
+                {/if}
+              </p>
+            {:else}
+              <p class="text-muted-foreground mt-1">
+                {tr("settings.clipboardMonitor.empty")}
+              </p>
+            {/if}
+          </div>
         </div>
       </div>
 
@@ -1141,6 +1337,12 @@
           />
         </div>
 
+        <div
+          class="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-200"
+        >
+          {tr("settings.aiPrivacyNote")}
+        </div>
+
         {#if aiGrammarEnabled}
           <div class="space-y-3 rounded-lg border p-4">
             {#if aiTranslationProvider === "openai"}
@@ -1155,6 +1357,9 @@
                   placeholder="sk-..."
                   oninput={() => (hasUnsavedChanges = true)}
                 />
+                <p class="text-muted-foreground text-xs">
+                  {tr("settings.apiKeySecure")}
+                </p>
               </div>
               <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
                 <div class="space-y-1">

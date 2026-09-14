@@ -1,6 +1,22 @@
 // Shared frontend types that mirror Tauri IPC return shapes.
 // Keep this file in sync with the Rust command return types.
 
+export interface SystemHealth {
+  accessibilityGranted: boolean;
+  hotkeyRunning: boolean;
+  hotkeyBinding: string;
+  overlayReady: boolean;
+  overlayMarkerCount: number;
+  clipboardMonitorRunning: boolean;
+  platform: string;
+}
+
+export interface ClipboardChangedEvent {
+  text: string;
+  has_cjk?: boolean;
+  hasCjk?: boolean;
+}
+
 export interface AppConfig {
   rules?: Record<string, number>;
   textRules?: Record<string, number>;
