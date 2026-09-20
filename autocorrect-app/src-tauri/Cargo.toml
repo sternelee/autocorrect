@@ -56,6 +56,8 @@ dirs = "5.0"
 # Typos for spell checking
 typos = "0.10.36"
 typos-cli = "1.37.1"
+# LanguageTool grammar engine client (talks to a local/self-hosted LT server)
+languagetool-rust = { version = "3.0.1", default-features = false }
 toml = "0.8"
 tauri-plugin-store = "2"
 

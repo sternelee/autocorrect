@@ -1,0 +1,39 @@
+# Local LanguageTool grammar server for autocorrect-app.
+#
+# The app talks to this server via the languagetool-rust client
+# (default endpoint: http://127.0.0.1:8081). Everything stays on-machine.
+#
+# Usage:
+#   docker compose -f docker-compose.languagetool.yml up -d
+#
+# Verify:
+#   curl -s "http://127.0.0.1:8081/v2/check?language=en-US&text=a smal test" | head
+services:
+  languagetool:
+    image: ghcr.io/languagetool-org/languagetool:latest
+    container_name: autocorrect-languagetool
+    restart: unless-stopped
+    ports:
+      - "8081:8081"
+    environment:
+      # LangaugeTool HTTP API path prefix is /v2; Java opts tuned for
+      # fast startup and modest memory (rules only, no ngram model).
+      Java_XMS: "-Xms256m"
+      Java_XMX: "-Xmx1g"
+      langtool_language_model: "/ngrams" # optional; mount ngram data to enable
+    # To enable the premium-quality ngram reordering rules, download the
+    # en ngram dataset from https://languagetool.org/download/ngram-lang/
+    # and mount it:
+    # volumes:
+    #   - ~/languagetool-ngrams/en:/ngrams/en:ro
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "curl",
+          "-fs",
+          "http://localhost:8081/v2/languages",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5

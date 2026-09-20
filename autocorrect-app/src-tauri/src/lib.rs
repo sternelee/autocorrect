@@ -1,6 +1,8 @@
 mod ai_popup;
+mod ax_observer;
 mod clipboard;
 mod commands;
+mod grammar;
 mod hotkey;
 mod macos_text;
 mod objc2_compat;
@@ -164,6 +166,16 @@ pub fn run() {
             app.manage(ClipboardMonitorState::default());
 
             // 核心：启动系统级下划线同步循环
+            // Event-driven: an AXObserver bridge signals text changes so the
+            // sync runs within ~150ms of a keystroke; the adaptive interval
+            // below is only the fallback ceiling for apps that emit no
+            // notifications.
+            let (ax_event_tx, ax_event_rx) = std::sync::mpsc::channel::<()>();
+            #[cfg(target_os = "macos")]
+            ax_observer::spawn_text_event_bridge(ax_event_tx);
+            #[cfg(not(target_os = "macos"))]
+            drop(ax_event_tx);
+
             let app_handle_for_sync = app.handle().clone();
             thread::spawn(move || {
                 let mut poll_interval = std::time::Duration::from_millis(SYNC_INTERVAL_MS);
@@ -184,8 +196,9 @@ pub fn run() {
                         system_typo_sync::sync_system_typos(&app_handle_for_sync);
                     }));
 
-                    // Adaptive polling: shorten interval when user is actively typing
-                    // or clicking, so typo underlines appear near-real-time.
+                    // Adaptive fallback ceiling: shorten when the user is
+                    // actively typing or clicking, so apps that emit no AX
+                    // notifications still get near-real-time underlines.
                     #[cfg(target_os = "macos")]
                     {
                         let since_key = macos_text::seconds_since_last_keydown();
@@ -196,10 +209,20 @@ pub fn run() {
                             std::time::Duration::from_millis(SYNC_INTERVAL_MS)
                         };
                     }
+                    #[cfg(not(target_os = "macos"))]
+                    {
+                        poll_interval = std::time::Duration::from_millis(SYNC_INTERVAL_MS);
+                    }
 
                     let elapsed = start.elapsed();
                     if elapsed < poll_interval {
-                        thread::sleep(poll_interval - elapsed);
+                        // Wake early on AX text events (macOS); block for the
+                        // fallback interval otherwise.
+                        let _ = ax_event_rx.recv_timeout(poll_interval - elapsed);
+                        // Debounce a rapid keystroke burst: events during the
+                        // window coalesce into one sync.
+                        thread::sleep(std::time::Duration::from_millis(120));
+                        while ax_event_rx.try_recv().is_ok() {}
                     }
                 }
             });
@@ -629,6 +652,8 @@ pub fn run() {
             list_downloadable_translation_models,
             get_translation_model_status,
             download_translation_model,
+            // Grammar engine commands
+            grammar::grammar_check_text,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

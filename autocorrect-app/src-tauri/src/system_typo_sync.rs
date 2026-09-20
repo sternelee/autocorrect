@@ -6,11 +6,12 @@
 use crate::ai_popup::{self, SharedAiPopupState};
 use crate::commands;
 use crate::commands::ignored_apps::is_app_ignored;
+use crate::grammar;
 use crate::macos_text;
 use crate::overlay::{OverlayManager, TypoMarker};
 use crate::text_selection::get_cursor_position;
 use crate::text_utils::*;
-use crate::typocheck;
+use crate::typocheck::{self, TypoError};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -21,6 +22,10 @@ use tauri::Manager;
 static LAST_TEXT_HASH: AtomicU64 = AtomicU64::new(0);
 /// Hash of the last bundle_id, so we reset the text hash on focus change.
 static LAST_BUNDLE_HASH: AtomicU64 = AtomicU64::new(0);
+/// Hash of the text whose grammar results have already been applied to
+/// markers. When LanguageTool results land for the current text, one extra
+/// marker rebuild merges them into the overlay.
+static LAST_GRAMMAR_APPLIED: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
 fn hash_str(s: &str) -> u64 {
@@ -37,9 +42,36 @@ fn hash_str(s: &str) -> u64 {
 fn build_typo_markers(
     ax_session: &macos_text::AXPollSession,
     ctx: &macos_text::FocusedTextContext,
+    grammar_issues: &[grammar::GrammarIssue],
 ) -> Vec<TypoMarker> {
     // 2. 检查拼写错误
-    let typos = typocheck::check_typos(&ctx.text);
+    let mut typos = typocheck::check_typos(&ctx.text);
+
+    // Merge LanguageTool grammar/style issues into the same marker stream.
+    // Offsets arrive as UTF-16 code units; skip anything that cannot be
+    // mapped back to a clean substring.
+    for issue in grammar_issues {
+        let text_slice = issue.text_slice(&ctx.text);
+        if text_slice.is_empty() {
+            continue;
+        }
+        let Some(byte_offset) = grammar::utf16_offset_to_byte(&ctx.text, issue.offset) else {
+            continue;
+        };
+        if typos.iter().any(|e| e.byte_offset == byte_offset) {
+            continue; // local checker already flags this range
+        }
+        let char_offset = utf16_offset_to_char_offset(&ctx.text, issue.offset);
+        let (line, col) = char_offset_to_line_col(&ctx.text, char_offset);
+        typos.push(TypoError {
+            typo: text_slice.to_string(),
+            suggestions: issue.replacements.clone(),
+            byte_offset,
+            line,
+            col,
+        });
+    }
+    typos.sort_by_key(|e| e.byte_offset);
     log::info!(
         "[DIAG] Checked text (len={}) for typos: found {}",
         ctx.text.len(),
@@ -387,12 +419,38 @@ pub fn sync_system_typos(app: &tauri::AppHandle) {
                 let text_hash = hash_str(&ctx.text);
                 let prev_bundle = LAST_BUNDLE_HASH.swap(bundle_hash, Ordering::Relaxed);
                 let prev_text = LAST_TEXT_HASH.swap(text_hash, Ordering::Relaxed);
-                if text_hash == prev_text && bundle_hash == prev_bundle {
-                    // Text unchanged — skip typo check and overlay re-render.
+
+                // Grammar engine: fire an async LanguageTool check when this
+                // text hasn't been checked yet, and rebuild markers once its
+                // results land (the rebuild is triggered by the extra
+                // grammar-hash term in the change detection below).
+                let (grammar_enabled, endpoint) = grammar_settings(app);
+                let mut grammar_issues: Vec<grammar::GrammarIssue> = Vec::new();
+                let grammar_applied = if grammar_enabled {
+                    match grammar::cached(text_hash) {
+                        Some(issues) => {
+                            grammar_issues = issues;
+                            text_hash
+                        }
+                        None => {
+                            grammar::request_check(text_hash, ctx.text.clone(), endpoint);
+                            0
+                        }
+                    }
+                } else {
+                    0
+                };
+                let prev_grammar = LAST_GRAMMAR_APPLIED.swap(grammar_applied, Ordering::Relaxed);
+
+                if text_hash == prev_text
+                    && bundle_hash == prev_bundle
+                    && grammar_applied == prev_grammar
+                {
+                    // Text unchanged and no fresh grammar results — skip.
                     return;
                 }
 
-                let markers = build_typo_markers(&ax_session, &ctx);
+                let markers = build_typo_markers(&ax_session, &ctx, &grammar_issues);
                 overlay_manager.update_markers(markers);
             }
             Err(e) => {
@@ -405,4 +463,13 @@ pub fn sync_system_typos(app: &tauri::AppHandle) {
     }
 
     sync_ai_icon(app);
+}
+
+/// Grammar engine settings for this cycle: (enabled, endpoint).
+/// Defaults mirror `config.rs` when settings cannot be loaded.
+fn grammar_settings(app: &tauri::AppHandle) -> (bool, String) {
+    commands::config::load_app_settings(app).map_or_else(
+        |_| (true, "http://127.0.0.1:8081".to_string()),
+        |s| (s.grammar_engine_enabled, s.languagetool_endpoint),
+    )
 }
