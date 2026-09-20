@@ -186,17 +186,20 @@ pub async fn check_with_server(
 }
 
 /// Split a base URL like "http://127.0.0.1:8081" into the
-/// (hostname, port) pair ServerClient::new expects.
+/// (hostname, port) pair ServerClient::new expects. The hostname KEEPS its
+/// scheme — ServerClient concatenates `{hostname}:{port}/v2` verbatim, so a
+/// bare "127.0.0.1" would parse as a URL scheme and fail the request.
 fn split_endpoint(endpoint: &str) -> (String, String) {
-    let rest = endpoint
-        .strip_prefix("https://")
-        .or_else(|| endpoint.strip_prefix("http://"))
-        .unwrap_or(endpoint);
+    let (scheme, rest) = match endpoint.split_once("://") {
+        Some((scheme, rest)) => (format!("{scheme}://"), rest),
+        None => ("http://".to_string(), endpoint),
+    };
+    let rest = rest.trim_end_matches('/');
     match rest.rsplit_once(':') {
         Some((host, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => {
-            (host.to_string(), port.to_string())
+            (format!("{scheme}{host}"), port.to_string())
         }
-        _ => (rest.trim_end_matches('/').to_string(), String::new()),
+        _ => (format!("{scheme}{rest}"), String::new()),
     }
 }
 
@@ -254,11 +257,19 @@ mod tests {
     fn test_split_endpoint() {
         assert_eq!(
             split_endpoint("http://127.0.0.1:8081"),
-            ("127.0.0.1".to_string(), "8081".to_string())
+            ("http://127.0.0.1".to_string(), "8081".to_string())
         );
         assert_eq!(
             split_endpoint("https://languagetool.example.com"),
-            ("languagetool.example.com".to_string(), String::new())
+            (
+                "https://languagetool.example.com".to_string(),
+                String::new()
+            )
+        );
+        // Scheme-less input defaults to http.
+        assert_eq!(
+            split_endpoint("127.0.0.1:8081"),
+            ("http://127.0.0.1".to_string(), "8081".to_string())
         );
     }
 
@@ -271,5 +282,31 @@ mod tests {
         assert_eq!(utf16_offset_to_byte(s, 3), Some(5));
         assert_eq!(utf16_offset_to_byte(s, 4), Some(6));
         assert_eq!(utf16_offset_to_byte(s, 5), None);
+    }
+
+    /// End-to-end check against a running local server (start it with
+    /// docker-compose.languagetool.yml or the official zip):
+    /// cargo test -p autocorrect-app --lib test_languagetool_e2e -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn test_languagetool_e2e() {
+        let issues = tokio::runtime::Runtime::new()
+            .unwrap()
+            .block_on(check_with_server(
+                "This are a smal test with a individal issue.",
+                "http://127.0.0.1:8081",
+                "en-US",
+            ))
+            .expect("LanguageTool server reachable");
+        println!("found {} grammar issues:", issues.len());
+        for i in &issues {
+            println!("  [{}] {} -> {:?}", i.rule_id, i.message, i.replacements);
+        }
+        assert!(
+            issues
+                .iter()
+                .any(|i| i.rule_id == "IT_IS" || i.message.to_uppercase().contains("ARE")),
+            "expected a subject-verb issue for 'This are'"
+        );
     }
 }
