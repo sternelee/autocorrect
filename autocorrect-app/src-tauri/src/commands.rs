@@ -1,5 +1,6 @@
 pub mod ai_grammar;
 pub mod config;
+pub mod cspell_config;
 pub mod custom_corrections;
 pub mod default;
 pub mod errors;

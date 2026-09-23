@@ -61,6 +61,12 @@ pub struct AppSettings {
         deserialize_with = "deserialize_polish_styles"
     )]
     pub ai_polish_style: Vec<String>,
+    #[serde(default = "default_cspell_enabled")]
+    pub cspell_enabled: bool,
+    #[serde(default)]
+    pub cspell_config_path: String,
+    #[serde(default = "default_cspell_strict_mode")]
+    pub cspell_strict_mode: bool,
     #[serde(default = "default_underline_style")]
     pub underline_style: String,
     #[serde(default = "default_underline_color")]
@@ -84,6 +90,9 @@ impl Default for AppSettings {
             ai_api_base_url: default_ai_api_base_url(),
             ai_translate_target_language: default_ai_translate_target_language(),
             ai_polish_style: default_ai_polish_styles(),
+            cspell_enabled: default_cspell_enabled(),
+            cspell_config_path: String::new(),
+            cspell_strict_mode: default_cspell_strict_mode(),
             underline_style: default_underline_style(),
             underline_color: default_underline_color(),
             ui_language: default_ui_language(),
@@ -122,6 +131,14 @@ fn default_ai_translate_target_language() -> String {
 
 fn default_ai_polish_styles() -> Vec<String> {
     vec!["formal".to_string()]
+}
+
+fn default_cspell_enabled() -> bool {
+    true
+}
+
+fn default_cspell_strict_mode() -> bool {
+    false
 }
 
 fn default_underline_style() -> String {
@@ -180,6 +197,12 @@ pub struct AppConfig {
     pub ai_translate_target_language: String,
     /// Default polish styles
     pub ai_polish_style: Vec<String>,
+    /// Enable CSpell integration
+    pub cspell_enabled: bool,
+    /// Path to CSpell config file (empty = default ~/.autocorrect-cspell.json)
+    pub cspell_config_path: String,
+    /// Flag any English token not in the bundled dictionary
+    pub cspell_strict_mode: bool,
     /// Underline style: "wavy" | "solid" | "dashed" | "dotted"
     pub underline_style: String,
     /// Underline color hex (e.g. "#ff3b30")
@@ -230,6 +253,12 @@ pub struct ConfigUpdates {
     pub ai_translate_target_language: Option<String>,
     /// Default polish styles
     pub ai_polish_style: Option<Vec<String>>,
+    /// Enable CSpell integration
+    pub cspell_enabled: Option<bool>,
+    /// Path to CSpell config file
+    pub cspell_config_path: Option<String>,
+    /// Flag unknown English words not in the dictionary
+    pub cspell_strict_mode: Option<bool>,
     /// Underline style
     pub underline_style: Option<String>,
     /// Underline color hex
@@ -300,6 +329,9 @@ pub fn get_config(app: tauri::AppHandle) -> Result<AppConfig, Error> {
         ai_api_base_url: app_settings.ai_api_base_url,
         ai_translate_target_language: app_settings.ai_translate_target_language,
         ai_polish_style: app_settings.ai_polish_style,
+        cspell_enabled: app_settings.cspell_enabled,
+        cspell_config_path: app_settings.cspell_config_path.clone(),
+        cspell_strict_mode: app_settings.cspell_strict_mode,
         underline_style: app_settings.underline_style,
         underline_color: app_settings.underline_color,
         ui_language: app_settings.ui_language,
@@ -468,6 +500,21 @@ pub fn update_config(app: tauri::AppHandle, updates: ConfigUpdates) -> Result<()
         app_settings_changed = true;
     }
 
+    if let Some(cspell_enabled) = updates.cspell_enabled {
+        app_settings.cspell_enabled = cspell_enabled;
+        app_settings_changed = true;
+    }
+
+    if let Some(cspell_config_path) = updates.cspell_config_path {
+        app_settings.cspell_config_path = cspell_config_path;
+        app_settings_changed = true;
+    }
+
+    if let Some(cspell_strict_mode) = updates.cspell_strict_mode {
+        app_settings.cspell_strict_mode = cspell_strict_mode;
+        app_settings_changed = true;
+    }
+
     if let Some(style) = updates.underline_style {
         app_settings.underline_style = style;
         app_settings_changed = true;
@@ -523,6 +570,9 @@ pub fn update_config(app: tauri::AppHandle, updates: ConfigUpdates) -> Result<()
     let config_str = fs::read_to_string(&config_path)?;
     autocorrect::config::load(&config_str)
         .map_err(|e| Error::Config(format!("Failed to reload config: {}", e)))?;
+
+    // Propagate CSpell settings to the typocheck module.
+    apply_cspell_settings(&app)?;
 
     Ok(())
 }
@@ -612,6 +662,18 @@ pub fn save_app_settings(app: &tauri::AppHandle, settings: &AppSettings) -> Resu
     store
         .save()
         .map_err(|e| Error::Config(format!("Failed to persist settings store: {}", e)))?;
+    Ok(())
+}
+
+/// Propagate the current CSpell settings from the store to the typocheck module.
+pub fn apply_cspell_settings(app: &tauri::AppHandle) -> Result<(), Error> {
+    let settings = load_app_settings(app)?;
+    let path = if settings.cspell_config_path.is_empty() {
+        None
+    } else {
+        Some(settings.cspell_config_path.clone())
+    };
+    crate::typocheck::set_cspell_state(settings.cspell_enabled, settings.cspell_strict_mode, path);
     Ok(())
 }
 

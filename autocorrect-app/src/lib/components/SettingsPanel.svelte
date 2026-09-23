@@ -21,6 +21,7 @@
     AlertCircle,
     Keyboard,
   } from "lucide-svelte";
+  import CSpellConfigManager from "./CSpellConfigManager.svelte";
   import CustomCorrectionsManager from "./CustomCorrectionsManager.svelte";
   import IgnoredAppsManager from "./IgnoredAppsManager.svelte";
   import type { ThemeMode } from "$lib/types/theme";
@@ -51,6 +52,11 @@
 
   // Typo checking configuration
   let typoCheckingEnabled = $state(true);
+
+  // CSpell integration
+  let cspellEnabled = $state(true);
+  let cspellConfigPath = $state("");
+  let cspellStrictMode = $state(false);
 
   // Autostart configuration
   let autostartEnabled = $state(false);
@@ -179,6 +185,18 @@
       // Load typo checking setting (default to true if not present)
       typoCheckingEnabled = config.typoCheckingEnabled ?? true;
 
+      // Load CSpell settings
+      cspellEnabled = config.cspellEnabled ?? true;
+      cspellStrictMode = config.cspellStrictMode ?? false;
+      cspellConfigPath = config.cspellConfigPath ?? "";
+      if (cspellConfigPath === "") {
+        try {
+          cspellConfigPath = await invoke<string>("get_default_cspell_config_path");
+        } catch (e) {
+          console.warn("Failed to get default cspell path:", e);
+        }
+      }
+
       if (autostart !== null) {
         autostartEnabled = autostart;
       }
@@ -249,6 +267,9 @@
           rules: rulesUpdate,
           spellcheckWords: wordsArray,
           typoCheckingEnabled: typoCheckingEnabled,
+          cspellEnabled: cspellEnabled,
+          cspellConfigPath: cspellConfigPath,
+          cspellStrictMode: cspellStrictMode,
           aiGrammarEnabled: aiGrammarEnabled,
           openaiApiKey: openaiApiKey,
           openaiModel: openaiModel,
@@ -328,6 +349,9 @@
         rule.severity = rule.defaultSeverity;
       }
       customWords = "";
+      cspellEnabled = true;
+      cspellConfigPath = "";
+      cspellStrictMode = false;
       aiGrammarEnabled = false;
       openaiApiKey = "";
       openaiModel = "gpt-4.1-mini";
@@ -860,6 +884,56 @@
           />
         </div>
 
+        <!-- CSpell Integration -->
+        <div class="space-y-3 rounded-lg border p-3">
+          <div class="flex items-center justify-between">
+            <div class="space-y-0.5">
+              <label class="text-sm font-medium" for="cspell-enabled"
+                >{tr("settings.cspellToggle")}</label
+              >
+              <p class="text-muted-foreground text-xs">
+                {tr("settings.cspellToggleDesc")}
+              </p>
+            </div>
+            <Switch
+              bind:checked={cspellEnabled}
+              id="cspell-enabled"
+              onchange={() => (hasUnsavedChanges = true)}
+            />
+          </div>
+
+          <div class="space-y-1">
+            <label class="text-xs font-medium" for="cspell-config-path"
+              >{tr("settings.cspellConfigPath")}</label
+            >
+            <Input
+              id="cspell-config-path"
+              bind:value={cspellConfigPath}
+              placeholder={tr("settings.cspellConfigPathPlaceholder")}
+              oninput={() => (hasUnsavedChanges = true)}
+            />
+            <p class="text-muted-foreground text-xs">
+              {tr("settings.cspellConfigPathDesc")}
+            </p>
+          </div>
+
+          <div class="flex items-center justify-between">
+            <div class="space-y-0.5">
+              <label class="text-sm font-medium" for="cspell-strict-mode"
+                >{tr("settings.cspellStrictMode")}</label
+              >
+              <p class="text-muted-foreground text-xs">
+                {tr("settings.cspellStrictModeDesc")}
+              </p>
+            </div>
+            <Switch
+              bind:checked={cspellStrictMode}
+              id="cspell-strict-mode"
+              onchange={() => (hasUnsavedChanges = true)}
+            />
+          </div>
+        </div>
+
         <!-- AI Grammar -->
         <div class="flex items-center justify-between rounded-lg border p-3">
           <div class="space-y-0.5">
@@ -1012,6 +1086,11 @@
         <!-- Custom Typo Corrections Manager -->
         <div class="rounded-lg border p-4">
           <CustomCorrectionsManager />
+        </div>
+
+        <!-- CSpell Dictionary Manager -->
+        <div class="rounded-lg border p-4">
+          <CSpellConfigManager configPath={cspellConfigPath} />
         </div>
 
         <!-- Ignored Apps Manager -->

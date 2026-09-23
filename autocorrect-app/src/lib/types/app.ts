@@ -18,9 +18,18 @@ export interface AppConfig {
   aiTranslateTargetLanguage?: string;
   aiPolishStyle?: string[];
   aiPolishStyles?: string[];
+  cspellEnabled?: boolean;
+  cspellConfigPath?: string;
+  cspellStrictMode?: boolean;
   uiLanguage?: string;
   underlineStyle?: string;
   underlineColor?: string;
+}
+
+export interface CSpellConfig {
+  words?: string[];
+  ignoreWords?: string[];
+  flagWords?: string[];
 }
 
 export interface RuleInfo {

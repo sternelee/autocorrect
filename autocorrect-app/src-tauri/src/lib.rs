@@ -7,9 +7,9 @@ mod objc2_compat;
 mod overlay;
 mod popup;
 mod text_selection;
+mod text_utils;
 mod theme;
 mod theme_errors;
-mod text_utils;
 mod typocheck;
 
 use std::collections::hash_map::DefaultHasher;
@@ -51,8 +51,11 @@ use commands::ai_grammar::{
     ai_text_transform, ai_text_transform_stream, ai_tone_detect, ai_vocabulary_enhance,
 };
 use commands::config::{
-    ensure_app_settings_initialized, get_config, get_default_config, get_polish_styles, get_rules,
-    update_config,
+    apply_cspell_settings, ensure_app_settings_initialized, get_config, get_default_config,
+    get_polish_styles, get_rules, update_config,
+};
+use commands::cspell_config::{
+    get_cspell_config, get_default_cspell_config_path, reload_cspell_config_cmd, save_cspell_config,
 };
 use commands::custom_corrections::{
     add_custom_correction, delete_custom_correction, get_custom_corrections,
@@ -80,8 +83,8 @@ use theme::{get_theme, set_theme};
 
 // Import popup commands for the invoke handler
 use popup::{
-    accept_suggestion, get_popup_state, hide_popup, position_popup, reject_suggestion,
-    show_popup, trigger_spell_check_workflow, undo_last_replacement,
+    accept_suggestion, get_popup_state, hide_popup, position_popup, reject_suggestion, show_popup,
+    trigger_spell_check_workflow, undo_last_replacement,
 };
 use text_utils::*;
 
@@ -131,6 +134,17 @@ pub fn run() {
             }
 
             ensure_app_settings_initialized(&app.handle())?;
+            if let Err(e) = apply_cspell_settings(&app.handle()) {
+                log::warn!("Failed to apply CSpell settings on startup: {}", e);
+            }
+
+            // Warm up the SymSpell dictionary in the background so the first
+            // real spell check doesn't block on building the deletion index.
+            let _ = thread::Builder::new()
+                .name("symspell-warmup".to_string())
+                .spawn(|| {
+                    crate::typocheck::warmup_symspell();
+                });
 
             // Initialize popup state
             app.manage(SharedPopupState::new());
@@ -522,6 +536,11 @@ pub fn run() {
             update_custom_correction,
             delete_custom_correction,
             get_custom_corrections_path_cmd,
+            // CSpell config commands
+            get_cspell_config,
+            save_cspell_config,
+            reload_cspell_config_cmd,
+            get_default_cspell_config_path,
             ai_grammar_check,
             ai_assist,
             ai_text_transform,
@@ -699,18 +718,17 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                 // Pre-compute all UTF-16 offsets in one O(text_len) pass
                 // instead of N separate O(text_len) scans.
                 let capped_typos: Vec<_> = typos.iter().take(10).collect();
-                let utf16_offsets =
-                    batch_byte_to_utf16_offsets(&ctx.text,
-                        capped_typos.iter().map(|t| t.byte_offset));
+                let utf16_offsets = batch_byte_to_utf16_offsets(
+                    &ctx.text,
+                    capped_typos.iter().map(|t| t.byte_offset),
+                );
 
                 // 3. 为每个错误获取屏幕坐标（复用会话内的 focused element + window_pos）
                 for (typo, typo_u16_offset) in capped_typos.iter().zip(utf16_offsets.iter()) {
                     let absolute_offset = ctx.base_offset.saturating_add(*typo_u16_offset);
                     let typo_u16_len = typo.typo.encode_utf16().count();
 
-                    if let Ok(rect) =
-                        ax_session.get_range_bounds(absolute_offset, typo_u16_len)
-                    {
+                    if let Ok(rect) = ax_session.get_range_bounds(absolute_offset, typo_u16_len) {
                         if rect.size.width > 0.0 {
                             markers.push(TypoMarker {
                                 id: format!("{}-{}", absolute_offset, typo.typo),
@@ -730,9 +748,10 @@ fn sync_system_typos(app: &tauri::AppHandle) {
                 // Fallback mechanism if no markers found but typos exist
                 if !typos.is_empty() && markers.is_empty() {
                     // Pre-compute UTF-16 offsets for fallback path too
-                    let fallback_utf16_offsets =
-                        batch_byte_to_utf16_offsets(&ctx.text,
-                            typos.iter().take(10).map(|t| t.byte_offset));
+                    let fallback_utf16_offsets = batch_byte_to_utf16_offsets(
+                        &ctx.text,
+                        typos.iter().take(10).map(|t| t.byte_offset),
+                    );
 
                     let frame_rect = ax_session.get_element_bounds().ok();
                     let caret_rect = ax_session.get_caret_bounds().ok();
@@ -969,31 +988,27 @@ fn start_clipboard_monitor(
 
     // Forward clipboard events to the frontend
     let app_handle = app.clone();
-    std::thread::spawn(move || {
-        loop {
-            match rx.recv() {
-                Ok(event) => {
-                    match event {
-                        clipboard::ClipboardEvent::NewText { text, has_cjk } => {
-                            log::info!(
-                                "Clipboard changed: {} chars, CJK: {}, emitting event",
-                                text.chars().count(),
-                                has_cjk
-                            );
-                            let _ = app_handle.emit(
-                                "clipboard-changed",
-                                serde_json::json!({
-                                    "text": text,
-                                    "has_cjk": has_cjk
-                                }),
-                            );
-                        }
-                    }
+    std::thread::spawn(move || loop {
+        match rx.recv() {
+            Ok(event) => match event {
+                clipboard::ClipboardEvent::NewText { text, has_cjk } => {
+                    log::info!(
+                        "Clipboard changed: {} chars, CJK: {}, emitting event",
+                        text.chars().count(),
+                        has_cjk
+                    );
+                    let _ = app_handle.emit(
+                        "clipboard-changed",
+                        serde_json::json!({
+                            "text": text,
+                            "has_cjk": has_cjk
+                        }),
+                    );
                 }
-                Err(_) => {
-                    log::info!("Clipboard monitor receiver disconnected");
-                    break;
-                }
+            },
+            Err(_) => {
+                log::info!("Clipboard monitor receiver disconnected");
+                break;
             }
         }
     });
@@ -1014,10 +1029,7 @@ fn start_clipboard_monitor(
 
 /// Tauri command to stop clipboard monitoring
 #[tauri::command]
-fn stop_clipboard_monitor(
-    app: tauri::AppHandle,
-    window: tauri::Window,
-) -> Result<(), String> {
+fn stop_clipboard_monitor(app: tauri::AppHandle, window: tauri::Window) -> Result<(), String> {
     log::info!("Stopping clipboard monitor");
 
     if let Some(state) = app.try_state::<ClipboardMonitorState>() {

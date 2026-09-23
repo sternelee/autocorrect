@@ -98,6 +98,17 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
     "settings.typoToggle": "Enable Advanced Typo Detection",
     "settings.typoToggleDesc":
       "Use the typos library to detect and suggest fixes for English spelling errors",
+    "settings.cspellToggle": "Enable CSpell Dictionary",
+    "settings.cspellToggleDesc":
+      "Use cspell words/ignoreWords/flagWords to extend the built-in dictionary",
+    "settings.cspellConfigPath": "CSpell Config Path",
+    "settings.cspellConfigPathPlaceholder":
+      "Leave empty to use ~/.autocorrect-cspell.json",
+    "settings.cspellConfigPathDesc":
+      "Path to the cspell-compatible JSON config file.",
+    "settings.cspellStrictMode": "Strict Dictionary Mode",
+    "settings.cspellStrictModeDesc":
+      "Flag any English word not found in the bundled dictionary or cspell words",
     "settings.autostart": "Launch at Login",
     "settings.autostartDesc":
       "Automatically start AutoCorrect when you log in to your computer",
@@ -184,6 +195,25 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
     "customCorr.added": "Added: {typo} → {correction}",
     "customCorr.deleted": "Deleted: {typo}",
     "customCorr.updated": "Updated: {typo} → {correction}",
+
+    "cspell.title": "CSpell Dictionary",
+    "cspell.desc":
+      "Manage cspell words, ignoreWords, and flagWords. Saved to: {path}",
+    "cspell.words": "Allowed Words",
+    "cspell.wordsPlaceholder": "mkdirp\ntsmerge\ncustomterm",
+    "cspell.wordsDesc": "Words always considered correct.",
+    "cspell.ignoreWords": "Ignored Words",
+    "cspell.ignoreWordsPlaceholder": "mycompany\nlegacyterm",
+    "cspell.ignoreWordsDesc": "Words never flagged as typos by any checker.",
+    "cspell.flagWords": "Flagged Words",
+    "cspell.flagWordsPlaceholder": "whts: what's\ncalor->colour",
+    "cspell.flagWordsDesc":
+      "Words always flagged. Use typo: correction or typo->correction.",
+    "cspell.reload": "Reload",
+    "cspell.save": "Save CSpell Config",
+    "cspell.saved": "Saved!",
+    "cspell.loadError": "Failed to load CSpell config",
+    "cspell.saveError": "Failed to save CSpell config",
 
     "settings.ignoredApps": "Ignored Apps",
     "settings.ignoredAppsDesc":
@@ -366,6 +396,16 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
     "settings.spellConfig": "拼写检查配置",
     "settings.typoToggle": "启用高级拼写错误检测",
     "settings.typoToggleDesc": "使用 typos 库检测并建议英文拼写错误修复。",
+    "settings.cspellToggle": "启用 CSpell 词典",
+    "settings.cspellToggleDesc":
+      "使用 cspell 的 words/ignoreWords/flagWords 扩展内置词典",
+    "settings.cspellConfigPath": "CSpell 配置路径",
+    "settings.cspellConfigPathPlaceholder":
+      "留空则使用 ~/.autocorrect-cspell.json",
+    "settings.cspellConfigPathDesc": "cspell 兼容的 JSON 配置文件路径。",
+    "settings.cspellStrictMode": "严格词典模式",
+    "settings.cspellStrictModeDesc":
+      "标记所有不在内置词典或 cspell words 中的英文词",
     "settings.autostart": "开机自启动",
     "settings.autostartDesc": "登录时自动启动 AutoCorrect",
     "settings.aiToggle": "启用 AI 语法检查（OpenAI）",
@@ -445,6 +485,25 @@ export const MESSAGES: Record<UiLanguage, MessageDict> = {
     "customCorr.added": "已添加：{typo} → {correction}",
     "customCorr.deleted": "已删除：{typo}",
     "customCorr.updated": "已更新：{typo} → {correction}",
+
+    "cspell.title": "CSpell 词典",
+    "cspell.desc":
+      "管理 cspell 的 words、ignoreWords、flagWords。保存路径：{path}",
+    "cspell.words": "允许词",
+    "cspell.wordsPlaceholder": "mkdirp\ntsmerge\ncustomterm",
+    "cspell.wordsDesc": "始终被视为正确的词。",
+    "cspell.ignoreWords": "忽略词",
+    "cspell.ignoreWordsPlaceholder": "mycompany\nlegacyterm",
+    "cspell.ignoreWordsDesc": "任何检查器都不会标记为错词的词。",
+    "cspell.flagWords": "标记词",
+    "cspell.flagWordsPlaceholder": "whts: what's\ncalor->colour",
+    "cspell.flagWordsDesc":
+      "始终被标记为错误的词。格式：typo: correction 或 typo->correction。",
+    "cspell.reload": "重新加载",
+    "cspell.save": "保存 CSpell 配置",
+    "cspell.saved": "已保存！",
+    "cspell.loadError": "加载 CSpell 配置失败",
+    "cspell.saveError": "保存 CSpell 配置失败",
 
     "settings.ignoredApps": "忽略的应用",
     "settings.ignoredAppsDesc": "不启用校验和 AI 功能的应用列表。",
