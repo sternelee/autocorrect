@@ -72,13 +72,11 @@ impl Backend {
         document: &TextDocumentItem,
     ) {
         Self::_clear_diagnostics(client, diagnostics.clone(), &document.uri).await;
-        if let Some(ignorer) = ignorer.read().unwrap().as_ref() {
-            if let Ok(filepath) = document.uri.to_file_path() {
-                if ignorer.is_ignored(&filepath) {
+        if let Some(ignorer) = ignorer.read().unwrap().as_ref()
+            && let Ok(filepath) = document.uri.to_file_path()
+                && ignorer.is_ignored(&filepath) {
                     return;
                 }
-            }
-        }
 
         let input = document.text.as_str();
         let path = document.uri.path();
@@ -201,18 +199,17 @@ impl Backend {
         let conf_file = workdir.join(DEFAULT_CONFIG_FILE);
         autocorrect::config::load_file(&conf_file).ok();
 
-        let new_ignorer = Ignorer::new(&workdir);
+        let new_ignorer = Ignorer::new(workdir);
         ignorer.write().unwrap().replace(new_ignorer);
 
         Self::recheck_all_documents(client, ignorer, diagnostics, documents).await;
     }
 
     fn is_ignored(&self, uri: &Url) -> bool {
-        if let Some(ignorer) = self.ignorer.read().unwrap().as_ref() {
-            if let Ok(filepath) = uri.to_file_path() {
+        if let Some(ignorer) = self.ignorer.read().unwrap().as_ref()
+            && let Ok(filepath) = uri.to_file_path() {
                 return ignorer.is_ignored(&filepath);
             }
-        }
 
         false
     }
@@ -228,7 +225,7 @@ impl Backend {
         let mut watcher =
             notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
                 if let Ok(event) = &res {
-                    if !event.paths.iter().any(|p| is_config_file(p)) {
+                    if !event.paths.iter().any(is_config_file) {
                         return;
                     }
 

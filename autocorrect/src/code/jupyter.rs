@@ -46,8 +46,8 @@ pub fn format_jupyter(input: &str) -> FormatResult {
     }
 
     for cell in cells.unwrap() {
-        if let Some(sources) = cell.sources {
-            if cell.cell_type == "markdown" || cell.cell_type == "md" {
+        if let Some(sources) = cell.sources
+            && (cell.cell_type == "markdown" || cell.cell_type == "md") {
                 for source in sources {
                     let sub_result = crate::code::format_markdown(source.input);
 
@@ -56,7 +56,6 @@ pub fn format_jupyter(input: &str) -> FormatResult {
                     }
                 }
             }
-        }
     }
 
     result
@@ -72,8 +71,8 @@ pub fn lint_jupyter(input: &str) -> LintResult {
     }
 
     for cell in cells.unwrap() {
-        if let Some(sources) = cell.sources {
-            if cell.cell_type == "markdown" || cell.cell_type == "md" {
+        if let Some(sources) = cell.sources
+            && (cell.cell_type == "markdown" || cell.cell_type == "md") {
                 for source in sources {
                     let sub_result = crate::code::lint_markdown(source.input);
 
@@ -88,7 +87,6 @@ pub fn lint_jupyter(input: &str) -> LintResult {
                     }
                 }
             }
-        }
     }
 
     result

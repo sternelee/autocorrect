@@ -2,6 +2,8 @@
   $locale;
   import { onMount } from "svelte";
   import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
+  import { homeDir } from "@tauri-apps/api/path";
   import { Button } from "$lib/components/ui/button";
   import {
     Card,
@@ -20,13 +22,25 @@
     RotateCcw,
     AlertCircle,
     Keyboard,
+    ClipboardList,
+    Activity,
   } from "lucide-svelte";
   import CSpellConfigManager from "./CSpellConfigManager.svelte";
   import CustomCorrectionsManager from "./CustomCorrectionsManager.svelte";
   import IgnoredAppsManager from "./IgnoredAppsManager.svelte";
   import type { ThemeMode } from "$lib/types/theme";
   import { locale, t, setLocale } from "$lib/i18n";
-  import type { AppConfig, RuleInfo, HotkeyConfig, Modifiers } from "$lib/types/app";
+  import type {
+    AppConfig,
+    RuleInfo,
+    HotkeyConfig,
+    Modifiers,
+    DownloadableTranslationModel,
+    TranslationModelStatus,
+    TranslateResponse,
+    ClipboardChangedEvent,
+    SystemHealth,
+  } from "$lib/types/app";
 
   let { theme }: { theme: ThemeMode } = $props();
 
@@ -61,6 +75,23 @@
   // Autostart configuration
   let autostartEnabled = $state(false);
 
+  // Accessibility permission status (macOS). Polls while not granted so the
+  // status flips automatically once the user enables it in System Settings.
+  let accessibilityGranted = $state(false);
+  let isCheckingAccessibility = $state(false);
+  let accessibilityPollId: ReturnType<typeof setInterval> | null = null;
+
+  // Clipboard monitor configuration
+  let clipboardMonitorRunning = $state(false);
+  let clipboardMonitorBusy = $state(false);
+  let clipboardLastText = $state("");
+  let clipboardLastHasCjk = $state(false);
+  let clipboardLastAt = $state<Date | null>(null);
+  let unlistenClipboardChanged: (() => void) | null = null;
+  let unlistenClipboardStarted: (() => void) | null = null;
+  let unlistenClipboardStopped: (() => void) | null = null;
+  let systemHealth: SystemHealth | null = $state(null);
+
   // AI grammar configuration
   let aiGrammarEnabled = $state(false);
   let openaiApiKey = $state("");
@@ -69,7 +100,24 @@
   let aiTimeoutMs = $state(12000);
   let aiApiBaseUrl = $state("https://openrouter.ai/api/v1/chat/completions");
   let aiTranslateTargetLanguage = $state("English");
+  let aiTranslationProvider = $state("openai");
+  let aiTranslationLocalModelPath = $state("");
+  let aiTranslateSourceLanguage = $state("auto");
   let aiPolishStyles = $state<string[]>([]);
+
+  // Local model download state
+  let downloadableModels = $state<DownloadableTranslationModel[]>([]);
+  let selectedDownloadModel = $state("");
+  let downloadTargetDir = $state("");
+  let isDownloading = $state(false);
+  let downloadProgress = $state<{ file: string; percent: number } | null>(null);
+  let modelStatus = $state<TranslationModelStatus | null>(null);
+
+  // Translation test state
+  let testTranslationInput = $state("");
+  let testTranslationResult = $state<TranslateResponse | null>(null);
+  let isTestTranslationLoading = $state(false);
+  let testTranslationError = $state<string | null>(null);
 
   // Available polish styles
   const POLISH_STYLES = [
@@ -210,6 +258,9 @@
       aiApiBaseUrl =
         config.aiApiBaseUrl ?? "https://openrouter.ai/api/v1/chat/completions";
       aiTranslateTargetLanguage = config.aiTranslateTargetLanguage ?? "English";
+      aiTranslationProvider = config.aiTranslationProvider ?? "openai";
+      aiTranslationLocalModelPath = config.aiTranslationLocalModelPath ?? "";
+      aiTranslateSourceLanguage = config.aiTranslateSourceLanguage ?? "auto";
       aiPolishStyles = config.aiPolishStyle?.length
         ? config.aiPolishStyle
         : config.aiPolishStyles?.length
@@ -221,6 +272,9 @@
       underlineColor = config.underlineColor ?? "#ff3b30";
 
       hasUnsavedChanges = false;
+
+      await loadDownloadableModels();
+      await refreshModelStatus();
     } catch (error) {
       console.error("Failed to load config:", error);
       loadError =
@@ -230,12 +284,228 @@
     }
   }
 
+  async function loadDownloadableModels() {
+    try {
+      downloadableModels =
+        await invoke<DownloadableTranslationModel[]>(
+          "list_downloadable_translation_models",
+        );
+      if (downloadableModels.length > 0 && !selectedDownloadModel) {
+        selectedDownloadModel = downloadableModels[0].id;
+        await updateDefaultDownloadTarget();
+      }
+    } catch (e) {
+      console.error("Failed to load downloadable models:", e);
+    }
+  }
+
+  async function updateDefaultDownloadTarget() {
+    try {
+      const home = await homeDir();
+      downloadTargetDir = `${home}autocorrect-translations/${selectedDownloadModel}`;
+    } catch (e) {
+      console.error("Failed to get home dir:", e);
+    }
+  }
+
+  async function refreshModelStatus() {
+    if (!aiTranslationLocalModelPath) {
+      modelStatus = null;
+      return;
+    }
+    try {
+      modelStatus = await invoke<TranslationModelStatus>(
+        "get_translation_model_status",
+        { modelPath: aiTranslationLocalModelPath },
+      );
+    } catch (e) {
+      console.error("Failed to get model status:", e);
+      modelStatus = null;
+    }
+  }
+
+  async function downloadModel() {
+    if (!selectedDownloadModel || !downloadTargetDir) return;
+    isDownloading = true;
+    downloadProgress = null;
+    try {
+      const unlisten = await listen<{
+        file: string;
+        percent: number;
+      }>("translation-model-download-progress", (event) => {
+        downloadProgress = event.payload;
+      });
+      const finalPath = await invoke<string>("download_translation_model", {
+        request: {
+          modelId: selectedDownloadModel,
+          targetDir: downloadTargetDir,
+        },
+      });
+      unlisten();
+      aiTranslationLocalModelPath = finalPath;
+      await refreshModelStatus();
+      hasUnsavedChanges = true;
+    } catch (error) {
+      console.error("Failed to download model:", error);
+      loadError =
+        error instanceof Error ? error.message : tr("settings.configError");
+    } finally {
+      isDownloading = false;
+      downloadProgress = null;
+    }
+  }
+
+  async function testTranslation() {
+    if (!testTranslationInput.trim()) {
+      testTranslationError = null;
+      testTranslationResult = null;
+      return;
+    }
+    if (!aiTranslationProvider) {
+      testTranslationError = "no-provider";
+      testTranslationResult = null;
+      return;
+    }
+
+    isTestTranslationLoading = true;
+    testTranslationError = null;
+    testTranslationResult = null;
+    try {
+      const result = await invoke<TranslateResponse>("translate_text", {
+        request: {
+          text: testTranslationInput,
+          sourceLang: aiTranslateSourceLanguage === "auto" ? "" : aiTranslateSourceLanguage,
+          targetLang: aiTranslateTargetLanguage,
+          forceProvider: aiTranslationProvider,
+        },
+      });
+      testTranslationResult = result;
+    } catch (e: unknown) {
+      testTranslationError =
+        e instanceof Error ? e.message : String(e);
+    } finally {
+      isTestTranslationLoading = false;
+    }
+  }
+
   // Save autostart setting when toggled
   async function toggleAutostart() {
     try {
       await invoke("set_autostart_enabled", { enabled: autostartEnabled });
     } catch (e) {
       console.error("Failed to toggle autostart:", e);
+    }
+  }
+
+  async function refreshClipboardMonitorStatus() {
+    try {
+      clipboardMonitorRunning = await invoke<boolean>(
+        "is_clipboard_monitor_running",
+      );
+    } catch (e) {
+      console.error("Failed to check clipboard monitor status:", e);
+    }
+  }
+
+  async function toggleClipboardMonitor() {
+    if (clipboardMonitorBusy) return;
+    clipboardMonitorBusy = true;
+    const requestedState = clipboardMonitorRunning;
+    try {
+      if (requestedState) {
+        await invoke("start_clipboard_monitor", {
+          cjkOnly: false,
+          pollIntervalMs: 300,
+        });
+      } else {
+        await invoke("stop_clipboard_monitor");
+      }
+      await refreshClipboardMonitorStatus();
+      await refreshSystemHealth();
+    } catch (e) {
+      console.error("Failed to toggle clipboard monitor:", e);
+      clipboardMonitorRunning = !requestedState;
+      loadError = e instanceof Error ? e.message : String(e);
+    } finally {
+      clipboardMonitorBusy = false;
+    }
+  }
+
+  async function refreshSystemHealth() {
+    try {
+      systemHealth = await invoke<SystemHealth>("get_system_health");
+    } catch (e) {
+      console.error("Failed to load system health:", e);
+    }
+  }
+
+  async function setupClipboardMonitorListeners() {
+    unlistenClipboardChanged = await listen<ClipboardChangedEvent>(
+      "clipboard-changed",
+      (event) => {
+        clipboardLastText = event.payload.text.slice(0, 500);
+        clipboardLastHasCjk =
+          event.payload.hasCjk ?? event.payload.has_cjk ?? false;
+        clipboardLastAt = new Date();
+      },
+    );
+    unlistenClipboardStarted = await listen("clipboard-monitor-started", () => {
+      clipboardMonitorRunning = true;
+      void refreshSystemHealth();
+    });
+    unlistenClipboardStopped = await listen("clipboard-monitor-stopped", () => {
+      clipboardMonitorRunning = false;
+      void refreshSystemHealth();
+    });
+  }
+
+  // Re-read Accessibility permission status. Backend no-ops to `true` on
+  // non-macOS so the card stays "Granted" there without extra branching.
+  async function checkAccessibility() {
+    if (isCheckingAccessibility) return;
+    isCheckingAccessibility = true;
+    try {
+      accessibilityGranted =
+        (await invoke<boolean>("check_accessibility_permission")) ?? false;
+      if (accessibilityGranted) {
+        stopAccessibilityPoll();
+      }
+    } catch (e) {
+      console.error("Failed to check accessibility permission:", e);
+      accessibilityGranted = false;
+    } finally {
+      isCheckingAccessibility = false;
+    }
+  }
+
+  // Open the macOS Accessibility pane. Backend returns `true` if the user
+  // already trusts us (no need to open the pane). We schedule a delayed
+  // re-check so the badge flips if the user granted and came back quickly.
+  async function requestAccessibility() {
+    try {
+      await invoke("request_accessibility_permission");
+    } catch (e) {
+      console.error("Failed to request accessibility permission:", e);
+    }
+    // After returning from System Settings, the AX trust flag needs a moment
+    // to propagate; poll shortly so the UI matches reality.
+    setTimeout(() => {
+      void checkAccessibility();
+      if (!accessibilityGranted) startAccessibilityPoll();
+    }, 1500);
+  }
+
+  function startAccessibilityPoll() {
+    if (accessibilityPollId !== null) return;
+    accessibilityPollId = setInterval(() => {
+      void checkAccessibility();
+    }, 2000);
+  }
+
+  function stopAccessibilityPoll() {
+    if (accessibilityPollId !== null) {
+      clearInterval(accessibilityPollId);
+      accessibilityPollId = null;
     }
   }
 
@@ -277,6 +547,9 @@
           aiTimeoutMs: aiTimeoutMs,
           aiApiBaseUrl: aiApiBaseUrl,
           aiTranslateTargetLanguage: aiTranslateTargetLanguage,
+          aiTranslationProvider: aiTranslationProvider,
+          aiTranslationLocalModelPath: aiTranslationLocalModelPath,
+          aiTranslateSourceLanguage: aiTranslateSourceLanguage,
           aiPolishStyle: aiPolishStyles,
           uiLanguage: uiLanguage,
           underlineStyle: underlineStyle,
@@ -359,6 +632,9 @@
       aiTimeoutMs = 12000;
       aiApiBaseUrl = "https://openrouter.ai/api/v1/chat/completions";
       aiTranslateTargetLanguage = "English";
+      aiTranslationProvider = "openai";
+      aiTranslationLocalModelPath = "";
+      aiTranslateSourceLanguage = "auto";
       aiPolishStyles = ["formal"];
       underlineStyle = "wavy";
       underlineColor = "#ff3b30";
@@ -402,10 +678,20 @@
     const frameId = requestAnimationFrame(() => {
       void loadConfiguration();
       void loadHotkeyConfiguration();
+      void refreshClipboardMonitorStatus();
+      void refreshSystemHealth();
+      void setupClipboardMonitorListeners();
+      void checkAccessibility().then(() => {
+        if (!accessibilityGranted) startAccessibilityPoll();
+      });
     });
 
     return () => {
       cancelAnimationFrame(frameId);
+      stopAccessibilityPoll();
+      unlistenClipboardChanged?.();
+      unlistenClipboardStarted?.();
+      unlistenClipboardStopped?.();
     };
   });
 
@@ -845,6 +1131,133 @@
           {tr("settings.general") || "General"}
         </h3>
 
+        <!-- Accessibility Permission -->
+        <div
+          class="rounded-lg border p-3"
+          data-testid="accessibility-permission-card"
+        >
+          <div class="flex items-start justify-between gap-3">
+            <div class="min-w-0 flex-1 space-y-0.5">
+              <label class="text-sm font-medium" for="accessibility-status">
+                {tr("settings.accessibility")}
+              </label>
+              <p class="text-muted-foreground text-xs">
+                {tr("settings.accessibilityDesc")}
+              </p>
+              <p class="text-muted-foreground text-xs">
+                {tr("settings.accessibility.required")}
+              </p>
+            </div>
+            <div class="flex shrink-0 flex-col items-end gap-2">
+              <!-- Status badge -->
+              <div
+                id="accessibility-status"
+                class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium {accessibilityGranted
+                  ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
+                  : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400'}"
+              >
+                <span
+                  class={'h-1.5 w-1.5 rounded-full ' +
+                    (accessibilityGranted ? 'bg-green-600' : 'bg-red-600')}
+                ></span>
+                <span>
+                  {#if isCheckingAccessibility}
+                    {tr("settings.loading")}
+                  {:else if accessibilityGranted}
+                    {tr("settings.accessibility.granted")}
+                  {:else}
+                    {tr("settings.accessibility.denied")}
+                  {/if}
+                </span>
+              </div>
+              <div class="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={accessibilityGranted}
+                  onclick={requestAccessibility}
+                >
+                  {tr("settings.accessibility.openSettings")}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  disabled={isCheckingAccessibility}
+                  onclick={() => void checkAccessibility()}
+                >
+                  {tr("settings.accessibility.refresh")}
+                </Button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Runtime Health -->
+        <div class="rounded-lg border p-3">
+          <div class="mb-3 flex items-start justify-between gap-3">
+            <div class="space-y-0.5">
+              <div class="flex items-center gap-2 text-sm font-medium">
+                <Activity class="h-4 w-4" />
+                <span>{tr("settings.health")}</span>
+              </div>
+              <p class="text-muted-foreground text-xs">
+                {tr("settings.healthDesc")}
+              </p>
+            </div>
+            <Button variant="ghost" size="sm" onclick={refreshSystemHealth}>
+              {tr("settings.accessibility.refresh")}
+            </Button>
+          </div>
+          {#if systemHealth}
+            <div class="grid grid-cols-1 gap-2 text-xs md:grid-cols-2">
+              <div class="rounded-md bg-muted/40 p-2">
+                <span class="text-muted-foreground"
+                  >{tr("settings.health.accessibility")}</span
+                >
+                <p class="mt-1 font-medium">
+                  {systemHealth.accessibilityGranted
+                    ? tr("settings.accessibility.granted")
+                    : tr("settings.accessibility.denied")}
+                </p>
+              </div>
+              <div class="rounded-md bg-muted/40 p-2">
+                <span class="text-muted-foreground"
+                  >{tr("settings.health.hotkey")}</span
+                >
+                <p class="mt-1 font-medium">
+                  {systemHealth.hotkeyRunning
+                    ? `${tr("settings.health.ready")} · ${systemHealth.hotkeyBinding}`
+                    : tr("settings.health.unavailable")}
+                </p>
+              </div>
+              <div class="rounded-md bg-muted/40 p-2">
+                <span class="text-muted-foreground"
+                  >{tr("settings.health.overlay")}</span
+                >
+                <p class="mt-1 font-medium">
+                  {systemHealth.overlayReady
+                    ? tr("settings.health.markers", {
+                        count: systemHealth.overlayMarkerCount,
+                      })
+                    : tr("settings.health.unavailable")}
+                </p>
+              </div>
+              <div class="rounded-md bg-muted/40 p-2">
+                <span class="text-muted-foreground"
+                  >{tr("settings.health.clipboard")}</span
+                >
+                <p class="mt-1 font-medium">
+                  {systemHealth.clipboardMonitorRunning
+                    ? tr("settings.clipboardMonitor.running")
+                    : tr("settings.clipboardMonitor.stopped")}
+                </p>
+              </div>
+            </div>
+          {:else}
+            <p class="text-muted-foreground text-xs">{tr("common.loading")}</p>
+          {/if}
+        </div>
+
         <!-- Launch at Login -->
         <div class="flex items-center justify-between rounded-lg border p-3">
           <div class="space-y-0.5">
@@ -860,6 +1273,53 @@
             id="autostart-enabled"
             onchange={() => toggleAutostart()}
           />
+        </div>
+        <!-- Clipboard Monitor -->
+        <div class="rounded-lg border p-3">
+          <div class="flex items-center justify-between gap-3">
+            <div class="space-y-0.5">
+              <label class="text-sm font-medium" for="clipboard-monitor-enabled"
+                >{tr("settings.clipboardMonitor")}</label
+              >
+              <p class="text-muted-foreground text-xs">
+                {tr("settings.clipboardMonitorDesc")}
+              </p>
+            </div>
+            <Switch
+              bind:checked={clipboardMonitorRunning}
+              id="clipboard-monitor-enabled"
+              disabled={clipboardMonitorBusy}
+              onchange={() => toggleClipboardMonitor()}
+            />
+          </div>
+          <div class="mt-3 rounded-md bg-muted/40 p-3 text-xs">
+            <div class="flex items-center gap-2 font-medium">
+              <ClipboardList class="h-3.5 w-3.5" />
+              <span>
+                {clipboardMonitorRunning
+                  ? tr("settings.clipboardMonitor.running")
+                  : tr("settings.clipboardMonitor.stopped")}
+              </span>
+            </div>
+            <p class="text-muted-foreground mt-2">
+              {tr("settings.clipboardMonitor.lastChange")}
+            </p>
+            {#if clipboardLastText}
+              <p class="mt-1 line-clamp-3 whitespace-pre-wrap break-words">
+                {clipboardLastText}
+              </p>
+              <p class="text-muted-foreground mt-1">
+                {clipboardLastAt?.toLocaleTimeString()}
+                {#if clipboardLastHasCjk}
+                  · {tr("settings.clipboardMonitor.cjk")}
+                {/if}
+              </p>
+            {:else}
+              <p class="text-muted-foreground mt-1">
+                {tr("settings.clipboardMonitor.empty")}
+              </p>
+            {/if}
+          </div>
         </div>
       </div>
 
@@ -951,62 +1411,71 @@
           />
         </div>
 
+        <div
+          class="rounded-lg border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-200"
+        >
+          {tr("settings.aiPrivacyNote")}
+        </div>
+
         {#if aiGrammarEnabled}
           <div class="space-y-3 rounded-lg border p-4">
-            <div class="space-y-1">
-              <label class="text-sm font-medium" for="openai-api-key"
-                >{tr("settings.apiKey")}</label
-              >
-              <Input
-                id="openai-api-key"
-                type="password"
-                bind:value={openaiApiKey}
-                placeholder="sk-..."
-                oninput={() => (hasUnsavedChanges = true)}
-              />
-            </div>
-            <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+            {#if aiTranslationProvider === "openai"}
               <div class="space-y-1">
-                <label class="text-sm font-medium" for="openai-model"
-                  >{tr("settings.model")}</label
+                <label class="text-sm font-medium" for="openai-api-key"
+                  >{tr("settings.apiKey")}</label
                 >
                 <Input
-                  id="openai-model"
-                  bind:value={openaiModel}
-                  placeholder="gpt-4.1-mini"
+                  id="openai-api-key"
+                  type="password"
+                  bind:value={openaiApiKey}
+                  placeholder="sk-..."
                   oninput={() => (hasUnsavedChanges = true)}
                 />
+                <p class="text-muted-foreground text-xs">
+                  {tr("settings.apiKeySecure")}
+                </p>
+              </div>
+              <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+                <div class="space-y-1">
+                  <label class="text-sm font-medium" for="openai-model"
+                    >{tr("settings.model")}</label
+                  >
+                  <Input
+                    id="openai-model"
+                    bind:value={openaiModel}
+                    placeholder="gpt-4.1-mini"
+                    oninput={() => (hasUnsavedChanges = true)}
+                  />
+                </div>
+                <div class="space-y-1">
+                  <label class="text-sm font-medium" for="ai-max-input"
+                    >{tr("settings.maxInput")}</label
+                  >
+                  <Input
+                    id="ai-max-input"
+                    type="number"
+                    bind:value={aiMaxInputChars}
+                    min="200"
+                    max="20000"
+                    oninput={() => (hasUnsavedChanges = true)}
+                  />
+                </div>
+                <div class="space-y-1">
+                  <label class="text-sm font-medium" for="ai-timeout-ms"
+                    >{tr("settings.timeout")}</label
+                  >
+                  <Input
+                    id="ai-timeout-ms"
+                    type="number"
+                    bind:value={aiTimeoutMs}
+                    min="1000"
+                    max="120000"
+                    step="500"
+                    oninput={() => (hasUnsavedChanges = true)}
+                  />
+                </div>
               </div>
               <div class="space-y-1">
-                <label class="text-sm font-medium" for="ai-max-input"
-                  >{tr("settings.maxInput")}</label
-                >
-                <Input
-                  id="ai-max-input"
-                  type="number"
-                  bind:value={aiMaxInputChars}
-                  min="200"
-                  max="20000"
-                  oninput={() => (hasUnsavedChanges = true)}
-                />
-              </div>
-              <div class="space-y-1">
-                <label class="text-sm font-medium" for="ai-timeout-ms"
-                  >{tr("settings.timeout")}</label
-                >
-                <Input
-                  id="ai-timeout-ms"
-                  type="number"
-                  bind:value={aiTimeoutMs}
-                  min="1000"
-                  max="120000"
-                  step="500"
-                  oninput={() => (hasUnsavedChanges = true)}
-                />
-              </div>
-            </div>
-            <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
-              <div class="space-y-1 md:col-span-2">
                 <label class="text-sm font-medium" for="ai-api-base-url"
                   >{tr("settings.endpoint")}</label
                 >
@@ -1016,6 +1485,52 @@
                   placeholder="https://openrouter.ai/api/v1/chat/completions"
                   oninput={() => (hasUnsavedChanges = true)}
                 />
+              </div>
+            {/if}
+            <!-- Translation Provider -->
+            <div class="space-y-2">
+              <label class="text-sm font-medium" for="ai-translation-provider"
+                >{tr("settings.translationProvider")}</label
+              >
+              <select
+                id="ai-translation-provider"
+                bind:value={aiTranslationProvider}
+                onchange={() => (hasUnsavedChanges = true)}
+                class="border-input bg-background ring-offset-background focus-visible:border-ring focus-visible:ring-ring/50 flex h-9 w-full min-w-0 rounded-md border px-3 py-1 text-sm outline-none focus-visible:ring-[3px]"
+              >
+                <option value="openai">{tr("settings.translationProvider.openai")}</option>
+                <option value="apple"
+                  >{tr("settings.translationProvider.apple")}</option
+                >
+                <option value="local"
+                  >{tr("settings.translationProvider.local")}</option
+                >
+              </select>
+              {#if aiTranslationProvider === "apple" || aiTranslationProvider === "local"}
+                <p
+                  class="text-muted-foreground text-xs"
+                  data-testid="translation-provider-nmt-note"
+                >
+                  {tr("settings.translationProvider.nmtNote")}
+                </p>
+              {/if}
+            </div>
+            <div class="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div class="space-y-1">
+                <label class="text-sm font-medium" for="ai-source-language"
+                  >{tr("settings.sourceLanguage")}</label
+                >
+                <select
+                  id="ai-source-language"
+                  bind:value={aiTranslateSourceLanguage}
+                  onchange={() => (hasUnsavedChanges = true)}
+                  class="border-input bg-background ring-offset-background focus-visible:border-ring focus-visible:ring-ring/50 flex h-9 w-full min-w-0 rounded-md border px-3 py-1 text-sm outline-none focus-visible:ring-[3px]"
+                >
+                  <option value="auto">{tr("settings.autoDetect")}</option>
+                  {#each translateLanguageOptions as language}
+                    <option value={language}>{language}</option>
+                  {/each}
+                </select>
               </div>
               <div class="space-y-1">
                 <label class="text-sm font-medium" for="ai-target-language"
@@ -1032,6 +1547,151 @@
                   {/each}
                 </select>
               </div>
+            </div>
+            {#if aiTranslationProvider === "local"}
+              <div class="space-y-3 rounded-md border p-3">
+                <div class="space-y-1">
+                  <label
+                    class="text-sm font-medium"
+                    for="ai-translation-local-model-path"
+                    >{tr("settings.translationModelPath")}</label
+                  >
+                  <Input
+                    id="ai-translation-local-model-path"
+                    bind:value={aiTranslationLocalModelPath}
+                    placeholder="/Users/you/models/opus-mt-zh-en"
+                    oninput={() => (hasUnsavedChanges = true)}
+                  />
+                  <p class="text-muted-foreground text-xs">
+                    {tr("settings.translationModelPathDesc")}
+                  </p>
+                </div>
+                {#if modelStatus}
+                  <div class="text-xs">
+                    <span class="font-medium"
+                      >{tr("settings.modelStatus")}:</span
+                    >
+                    {#if modelStatus.ready}
+                      <span class="text-green-600"
+                        >{tr("settings.modelReady")}</span
+                      >
+                    {:else}
+                      <span class="text-amber-600"
+                        >{tr("settings.modelNotReady")}</span
+                      >
+                    {/if}
+                  </div>
+                {/if}
+                <div class="space-y-2">
+                  <p class="text-sm font-medium">
+                    {tr("settings.downloadModel")}
+                  </p>
+                  <p class="text-muted-foreground text-xs">
+                    {tr("settings.downloadModelDesc")}
+                  </p>
+                  <select
+                    bind:value={selectedDownloadModel}
+                    onchange={updateDefaultDownloadTarget}
+                    class="border-input bg-background ring-offset-background focus-visible:border-ring focus-visible:ring-ring/50 flex h-9 w-full min-w-0 rounded-md border px-3 py-1 text-sm outline-none focus-visible:ring-[3px]"
+                  >
+                    {#each downloadableModels as model}
+                      <option value={model.id}>{model.name}</option>
+                    {/each}
+                  </select>
+                  <Input
+                    bind:value={downloadTargetDir}
+                    placeholder="/path/to/model"
+                    oninput={() => (hasUnsavedChanges = true)}
+                  />
+                  <button
+                    onclick={downloadModel}
+                    disabled={isDownloading || !selectedDownloadModel}
+                    class="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 inline-flex items-center rounded-md px-3 py-1.5 text-sm font-medium"
+                  >
+                    {#if isDownloading}
+                      {tr("settings.downloading")}
+                      {#if downloadProgress}
+                        ({downloadProgress.file}
+                        {downloadProgress.percent}%)
+                      {/if}
+                    {:else}
+                      {tr("settings.download")}
+                    {/if}
+                  </button>
+                  {#if downloadProgress && isDownloading}
+                    <div class="bg-secondary h-2 w-full overflow-hidden rounded-full">
+                      <div
+                        class="bg-primary h-full transition-all"
+                        style="width: {downloadProgress.percent}%"
+                      ></div>
+                    </div>
+                  {/if}
+                </div>
+              </div>
+            {/if}
+            <!-- Test Translation -->
+            <div class="space-y-3 rounded-md border p-3">
+              <div class="space-y-1">
+                <span class="text-sm font-medium">
+                  {tr("settings.testTranslation")}
+                </span>
+                <p class="text-muted-foreground text-xs">
+                  {tr("settings.testTranslationDesc")}
+                </p>
+              </div>
+              <textarea
+                bind:value={testTranslationInput}
+                rows={3}
+                placeholder={tr("settings.testTranslationPlaceholder")}
+                class="border-input bg-background ring-offset-background placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 flex min-h-[60px] w-full rounded-md border px-3 py-2 text-sm outline-none focus-visible:ring-[3px]"
+              ></textarea>
+              <div class="flex items-center gap-2">
+                <button
+                  onclick={testTranslation}
+                  disabled={isTestTranslationLoading || !testTranslationInput.trim()}
+                  class="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 inline-flex items-center rounded-md px-3 py-1.5 text-sm font-medium"
+                >
+                  {#if isTestTranslationLoading}
+                    {tr("settings.testTranslationLoading")}
+                  {:else}
+                    {tr("settings.testTranslationButton")}
+                  {/if}
+                </button>
+                {#if testTranslationError}
+                  <span class="text-xs text-destructive">
+                    {#if testTranslationError === "no-provider"}
+                      {tr("settings.testTranslationNoProvider")}
+                    {:else if testTranslationError === "no-text"}
+                      {tr("settings.testTranslationNoText")}
+                    {:else}
+                      {tr("settings.testTranslationError")}: {testTranslationError}
+                    {/if}
+                  </span>
+                {/if}
+              </div>
+              {#if testTranslationResult}
+                <div class="space-y-2 rounded-md border bg-muted/30 p-3">
+                  <div class="flex items-center gap-2">
+                    <span class="text-xs font-medium">
+                      {tr("settings.testTranslationProviderUsed")}:
+                    </span>
+                    <span class="text-xs">
+                      {testTranslationResult.providerUsed}
+                      {#if testTranslationResult.fallbackUsed}
+                        <span class="text-muted-foreground">
+                          {tr("settings.testTranslationFallbackUsed")}
+                        </span>
+                      {/if}
+                    </span>
+                  </div>
+                  <div>
+                    <span class="text-xs font-medium">
+                      {tr("settings.testTranslationResult")}:
+                    </span>
+                    <p class="text-sm whitespace-pre-wrap">{testTranslationResult.translatedText}</p>
+                  </div>
+                </div>
+              {/if}
             </div>
             <div class="space-y-2">
               <span class="text-sm font-medium">

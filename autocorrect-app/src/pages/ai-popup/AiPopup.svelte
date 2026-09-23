@@ -1,9 +1,10 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
-  import { listen } from "@tauri-apps/api/event";
+  import { listen, emit } from "@tauri-apps/api/event";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { LogicalSize } from "@tauri-apps/api/dpi";
   import { Ban, RefreshCw, Sparkles, X } from "lucide-svelte";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
   import { locale, t } from "$lib/i18n";
   import {
     Tooltip,
@@ -13,6 +14,7 @@
   } from "$lib/components/ui/tooltip";
   import { Button } from "$lib/components/ui/button";
   import { Textarea } from "$lib/components/ui/textarea";
+  import TextDiff from "$lib/components/TextDiff.svelte";
   import type {
     AiAssistResponse,
     AiClarityCheckResponse,
@@ -21,6 +23,13 @@
   } from "$lib/types/ai";
   import type { AppConfig } from "$lib/types/app";
   import type { ThemeMode } from "$lib/types/theme";
+  import {
+    disabledReason,
+    isCapHidden,
+    isCapDisabled,
+    type CapabilityKey,
+    type TranslationProviderId,
+  } from "$lib/ai-capabilities";
   import {
     applyThemeToDom,
     isThemeMode,
@@ -130,6 +139,7 @@
   let error = $state("");
   let activeTool = $state<Tool | null>(null);
   let translateLang = $state("English");
+  let aiEndpoint = $state("configured endpoint");
   let ignoreMessage = $state("");
   let ignoreError = $state(false);
   let assistResult = $state<AiAssistResponse | null>(null);
@@ -138,6 +148,31 @@
   let clarityResult = $state<AiClarityCheckResponse | null>(null);
   let vocabResult = $state<AiVocabularyEnhanceResponse | null>(null);
   let clarityStreamBuffer = $state("");
+  let aiTranslationProvider = $state("openai");
+  let openaiApiKey = $state("");
+  // Map each AiPopup tool to the AiCapabilities key that gates it.
+  const TOOL_CAPABILITY: Record<Tool, CapabilityKey> = {
+    translate: "translate",
+    rewrite: "rewrite",
+    paraphrase: "paraphrase",
+    concise: "simplify",
+    tone: "tone",
+    clarity: "clarity",
+    vocabulary: "vocabulary",
+  };
+  function provider(): TranslationProviderId {
+    const p = aiTranslationProvider;
+    return p === "apple" || p === "local" ? p : "openai";
+  }
+  function isToolHidden(tool: Tool): boolean {
+    return isCapHidden(TOOL_CAPABILITY[tool], provider());
+  }
+  function isToolDisabled(tool: Tool): boolean {
+    return isCapDisabled(TOOL_CAPABILITY[tool], provider(), openaiApiKey);
+  }
+  function toolDisabledTitle(tool: Tool): string {
+    return disabledReason(TOOL_CAPABILITY[tool], provider(), openaiApiKey) ?? "";
+  }
 
   let sourceAppName = $state("");
   let sourceBundleId = $state("");
@@ -249,7 +284,25 @@
   async function loadAiDefaults() {
     try {
       const config = await invoke<AppConfig>("get_config");
-      translateLang = config.aiTranslateTargetLanguage ?? "English";
+      // The last language picked in this popup wins over the configured
+      // default, so repeat translations don't require re-picking.
+      translateLang =
+        localStorage.getItem("aiPopup.lastTranslateLang") ??
+        config.aiTranslateTargetLanguage ??
+        "English";
+      const provider = (config.aiTranslationProvider ?? "openai")
+        .toString()
+        .trim()
+        .toLowerCase();
+      aiTranslationProvider =
+        provider === "apple" || provider === "local" ? provider : "openai";
+      aiEndpoint =
+        aiTranslationProvider === "apple"
+          ? "Apple Intelligence (on-device)"
+          : aiTranslationProvider === "local"
+            ? "Local translation model (on-device)"
+            : config.aiApiBaseUrl || "configured endpoint";
+      openaiApiKey = config.openaiApiKey ?? "";
     } catch (configError) {
       console.warn("Failed to load AI popup defaults:", configError);
     }
@@ -400,9 +453,20 @@
     result = text;
   }
 
+  function applyReplacement(original: string, replacement: string) {
+    if (!original) return;
+    const source = result.trim() ? result : selectedText;
+    result = source.split(original).join(replacement);
+  }
+
   function applyVocabularySuggestion(original: string, replacement: string) {
     if (!selectedText || !original) return;
-    result = selectedText.split(original).join(replacement);
+    applyReplacement(original, replacement);
+  }
+
+  function applyClaritySuggestion(original: string, replacement: string) {
+    if (!selectedText || !original || !replacement) return;
+    applyReplacement(original, replacement);
   }
 
   function getIssueTypeLabel(type: string): string {
@@ -460,7 +524,7 @@
       if (!window.confirm(tr("aipopup.analysis.confirmApplyAll"))) {
         return;
       }
-      result = buildClarityAppliedText();
+      result = result.trim() ? result : buildClarityAppliedText();
       void acceptResult();
     }
   }
@@ -525,7 +589,84 @@
     }
   }
 
+  let resizeObserverCleanup: (() => void) | undefined;
+
+  // Adaptive window height: keep the window short while only the tool row is
+  // visible, and grow it (up to a cap) when a result renders so the output
+  // gets real space instead of a scrollbar sliver.
+  const POPUP_MIN_H = 220;
+  const POPUP_MAX_H = 620;
+  const POPUP_W = 460; // keep in sync with tauri.conf.json
+  let lastAppliedH = 0;
+  let resizeTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function fitWindowToContent() {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(async () => {
+      const el = document.querySelector<HTMLElement>(".popup");
+      if (!el) return;
+      // scrollHeight is the FULL content height even while the box is
+      // clamped by max-height: 100vh.
+      const needed = Math.ceil(el.scrollHeight) + 6;
+      const h = Math.min(POPUP_MAX_H, Math.max(POPUP_MIN_H, needed));
+      void emit("ai-popup-fit-diag", {
+        needed,
+        h,
+        lastAppliedH,
+        boxH: el.clientHeight,
+      });
+      // Only resize on a meaningful delta so window-size feedback settles.
+      if (Math.abs(h - lastAppliedH) < 12) return;
+      lastAppliedH = h;
+      try {
+        await getCurrentWindow().setSize(new LogicalSize(POPUP_W, h));
+        void emit("ai-popup-fit-diag", { setSize: h, ok: true });
+      } catch (e) {
+        void emit("ai-popup-fit-diag", {
+          setSize: h,
+          ok: false,
+          err: String(e),
+        });
+      }
+    }, 50);
+  }
+
+  // Drive the fit from reactive state: when the box is already clamped by
+  // max-height its size doesn't change with content, so a pure
+  // ResizeObserver would never fire after the first overflow.
+  $effect(() => {
+    void [
+      activeTool,
+      loading,
+      error,
+      assistResult,
+      result,
+      toneResult,
+      clarityResult,
+      vocabResult,
+      translateLang,
+      selectedText,
+      lastAssistAction,
+    ];
+    void tick().then(() => {
+      // Re-fit result textareas first: programmatic value updates don't
+      // fire their input handler, and their height feeds the measurement.
+      document
+        .querySelectorAll<HTMLTextAreaElement>("textarea.result-area")
+        .forEach((t) => {
+          t.style.height = "auto";
+          t.style.height = `${t.scrollHeight}px`;
+        });
+      fitWindowToContent();
+    });
+  });
+
   onMount(() => {
+    // set_size is a no-op on non-resizable windows; make sure the adaptive
+    // height can always be applied regardless of config drift.
+    void getCurrentWindow()
+      .setResizable(true)
+      .catch(() => {});
     const unlistenThemePromise = listen<ThemeMode>("theme-changed", (event) => {
       const mode = event.payload;
       if (isThemeMode(mode)) {
@@ -538,6 +679,13 @@
       setupSystemThemeListener();
     });
     void loadAiDefaults();
+
+    // Fallback driver: catches layout changes the reactive effect can't
+    // (e.g. external window resizes re-clamping the max-height).
+    const observer = new ResizeObserver(() => fitWindowToContent());
+    const popupEl = document.querySelector<HTMLElement>(".popup");
+    if (popupEl) observer.observe(popupEl);
+    resizeObserverCleanup = () => observer.disconnect();
 
     (async () => {
       try {
@@ -622,6 +770,7 @@
       unlistenClarityCompletePromise.then((fn) => fn());
       unlistenClarityErrorPromise.then((fn) => fn());
       cleanupThemeListener();
+      resizeObserverCleanup?.();
     };
   });
 </script>
@@ -671,6 +820,9 @@
   </div>
 
   {#if selectedText}
+    <div class="privacy-note">
+      {tr("aipopup.privacyNotice", { endpoint: aiEndpoint })}
+    </div>
     <div class="preview">
       <div class="preview-meta">
         <span class="preview-label">{tr("aipopup.selected")}</span>
@@ -683,68 +835,40 @@
     </div>
   {/if}
 
-  <div class="section">
-    <div class="section-header">
-      <span class="section-title">{tr("aipopup.rewriteSection")}</span>
-      <span class="section-subtitle">{tr("aipopup.rewriteSectionDesc")}</span>
-    </div>
-    <div class="tool-grid tool-grid-assist">
-      {#each assistTools as tool}
-        <button
-          class="tool-card"
-          class:active={activeTool === tool.id}
-          onclick={() => runTool(tool.id)}
-          disabled={loading}
-        >
-          <span class="tool-icon">{tool.icon}</span>
-          <span class="tool-title">{tool.label()}</span>
-          <span class="tool-description">{tool.description()}</span>
-        </button>
-      {/each}
-    </div>
-  </div>
-
-  <div class="section">
-    <div class="section-header">
-      <span class="section-title">{tr("aipopup.analysisSection")}</span>
-      <span class="section-subtitle">{tr("aipopup.analysisSectionDesc")}</span>
-    </div>
-    <div class="tool-grid tool-grid-analysis">
-      {#each analysisTools as tool}
-        <button
-          class="tool-card tool-card-compact"
-          class:active={activeTool === tool.id}
-          onclick={() => runTool(tool.id)}
-          disabled={loading}
-        >
-          <span class="tool-icon">{tool.icon}</span>
-          <span class="tool-title">{tool.label()}</span>
-          <span class="tool-description">{tool.description()}</span>
-        </button>
-      {/each}
-    </div>
+  <div class="tool-bar">
+    {#each [...assistTools, ...analysisTools].filter((tool) => !isToolHidden(tool.id)) as tool}
+      <button
+        class="tool-chip"
+        class:active={activeTool === tool.id}
+        onclick={() => runTool(tool.id)}
+        disabled={loading || isToolDisabled(tool.id)}
+        title={toolDisabledTitle(tool.id) || `${tool.label()} — ${tool.description()}`}
+      >
+        <span class="tool-icon">{tool.icon}</span>
+        <span class="tool-title">{tool.label()}</span>
+      </button>
+    {/each}
   </div>
 
   {#if activeTool === "translate"}
     <div class="translate-panel">
       <div class="translate-meta">
         <span class="translate-label">{tr("aipopup.into")}</span>
+        <select
+          class="lang-select"
+          disabled={loading}
+          value={translateLang}
+          onchange={(event) => {
+            translateLang = event.currentTarget.value;
+            localStorage.setItem("aiPopup.lastTranslateLang", translateLang);
+            void runAssist("translate");
+          }}
+        >
+          {#each languages as lang}
+            <option value={lang}>{lang}</option>
+          {/each}
+        </select>
         <span class="translate-hint">{tr("aipopup.translateHint")}</span>
-      </div>
-      <div class="lang-row">
-        {#each languages as lang}
-          <button
-            class="lang-btn"
-            class:selected={translateLang === lang}
-            disabled={loading}
-            onclick={() => {
-              translateLang = lang;
-              void runAssist("translate");
-            }}
-          >
-            {lang}
-          </button>
-        {/each}
       </div>
       <div
         class="limit-note"
@@ -799,9 +923,15 @@
         <Textarea
           class="result-area"
           bind:value={result}
-          rows={6}
+          rows={2}
           spellcheck={false}
         />
+        {#if result !== selectedText}
+          <div class="diff-block">
+            <div class="diff-label">{tr("aipopup.changes")}</div>
+            <TextDiff original={selectedText} revised={result} />
+          </div>
+        {/if}
       </div>
 
       {#if assistResult.alternatives.length > 0}
@@ -889,6 +1019,13 @@
                   <div class="issue-suggestion">
                     {tr("aipopup.analysis.suggestion")}: {issue.suggestion}
                   </div>
+                  <button
+                    class="mini-apply"
+                    onclick={() =>
+                      applyClaritySuggestion(issue.text, issue.suggestion)}
+                  >
+                    {tr("aipopup.analysis.apply")}
+                  </button>
                 </div>
               {/each}
             </div>
@@ -940,9 +1077,15 @@
       <Textarea
         class="result-area"
         bind:value={result}
-        rows={6}
+        rows={2}
         spellcheck={false}
       />
+      {#if result !== selectedText}
+        <div class="diff-block">
+          <div class="diff-label">{tr("aipopup.changes")}</div>
+          <TextDiff original={selectedText} revised={result} />
+        </div>
+      {/if}
       <div class="result-actions">
         <Button size="sm" onclick={acceptResult}>
           {tr("aipopup.accept")}
@@ -971,7 +1114,7 @@
   }
 
   .popup {
-    display: inline-flex;
+    display: flex;
     flex-direction: column;
     gap: 10px;
     background: var(--popup-surface);
@@ -980,9 +1123,21 @@
     border-radius: 12px;
     box-shadow: var(--popup-shadow);
     padding: 10px 12px 12px;
+    width: 100%;
+    box-sizing: border-box;
     min-width: 360px;
     max-width: min(720px, 95vw);
+    max-height: 100vh;
+    overflow-y: auto;
     border-bottom: 3px solid var(--popup-ai-border-accent);
+  }
+
+  /* Children must never shrink: with max-height clamping the popup, flex
+     shrink would compress the result panels (with internal scrollbars)
+     instead of overflowing — which also lies to the height-fit measurement
+     (scrollHeight stays small, so the window never grows). */
+  .popup > * {
+    flex-shrink: 0;
   }
 
   .header {
@@ -1069,6 +1224,17 @@
     color: var(--popup-hover-close-fg);
   }
 
+  .privacy-note {
+    padding: 7px 9px;
+    background: var(--popup-muted-surface);
+    border: 1px solid var(--popup-border);
+    border-radius: 8px;
+    color: var(--popup-muted-label);
+    font-size: 11px;
+    line-height: 1.35;
+    overflow-wrap: anywhere;
+  }
+
   .preview {
     padding: 10px 12px;
     background: var(--popup-muted-surface);
@@ -1086,7 +1252,6 @@
 
   .preview-label,
   .char-count,
-  .section-subtitle,
   .translate-hint,
   .limit-note {
     font-size: 11px;
@@ -1104,93 +1269,57 @@
     font-size: 12px;
     color: var(--popup-muted-text);
     line-height: 1.4;
-    white-space: pre-wrap;
-    word-break: break-word;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
-  .section {
+  .tool-bar {
     display: flex;
-    flex-direction: column;
-    gap: 8px;
+    flex-wrap: wrap;
+    gap: 6px;
   }
 
-  .section-header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 8px;
-  }
-
-  .section-title {
-    font-size: 12px;
-    font-weight: 600;
-    color: var(--popup-title);
-  }
-
-  .tool-grid {
-    display: grid;
-    gap: 8px;
-  }
-
-  .tool-grid-assist {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .tool-grid-analysis {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-  }
-
-  .tool-card {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 4px;
-    padding: 10px 12px;
+  .tool-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 5px 10px;
     background: var(--popup-muted-surface);
     border: 1px solid var(--popup-border);
-    border-radius: 10px;
+    border-radius: 999px;
     color: var(--popup-muted-text);
     cursor: pointer;
     text-align: left;
     transition: all 0.12s ease;
+    white-space: nowrap;
   }
 
-  .tool-card:hover:not(:disabled) {
+  .tool-chip:hover:not(:disabled) {
     background: var(--popup-ai-hover-bg);
     border-color: var(--popup-ai-hover-border);
     color: var(--popup-ai-hover-fg);
   }
 
-  .tool-card.active {
+  .tool-chip.active {
     background: var(--popup-ai-active-bg);
     border-color: var(--popup-ai-active-border);
     color: var(--popup-ai-active-fg);
   }
 
-  .tool-card:disabled {
+  .tool-chip:disabled {
     opacity: 0.55;
     cursor: not-allowed;
   }
 
-  .tool-card-compact {
-    min-height: 96px;
-  }
-
   .tool-icon {
-    font-size: 16px;
+    font-size: 13px;
     line-height: 1;
   }
 
   .tool-title {
     font-size: 12px;
     font-weight: 600;
-  }
-
-  .tool-description {
-    font-size: 11px;
-    line-height: 1.45;
-    color: inherit;
-    opacity: 0.82;
   }
 
   .translate-panel,
@@ -1203,6 +1332,8 @@
     border: 1px solid var(--popup-border);
     background: var(--popup-muted-surface);
     border-radius: 10px;
+    max-height: 560px;
+    overflow-y: auto;
   }
 
   .translate-meta,
@@ -1248,13 +1379,22 @@
     cursor: not-allowed;
   }
 
-  .lang-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
+  .lang-select {
+    font-size: 12px;
+    padding: 4px 8px;
+    border-radius: 8px;
+    background: var(--popup-surface);
+    border: 1px solid var(--popup-border);
+    color: var(--popup-title);
+    cursor: pointer;
+    max-width: 200px;
   }
 
-  .lang-btn,
+  .lang-select:focus {
+    outline: none;
+    border-color: var(--popup-ai-active-border);
+  }
+
   .focus-chip {
     font-size: 11px;
     padding: 4px 10px;
@@ -1262,13 +1402,7 @@
     background: var(--popup-surface);
     border: 1px solid var(--popup-border);
     color: var(--popup-muted-label);
-    cursor: pointer;
-  }
-
-  .lang-btn.selected {
-    background: var(--popup-ai-active-bg);
-    border-color: var(--popup-ai-active-border);
-    color: var(--popup-ai-active-fg);
+    cursor: default;
   }
 
   .limit-note-error {
@@ -1279,10 +1413,6 @@
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-  }
-
-  .focus-chip {
-    cursor: default;
   }
 
   .suggestion-card {
@@ -1300,11 +1430,11 @@
   .alternative-card {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
     border: 1px solid var(--popup-border);
     border-radius: 8px;
     background: var(--popup-surface);
-    padding: 10px;
+    padding: 6px 8px;
     text-align: left;
     cursor: pointer;
     transition: all 0.12s ease;
@@ -1324,11 +1454,11 @@
 
   .alternative-text {
     font-size: 11px;
-    line-height: 1.45;
+    line-height: 1.4;
     color: var(--popup-muted-text);
-    line-clamp: 4;
+    line-clamp: 2;
     display: -webkit-box;
-    -webkit-line-clamp: 4;
+    -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
@@ -1376,14 +1506,32 @@
     color: var(--popup-input-fg);
     font-size: 12px;
     line-height: 1.5;
-    padding: 10px 12px;
-    resize: vertical;
+    padding: 8px 10px;
+    resize: none;
+    overflow-y: hidden;
     font-family: inherit;
     outline: none;
+    min-height: 44px;
   }
 
   :global(.result-area:focus) {
     border-color: var(--popup-ai-focus-border);
+  }
+
+  .diff-block {
+    padding: 8px;
+    border: 1px solid var(--popup-border);
+    border-radius: 8px;
+    background: var(--popup-muted-surface);
+  }
+
+  .diff-label {
+    margin-bottom: 5px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--popup-muted-label);
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
   }
 
   .result-actions,
@@ -1397,7 +1545,7 @@
     display: grid;
     grid-template-columns: 1fr 1.15fr;
     gap: 10px;
-    max-height: 300px;
+    max-height: 460px;
   }
 
   .analysis-original,
@@ -1503,8 +1651,6 @@
       max-width: 96vw;
     }
 
-    .tool-grid-assist,
-    .tool-grid-analysis,
     .alternative-list,
     .analysis-layout {
       grid-template-columns: 1fr;

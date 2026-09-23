@@ -47,8 +47,12 @@ fn get_cached<T: serde::de::DeserializeOwned>(key: &str) -> Option<T> {
 
 /// Store a result in the cache, evicting the oldest entry if at capacity.
 fn set_cache<T: serde::Serialize>(key: &str, value: &T) {
-    let Ok(mut cache) = ai_cache().lock() else { return };
-    let Ok(json_value) = serde_json::to_value(value) else { return };
+    let Ok(mut cache) = ai_cache().lock() else {
+        return;
+    };
+    let Ok(json_value) = serde_json::to_value(value) else {
+        return;
+    };
 
     if cache.len() >= CACHE_MAX_ENTRIES {
         let oldest = cache
@@ -275,7 +279,7 @@ fn normalize_endpoint(endpoint: Option<String>) -> String {
     trimmed.to_string()
 }
 
-fn extract_content(value: &serde_json::Value) -> String {
+pub fn extract_content(value: &serde_json::Value) -> String {
     if let Some(content) = value
         .get("choices")
         .and_then(|c| c.get(0))
@@ -321,7 +325,10 @@ pub async fn check_grammar_issues_with_ai(
 ) -> Result<Vec<AiTypo>, Error> {
     let cache_key = build_cache_key("grammar", text, model, api_base_url);
     if let Some(cached) = get_cached::<Vec<AiTypo>>(&cache_key) {
-        log::info!("[AI_CACHE] grammar hit for key={}", &cache_key[..cache_key.len().min(20)]);
+        log::info!(
+            "[AI_CACHE] grammar hit for key={}",
+            &cache_key[..cache_key.len().min(20)]
+        );
         return Ok(cached);
     }
 
@@ -471,6 +478,15 @@ fn build_system_prompt(
         }
         _ => Err(Error::Api("Unsupported operation, expected grammar|translate|polish".to_string())),
     }
+}
+
+/// Build a system prompt specifically for the translation feature.
+/// Exported so the translate commands module can reuse it.
+pub fn build_system_prompt_for_translation(target_language: &str) -> Result<String, Error> {
+    Ok(format!(
+        "You are a professional translator. Translate the user text into {}. Return translated text only. No markdown, no explanations, no prefixes.",
+        target_language.trim()
+    ))
 }
 
 fn build_tone_detect_prompt() -> String {

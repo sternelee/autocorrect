@@ -2,10 +2,19 @@
 
 use crate::commands::errors::Error;
 use crate::commands::spellcheck::TypoSuggestion;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager, State};
+
+/// Guard so overlapping accept/undo choreographies cannot interleave
+/// (e.g. Enter + click firing twice, or undo racing an accept).
+static REPLACEMENT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// Guard so a slow spell-check workflow drops later hotkey triggers
+/// instead of queueing ghost popups that fire after the first one.
+static WORKFLOW_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
 /// Popup state shared across the application
 #[derive(Debug, Clone)]
@@ -48,10 +57,10 @@ pub struct LastReplacement {
     pub offset: usize,
     pub char_length: usize,
     pub source_app_name: Option<String>,
+    pub source_bundle_id: Option<String>,
 }
 
-static LAST_REPLACEMENT: std::sync::Mutex<Option<LastReplacement>> =
-    std::sync::Mutex::new(None);
+static LAST_REPLACEMENT: std::sync::Mutex<Option<LastReplacement>> = std::sync::Mutex::new(None);
 
 /// Push a replacement snapshot (only the most recent is kept).
 fn push_last_replacement(entry: LastReplacement) {
@@ -90,20 +99,22 @@ pub fn show_popup(
     if let Some(popup_window) = app.get_webview_window("popup") {
         // Update state
         if let Some(state) = app.try_state::<SharedPopupState>() {
-            let mut state = state.0.lock().map_err(|_| {
-                Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Failed to lock popup state",
-                ))
-            })?;
+            let mut state = state
+                .0
+                .lock()
+                .map_err(|_| Error::Io(std::io::Error::other("Failed to lock popup state")))?;
             state.is_visible = true;
             state.position = (x, y);
             state.original_text = original_text.clone();
             state.suggestion = suggestion.clone();
             #[cfg(target_os = "macos")]
             {
-                state.source_app_name = get_frontmost_app_name_macos();
-                state.source_bundle_id = get_frontmost_app_bundle_id_macos();
+                // Single fast NSWorkspace call (no osascript subprocess, which
+                // added 100-300ms latency to every popup show).
+                if let Some((name, bundle_id)) = frontmost_app_info_nsworkspace() {
+                    state.source_app_name = Some(name);
+                    state.source_bundle_id = Some(bundle_id);
+                }
             }
         }
 
@@ -198,12 +209,10 @@ pub fn hide_popup(app: AppHandle) -> Result<(), Error> {
     if let Some(popup_window) = app.get_webview_window("popup") {
         // Update state
         if let Some(state) = app.try_state::<SharedPopupState>() {
-            let mut state = state.0.lock().map_err(|_| {
-                Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Failed to lock popup state",
-                ))
-            })?;
+            let mut state = state
+                .0
+                .lock()
+                .map_err(|_| Error::Io(std::io::Error::other("Failed to lock popup state")))?;
             state.is_visible = false;
         }
 
@@ -230,12 +239,10 @@ pub fn position_popup(app: AppHandle, x: i32, y: i32) -> Result<(), Error> {
 
         // Update state
         if let Some(state) = app.try_state::<SharedPopupState>() {
-            let mut state = state.0.lock().map_err(|_| {
-                Error::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "Failed to lock popup state",
-                ))
-            })?;
+            let mut state = state
+                .0
+                .lock()
+                .map_err(|_| Error::Io(std::io::Error::other("Failed to lock popup state")))?;
             state.position = (x, y);
         }
 
@@ -251,12 +258,10 @@ pub fn position_popup(app: AppHandle, x: i32, y: i32) -> Result<(), Error> {
 /// Get the current popup state
 #[tauri::command]
 pub fn get_popup_state(state: State<SharedPopupState>) -> Result<serde_json::Value, Error> {
-    let state = state.0.lock().map_err(|_| {
-        Error::Io(std::io::Error::new(
-            std::io::ErrorKind::Other,
-            "Failed to lock popup state",
-        ))
-    })?;
+    let state = state
+        .0
+        .lock()
+        .map_err(|_| Error::Io(std::io::Error::other("Failed to lock popup state")))?;
 
     Ok(serde_json::json!({
         "isVisible": state.is_visible,
@@ -270,8 +275,44 @@ pub fn get_popup_state(state: State<SharedPopupState>) -> Result<serde_json::Val
 }
 
 /// Accept the suggestion and apply to the currently selected text.
+///
+/// The macOS focus-return + paste choreography involves sleeps and blocking
+/// subprocess calls that can take over a second. This command is `async` and
+/// runs that work on a blocking worker thread so the main thread (NSWindow
+/// event processing, other commands) stays responsive.
 #[tauri::command]
-pub fn accept_suggestion(
+pub async fn accept_suggestion(
+    app: AppHandle,
+    text: String,
+    offset: Option<usize>,
+    char_length: Option<usize>,
+) -> Result<(), Error> {
+    // Drop duplicate accepts (Enter + click firing twice) instead of running
+    // two paste choreographies back to back.
+    if REPLACEMENT_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        log::warn!("accept_suggestion already in progress, ignoring duplicate");
+        return Ok(());
+    }
+
+    let result = match tauri::async_runtime::spawn_blocking(move || {
+        accept_suggestion_blocking(app, text, offset, char_length)
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(e) => Err(Error::InputSimulation(format!(
+            "accept task join failed: {e}"
+        ))),
+    };
+
+    REPLACEMENT_IN_FLIGHT.store(false, Ordering::SeqCst);
+    result
+}
+
+fn accept_suggestion_blocking(
     app: AppHandle,
     text: String,
     offset: Option<usize>,
@@ -320,6 +361,96 @@ pub fn accept_suggestion(
     Ok(())
 }
 
+/// Verify the replacement actually landed in the focused element's value.
+/// Requires BOTH a change from the pre-write snapshot AND the replacement
+/// text at the expected UTF-16 offset. The change check is mandatory: for
+/// doubled-letter fixes the replacement is a prefix of the typo
+/// ("helloo" -> "hello"), so the UNCHANGED text also passes a bare offset
+/// check. When the value cannot be read at all, assumes success to preserve
+/// behaviour for apps that don't expose AXValue.
+#[cfg(target_os = "macos")]
+fn replacement_landed(
+    value_before: Option<&str>,
+    replacement: &str,
+    offset: Option<usize>,
+) -> bool {
+    let current = match crate::macos_text::get_focused_element_value() {
+        Ok(v) => v,
+        Err(_) => {
+            log::info!("[accept] cannot read value to verify, assuming replaced");
+            return true;
+        }
+    };
+    verify_replacement(&current, value_before, replacement, offset)
+}
+
+/// Pure decision core of [`replacement_landed`] so the verification matrix
+/// (dropped write / landed write / prefix-typo pitfall) is unit-testable.
+#[cfg(target_os = "macos")]
+fn verify_replacement(
+    current: &str,
+    value_before: Option<&str>,
+    replacement: &str,
+    offset: Option<usize>,
+) -> bool {
+    // The value must differ from the pre-write snapshot, otherwise the write
+    // was silently dropped (Electron/Chromium report success without
+    // applying).
+    if let Some(before) = value_before {
+        if current == before {
+            return false;
+        }
+    }
+
+    let current_u16: Vec<u16> = current.encode_utf16().collect();
+    if let Some(start) = offset {
+        let repl_len = replacement.encode_utf16().count();
+        if start + repl_len <= current_u16.len() {
+            let slice = String::from_utf16_lossy(&current_u16[start..start + repl_len]);
+            return slice == replacement;
+        }
+    }
+    // Offset out of range (e.g. partial-text AX fallback) — the change
+    // detection above is the best we can do; treat any change as landed.
+    true
+}
+
+/// Rewrite `full_text` replacing the UTF-16 range [offset, offset+char_length)
+/// with `replacement`. Only proceeds when the current slice equals
+/// `expected_original`, so a stale/misaligned offset can never corrupt the
+/// user's text.
+#[cfg(target_os = "macos")]
+fn rewrite_utf16_range(
+    full_text: &str,
+    offset: Option<usize>,
+    char_length: Option<usize>,
+    expected_original: &str,
+    replacement: &str,
+) -> Option<String> {
+    let (start, len) = (offset?, char_length?);
+    if expected_original.is_empty() {
+        return None;
+    }
+    let units: Vec<u16> = full_text.encode_utf16().collect();
+    if start + len > units.len() {
+        return None;
+    }
+    let slice = String::from_utf16_lossy(&units[start..start + len]);
+    if slice != expected_original {
+        log::warn!(
+            "[accept] AXValue rewrite skipped: slice {:?} != selected {:?}",
+            slice,
+            expected_original
+        );
+        return None;
+    }
+    let mut out = String::with_capacity(full_text.len());
+    out.push_str(&String::from_utf16_lossy(&units[..start]));
+    out.push_str(replacement);
+    out.push_str(&String::from_utf16_lossy(&units[start + len..]));
+    Some(out)
+}
+
 #[cfg(target_os = "macos")]
 fn apply_suggestion_to_selection_macos(
     app: AppHandle,
@@ -327,49 +458,44 @@ fn apply_suggestion_to_selection_macos(
     offset: Option<usize>,
     char_length: Option<usize>,
 ) -> Result<(), Error> {
-    let source_app_name = app
+    let (source_app_name, source_bundle_id) = app
         .try_state::<SharedPopupState>()
-        .and_then(|state| state.0.lock().ok().and_then(|s| s.source_app_name.clone()));
-
-    let mut clipboard = arboard::Clipboard::new()
-        .map_err(|e| Error::Clipboard(format!("Failed to access clipboard: {e}")))?;
-    let previous_clipboard = clipboard.get_text().ok();
-
-    clipboard
-        .set_text(text.to_string())
-        .map_err(|e| Error::Clipboard(format!("Failed to set clipboard text: {e}")))?;
+        .and_then(|state| {
+            state
+                .0
+                .lock()
+                .ok()
+                .map(|s| (s.source_app_name.clone(), s.source_bundle_id.clone()))
+        })
+        .unwrap_or((None, None));
 
     // Hide popup so focus can return to the source app.
-    hide_popup(app)?;
+    hide_popup(app.clone())?;
     thread::sleep(Duration::from_millis(80));
 
-    if let Some(ref app_name) = source_app_name {
-        if app_name != "autocorrect-app" && app_name != "AutoCorrect" {
-            activate_app_macos(app_name)?;
+    if !source_is_self_macos(&app, &source_app_name, &source_bundle_id) {
+        // Bring the source app back to the front. Prefer the exact bundle id
+        // (single NSRunningApplication call); fall back to the name-based
+        // osascript for state captured before bundle ids were tracked.
+        activate_source_app_macos(source_bundle_id.as_deref(), source_app_name.as_deref())?;
 
-            // Wait until the source app is actually frontmost using NSWorkspace
-            // (instant ObjC call, no subprocess overhead).
-            let deadline = std::time::Instant::now();
-            loop {
-                thread::sleep(Duration::from_millis(30));
-                if is_app_frontmost_macos_pub(app_name) {
-                    break;
-                }
-                if deadline.elapsed().as_millis() > 600 {
-                    log::warn!(
-                        "[accept] activate timeout: {} still not frontmost",
-                        app_name
-                    );
-                    break;
-                }
-            }
-            // Extra settle time so the AX focused-element state catches up.
-            thread::sleep(Duration::from_millis(80));
-        }
+        // Wait until the source app is actually frontmost (instant ObjC call,
+        // no subprocess overhead). On timeout we ABORT instead of pasting:
+        // pasting into whatever app happens to be frontmost would corrupt
+        // the wrong app's text.
+        wait_source_frontmost_macos(
+            source_bundle_id.as_deref(),
+            source_app_name.as_deref(),
+            600,
+            "[accept]",
+        )?;
+        // Continue once the AX focused-element state is actually ready
+        // instead of guessing a fixed settle delay.
+        crate::macos_text::wait_focused_element_ready(600);
     }
 
     // Now that the source app has focus, select the exact typo range so the
-    // paste replaces the word rather than inserting at the cursor.
+    // replacement covers the word rather than inserting at the cursor.
     if let (Some(start), Some(len)) = (offset, char_length) {
         log::info!("[accept] select_text_range: offset={} len={}", start, len);
         // Retry for up to 600 ms in case the AX focus is still settling.
@@ -385,7 +511,7 @@ fn apply_suggestion_to_selection_macos(
                     log::warn!("[accept] select_text_range failed: {}", e);
                     if sel_deadline.elapsed().as_millis() > 600 {
                         log::warn!(
-                            "[accept] select_text_range timed out, paste will insert at caret"
+                            "[accept] select_text_range timed out, replacement will insert at caret"
                         );
                         break;
                     }
@@ -397,21 +523,96 @@ fn apply_suggestion_to_selection_macos(
 
     // Capture original word before replacing (selection is already active).
     let original_word = crate::macos_text::get_selected_text().unwrap_or_default();
+    log::info!("[accept] original selection: {:?}", original_word);
 
-    let status = std::process::Command::new("osascript")
-        .arg("-e")
-        .arg("tell application \"System Events\" to keystroke \"v\" using command down")
-        .status()
-        .map_err(|e| Error::InputSimulation(format!("Failed to trigger paste: {e}")))?;
-
-    if !status.success() {
-        restore_clipboard(&mut clipboard, previous_clipboard);
-        return Err(Error::InputSimulation(
-            "Paste simulation command failed".to_string(),
-        ));
+    // Snapshot the pre-replacement value so we can verify the write landed.
+    let value_before = crate::macos_text::get_focused_element_value().ok();
+    if let Some(v) = value_before.as_ref() {
+        log::info!("[accept] focused value before write: {:?}", v);
     }
 
-    thread::sleep(Duration::from_millis(80));
+    // Primary replacement path: write AXSelectedText directly. No clipboard
+    // roundtrip, no simulated keystrokes, no clipboard to restore.
+    //
+    // Electron/Chromium text fields sometimes return kAXErrorSuccess for
+    // AXSelectedText writes they silently drop, so err==0 is NOT proof the
+    // text changed — always verify against the element's value afterwards.
+    let mut replaced = false;
+    match crate::macos_text::set_selected_text(text) {
+        Ok(()) => {
+            thread::sleep(Duration::from_millis(60));
+            if replacement_landed(value_before.as_deref(), text, offset) {
+                log::info!("[accept] replaced selection via AXSelectedText (verified)");
+                replaced = true;
+            } else {
+                log::warn!("[accept] AXSelectedText write reported success but text unchanged");
+            }
+        }
+        Err(e) => {
+            log::warn!("[accept] AXSelectedText write failed ({e})");
+        }
+    }
+
+    // Fallback 1: rewrite the full AXValue with the typo replaced. Works on
+    // Chromium/Electron contenteditable fields that ignore AXSelectedText.
+    if !replaced {
+        if let Some(rewritten) = value_before
+            .as_deref()
+            .and_then(|v| rewrite_utf16_range(v, offset, char_length, &original_word, text))
+        {
+            match crate::macos_text::set_focused_element_value(&rewritten) {
+                Ok(()) => {
+                    thread::sleep(Duration::from_millis(60));
+                    if replacement_landed(value_before.as_deref(), text, offset) {
+                        log::info!("[accept] replaced via AXValue rewrite (verified)");
+                        replaced = true;
+                    } else {
+                        log::warn!("[accept] AXValue rewrite reported success but text unchanged");
+                    }
+                }
+                Err(e) => {
+                    log::warn!("[accept] AXValue rewrite failed ({e})");
+                }
+            }
+        }
+    }
+
+    // Fallback 2: clipboard + simulated ⌘V paste for apps whose text views
+    // do not accept any AX writes.
+    if !replaced {
+        log::warn!("[accept] falling back to clipboard paste");
+
+        let mut clipboard = arboard::Clipboard::new()
+            .map_err(|e| Error::Clipboard(format!("Failed to access clipboard: {e}")))?;
+        let previous_clipboard = clipboard.get_text().ok();
+
+        clipboard
+            .set_text(text.to_string())
+            .map_err(|e| Error::Clipboard(format!("Failed to set clipboard text: {e}")))?;
+        // Snapshot the changeCount AFTER our write; restore only if the user
+        // did not copy something else in the meantime.
+        let our_change_count = crate::macos_text::pasteboard_change_count();
+
+        let status = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg("tell application \"System Events\" to keystroke \"v\" using command down")
+            .status()
+            .map_err(|e| Error::InputSimulation(format!("Failed to trigger paste: {e}")))?;
+
+        if !status.success() {
+            restore_clipboard(&mut clipboard, previous_clipboard);
+            return Err(Error::InputSimulation(
+                "Paste simulation command failed".to_string(),
+            ));
+        }
+
+        thread::sleep(Duration::from_millis(80));
+        if crate::macos_text::pasteboard_change_count() == our_change_count {
+            restore_clipboard(&mut clipboard, previous_clipboard);
+        } else {
+            log::info!("[accept] pasteboard changed by someone else, keeping current clipboard");
+        }
+    }
 
     // Save undo snapshot.
     if let (Some(start), Some(len)) = (offset, char_length) {
@@ -421,6 +622,7 @@ fn apply_suggestion_to_selection_macos(
             offset: start,
             char_length: len,
             source_app_name: source_app_name.clone(),
+            source_bundle_id: source_bundle_id.clone(),
         });
         log::info!(
             "[accept] saved undo: offset={} len={} replacement='{}'",
@@ -429,7 +631,7 @@ fn apply_suggestion_to_selection_macos(
             text
         );
 
-        // Restore caret to end of pasted text so the user can keep typing.
+        // Restore caret to end of replaced text so the user can keep typing.
         let replacement_utf16_len = text.encode_utf16().count();
         let caret_pos = start + replacement_utf16_len;
         if let Err(e) = crate::macos_text::select_text_range(caret_pos, 0) {
@@ -437,7 +639,6 @@ fn apply_suggestion_to_selection_macos(
         }
     }
 
-    restore_clipboard(&mut clipboard, previous_clipboard);
     Ok(())
 }
 
@@ -473,6 +674,179 @@ pub fn is_app_frontmost_macos_pub(app_name: &str) -> bool {
         }
         let rust_str = std::ffi::CStr::from_ptr(ns_str).to_string_lossy();
         rust_str.contains(app_name) || app_name.contains(rust_str.as_ref())
+    }
+}
+
+/// Fast NSWorkspace-based frontmost app info: `(localizedName, bundleIdentifier)`.
+/// No subprocess — replaces the two osascript calls that added 100-300ms to
+/// every popup show.
+#[cfg(target_os = "macos")]
+pub fn frontmost_app_info_nsworkspace() -> Option<(String, String)> {
+    use objc2::msg_send;
+    use objc2::runtime::AnyClass;
+
+    type Id = *mut objc2::runtime::AnyObject;
+
+    unsafe {
+        let workspace_class = AnyClass::get("NSWorkspace").expect("NSWorkspace not found");
+        let workspace: Id = msg_send![workspace_class, sharedWorkspace];
+        let front_app: Id = msg_send![workspace, frontmostApplication];
+        if front_app.is_null() {
+            return None;
+        }
+
+        let ns_to_string = |obj: Id| -> Option<String> {
+            if obj.is_null() {
+                return None;
+            }
+            let utf8: *const std::os::raw::c_char = msg_send![obj, UTF8String];
+            if utf8.is_null() {
+                return None;
+            }
+            Some(
+                std::ffi::CStr::from_ptr(utf8)
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        };
+
+        let name: Id = msg_send![front_app, localizedName];
+        let bundle: Id = msg_send![front_app, bundleIdentifier];
+        let name = ns_to_string(name)?;
+        let bundle = ns_to_string(bundle)?;
+        Some((name, bundle))
+    }
+}
+
+/// Exact bundle-id frontmost check (no substring matching).
+#[cfg(target_os = "macos")]
+pub fn is_bundle_frontmost_macos(bundle_id: &str) -> bool {
+    frontmost_app_info_nsworkspace().is_some_and(|(_, b)| b == bundle_id)
+}
+
+/// Activate the running app with the given bundle id via NSRunningApplication.
+/// Returns false when no running app matches (caller falls back to name-based
+/// activation).
+#[cfg(target_os = "macos")]
+pub fn activate_app_bundle_macos(bundle_id: &str) -> bool {
+    use core_foundation::array::{CFArrayGetCount, CFArrayRef};
+    use objc2::msg_send;
+    use objc2::runtime::AnyClass;
+
+    type Id = *mut objc2::runtime::AnyObject;
+
+    unsafe {
+        // NOTE: `+[NSRunningApplication runningApplicationWithBundleIdentifier:]`
+        // is rejected by objc2's message-send verification ("method not
+        // found"), so enumerate NSWorkspace.runningApplications instead.
+        // All messages below are instance methods.
+        let workspace_class = AnyClass::get("NSWorkspace").expect("NSWorkspace not found");
+        let workspace: Id = msg_send![workspace_class, sharedWorkspace];
+        let apps: Id = msg_send![workspace, runningApplications];
+
+        // On modern macOS some NSWorkspace collections are Swift Arrays
+        // bridged to CFArray; use CFArrayGetCount for a safe count.
+        let count = CFArrayGetCount(apps as CFArrayRef);
+
+        for idx in 0..count {
+            // objectAtIndex: expects a NSUInteger ('Q'); count is a CFIndex
+            // (isize, 'q'), so cast explicitly for objc2's type check.
+            let app: Id = msg_send![apps, objectAtIndex: idx as u64];
+            let bundle: Id = msg_send![app, bundleIdentifier];
+            if bundle.is_null() {
+                continue;
+            }
+            let utf8: *const std::os::raw::c_char = msg_send![bundle, UTF8String];
+            if utf8.is_null() {
+                continue;
+            }
+            let current = std::ffi::CStr::from_ptr(utf8).to_string_lossy();
+            if current == bundle_id {
+                // NSApplicationActivateIgnoringOtherApps
+                let ok: bool = msg_send![app, activateWithOptions: 4u64];
+                return ok;
+            }
+        }
+
+        false
+    }
+}
+
+/// True when the recorded source app is AutoCorrect itself, in which case we
+/// skip the activate/frontmost dance (the popup was triggered from our own
+/// window, e.g. the spell checker tab).
+#[cfg(target_os = "macos")]
+fn source_is_self_macos(
+    app: &AppHandle,
+    source_app_name: &Option<String>,
+    source_bundle_id: &Option<String>,
+) -> bool {
+    let name_is_self = source_app_name
+        .as_deref()
+        .is_some_and(|n| n == "autocorrect-app" || n == "AutoCorrect");
+    let self_bundle = app.config().identifier.clone();
+    let bundle_is_self = source_bundle_id
+        .as_deref()
+        .is_some_and(|b| !b.is_empty() && b == self_bundle);
+    name_is_self || bundle_is_self
+}
+
+/// Activate the source app, preferring the exact bundle id over the
+/// name-based osascript fallback.
+#[cfg(target_os = "macos")]
+fn activate_source_app_macos(
+    source_bundle_id: Option<&str>,
+    source_app_name: Option<&str>,
+) -> Result<(), Error> {
+    if let Some(bundle) = source_bundle_id {
+        if !bundle.is_empty() && activate_app_bundle_macos(bundle) {
+            return Ok(());
+        }
+    }
+    if let Some(name) = source_app_name {
+        if !name.is_empty() {
+            return activate_app_macos(name);
+        }
+    }
+    Ok(())
+}
+
+/// Poll until the source app is frontmost (exact bundle-id match when
+/// available, name-based otherwise). Returns `Err` on timeout so the caller
+/// can abort instead of pasting into the wrong app.
+#[cfg(target_os = "macos")]
+fn wait_source_frontmost_macos(
+    source_bundle_id: Option<&str>,
+    source_app_name: Option<&str>,
+    timeout_ms: u128,
+    context: &str,
+) -> Result<(), Error> {
+    let is_frontmost = |bundle: Option<&str>, name: Option<&str>| -> bool {
+        if let Some(b) = bundle.filter(|b| !b.is_empty()) {
+            return is_bundle_frontmost_macos(b);
+        }
+        if let Some(n) = name {
+            return is_app_frontmost_macos_pub(n);
+        }
+        // Nothing known about the source app; assume we can proceed.
+        true
+    };
+
+    let deadline = std::time::Instant::now();
+    loop {
+        thread::sleep(Duration::from_millis(30));
+        if is_frontmost(source_bundle_id, source_app_name) {
+            return Ok(());
+        }
+        if deadline.elapsed().as_millis() > timeout_ms {
+            log::warn!(
+                "{context}: source app still not frontmost after {}ms, aborting",
+                timeout_ms
+            );
+            return Err(Error::InputSimulation(
+                "Source app is not frontmost; paste aborted".to_string(),
+            ));
+        }
     }
 }
 
@@ -533,39 +907,55 @@ fn activate_app_macos(app_name: &str) -> Result<(), Error> {
 
 /// Undo the last auto-applied replacement by reverting the text at the
 /// recorded offset. Only the most recent replacement is remembered.
+///
+/// Like `accept_suggestion`, the choreography runs on a blocking worker
+/// thread so the main thread stays responsive.
 #[tauri::command]
-pub fn undo_last_replacement(app: AppHandle) -> Result<(), Error> {
-    let entry = peek_last_replacement().ok_or_else(|| {
-        Error::InputSimulation("No recent replacement to undo".to_string())
-    })?;
+pub async fn undo_last_replacement(app: AppHandle) -> Result<(), Error> {
+    if REPLACEMENT_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        log::warn!("A replacement operation is already in progress, ignoring undo");
+        return Ok(());
+    }
+
+    let result =
+        match tauri::async_runtime::spawn_blocking(move || undo_last_replacement_blocking(app))
+            .await
+        {
+            Ok(result) => result,
+            Err(e) => Err(Error::InputSimulation(format!(
+                "undo task join failed: {e}"
+            ))),
+        };
+
+    REPLACEMENT_IN_FLIGHT.store(false, Ordering::SeqCst);
+    result
+}
+
+fn undo_last_replacement_blocking(app: AppHandle) -> Result<(), Error> {
+    let entry = peek_last_replacement()
+        .ok_or_else(|| Error::InputSimulation("No recent replacement to undo".to_string()))?;
 
     #[cfg(target_os = "macos")]
     {
-        if let Some(ref app_name) = entry.source_app_name {
-            if app_name != "autocorrect-app" && app_name != "AutoCorrect" {
-                let _ = activate_app_macos(app_name);
-                let deadline = std::time::Instant::now();
-                loop {
-                    thread::sleep(Duration::from_millis(30));
-                    if is_app_frontmost_macos_pub(app_name) {
-                        break;
-                    }
-                    if deadline.elapsed().as_millis() > 600 {
-                        log::warn!("[undo] activate timeout");
-                        break;
-                    }
-                }
-                thread::sleep(Duration::from_millis(80));
-            }
+        if !source_is_self_macos(&app, &entry.source_app_name, &entry.source_bundle_id) {
+            activate_source_app_macos(
+                entry.source_bundle_id.as_deref(),
+                entry.source_app_name.as_deref(),
+            )?;
+            // Abort on timeout: reverting text into the wrong app would
+            // silently corrupt it.
+            wait_source_frontmost_macos(
+                entry.source_bundle_id.as_deref(),
+                entry.source_app_name.as_deref(),
+                600,
+                "[undo]",
+            )?;
+            // Continue once the AX focused-element state is actually ready.
+            crate::macos_text::wait_focused_element_ready(600);
         }
-
-        let mut clipboard = arboard::Clipboard::new()
-            .map_err(|e| Error::Clipboard(format!("Clipboard init failed: {e}")))?;
-        let previous_clipboard = clipboard.get_text().ok();
-
-        clipboard
-            .set_text(entry.original_word.clone())
-            .map_err(|e| Error::Clipboard(format!("Clipboard write failed: {e}")))?;
 
         let replacement_utf16_len = entry.replacement.encode_utf16().count();
         let undo_offset = entry.offset;
@@ -588,19 +978,42 @@ pub fn undo_last_replacement(app: AppHandle) -> Result<(), Error> {
             }
         }
 
-        let status = std::process::Command::new("osascript")
-            .arg("-e")
-            .arg("tell application \"System Events\" to keystroke \"v\" using command down")
-            .status()
-            .map_err(|e| Error::InputSimulation(format!("Paste simulation failed: {e}")))?;
+        // Primary path: write AXSelectedText directly, no clipboard involved.
+        if let Err(e) = crate::macos_text::set_selected_text(&entry.original_word) {
+            log::warn!(
+                "[undo] AXSelectedText write failed ({}), falling back to clipboard paste",
+                e
+            );
 
-        if !status.success() {
-            restore_clipboard(&mut clipboard, previous_clipboard);
-            return Err(Error::InputSimulation("Undo paste failed".to_string()));
+            let mut clipboard = arboard::Clipboard::new()
+                .map_err(|e| Error::Clipboard(format!("Clipboard init failed: {e}")))?;
+            let previous_clipboard = clipboard.get_text().ok();
+
+            clipboard
+                .set_text(entry.original_word.clone())
+                .map_err(|e| Error::Clipboard(format!("Clipboard write failed: {e}")))?;
+            let our_change_count = crate::macos_text::pasteboard_change_count();
+
+            let status = std::process::Command::new("osascript")
+                .arg("-e")
+                .arg("tell application \"System Events\" to keystroke \"v\" using command down")
+                .status()
+                .map_err(|e| Error::InputSimulation(format!("Paste simulation failed: {e}")))?;
+
+            if !status.success() {
+                restore_clipboard(&mut clipboard, previous_clipboard);
+                return Err(Error::InputSimulation("Undo paste failed".to_string()));
+            }
+
+            thread::sleep(Duration::from_millis(80));
+            if crate::macos_text::pasteboard_change_count() == our_change_count {
+                restore_clipboard(&mut clipboard, previous_clipboard);
+            } else {
+                log::info!("[undo] pasteboard changed by someone else, keeping it");
+            }
+        } else {
+            log::info!("[undo] reverted text via AXSelectedText");
         }
-
-        thread::sleep(Duration::from_millis(80));
-        restore_clipboard(&mut clipboard, previous_clipboard);
 
         // Restore caret to end of reverted text.
         let original_utf16_len = entry.original_word.encode_utf16().count();
@@ -650,8 +1063,25 @@ pub fn reject_suggestion(app: AppHandle) -> Result<(), Error> {
 /// 2. Falls back to clipboard if Accessibility is unavailable
 /// 3. Runs spell check on the text
 /// 4. Shows popup with suggestions if corrections are needed
+///
+/// Re-entrant triggers (hotkey pressed while a previous run is still in
+/// flight, e.g. a slow AI-enabled check) are dropped instead of queueing
+/// ghost popups that would appear after the first one completes.
 #[tauri::command]
 pub fn trigger_spell_check_workflow(app: AppHandle, x: i32, y: i32) -> Result<(), Error> {
+    if WORKFLOW_IN_FLIGHT
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        log::info!("Spell check workflow already in progress, dropping trigger");
+        return Ok(());
+    }
+    let result = trigger_spell_check_workflow_inner(app, x, y);
+    WORKFLOW_IN_FLIGHT.store(false, Ordering::SeqCst);
+    result
+}
+
+fn trigger_spell_check_workflow_inner(app: AppHandle, x: i32, y: i32) -> Result<(), Error> {
     use crate::commands::spellcheck::spell_check_sync;
     use crate::text_selection::{get_selected_text, TextSelectionError};
 
@@ -730,4 +1160,94 @@ pub fn trigger_spell_check_workflow(app: AppHandle, x: i32, y: i32) -> Result<()
     }
 
     Ok(())
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_verify_replacement_rejects_silently_dropped_write() {
+        // Regression: Electron accepts the AXSelectedText write (err=0) but
+        // drops it. The replacement "hello" is a prefix of the typo "helloo",
+        // so a bare offset check falsely passes — the change check must win.
+        assert!(!verify_replacement(
+            "helloo",
+            Some("helloo"),
+            "hello",
+            Some(0)
+        ));
+        assert!(!verify_replacement(
+            "worldd",
+            Some("worldd"),
+            "world",
+            Some(0)
+        ));
+    }
+
+    #[test]
+    fn test_verify_replacement_accepts_landed_write() {
+        assert!(verify_replacement(
+            "hello",
+            Some("helloo"),
+            "hello",
+            Some(0)
+        ));
+        // Typo mid-sentence: "see helloo there" -> "see hello there"
+        assert!(verify_replacement(
+            "see hello there",
+            Some("see helloo there"),
+            "hello",
+            Some(4)
+        ));
+    }
+
+    #[test]
+    fn test_verify_replacement_rejects_wrong_position() {
+        // Value changed but the replacement is not at the expected offset.
+        assert!(!verify_replacement(
+            "xxhelloo",
+            Some("helloo"),
+            "hello",
+            Some(0)
+        ));
+    }
+
+    #[test]
+    fn test_verify_replacement_without_snapshot_falls_back_to_offset() {
+        // Apps whose AXValue could not be read before the write: trust the
+        // offset check alone.
+        assert!(verify_replacement("hello", None, "hello", Some(0)));
+    }
+
+    #[test]
+    fn test_rewrite_utf16_range() {
+        assert_eq!(
+            rewrite_utf16_range("helloo world", Some(0), Some(6), "helloo", "hello"),
+            Some("hello world".to_string())
+        );
+        assert_eq!(
+            rewrite_utf16_range("see helloo there", Some(4), Some(6), "helloo", "hello"),
+            Some("see hello there".to_string())
+        );
+    }
+
+    #[test]
+    fn test_rewrite_utf16_range_guards() {
+        // Original word mismatch at the slice — refuse to rewrite.
+        assert_eq!(
+            rewrite_utf16_range("helloo", Some(0), Some(6), "wrong", "hello"),
+            None
+        );
+        // Out-of-range offset — refuse.
+        assert_eq!(
+            rewrite_utf16_range("hi", Some(5), Some(2), "hi", "hello"),
+            None
+        );
+        // Empty expected original — refuse (selection was never verified).
+        assert_eq!(
+            rewrite_utf16_range("helloo", Some(0), Some(6), "", "hello"),
+            None
+        );
+    }
 }

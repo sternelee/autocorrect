@@ -44,7 +44,8 @@ pub struct AppSettings {
     pub typo_checking_enabled: bool,
     #[serde(default)]
     pub ai_grammar_enabled: bool,
-    #[serde(default)]
+    #[cfg_attr(target_os = "macos", serde(default, skip_serializing))]
+    #[cfg_attr(not(target_os = "macos"), serde(default))]
     pub openai_api_key: String,
     #[serde(default = "default_openai_model")]
     pub openai_model: String,
@@ -56,6 +57,12 @@ pub struct AppSettings {
     pub ai_api_base_url: String,
     #[serde(default = "default_ai_translate_target_language")]
     pub ai_translate_target_language: String,
+    #[serde(default = "default_ai_translation_provider")]
+    pub ai_translation_provider: String,
+    #[serde(default = "default_ai_translation_local_model_path")]
+    pub ai_translation_local_model_path: String,
+    #[serde(default = "default_ai_translate_source_language")]
+    pub ai_translate_source_language: String,
     #[serde(
         default = "default_ai_polish_styles",
         deserialize_with = "deserialize_polish_styles"
@@ -89,6 +96,9 @@ impl Default for AppSettings {
             ai_timeout_ms: default_ai_timeout_ms(),
             ai_api_base_url: default_ai_api_base_url(),
             ai_translate_target_language: default_ai_translate_target_language(),
+            ai_translation_provider: default_ai_translation_provider(),
+            ai_translation_local_model_path: default_ai_translation_local_model_path(),
+            ai_translate_source_language: default_ai_translate_source_language(),
             ai_polish_style: default_ai_polish_styles(),
             cspell_enabled: default_cspell_enabled(),
             cspell_config_path: String::new(),
@@ -127,6 +137,18 @@ fn default_ai_api_base_url() -> String {
 
 fn default_ai_translate_target_language() -> String {
     "English".to_string()
+}
+
+fn default_ai_translation_provider() -> String {
+    "openai".to_string()
+}
+
+fn default_ai_translation_local_model_path() -> String {
+    String::new()
+}
+
+fn default_ai_translate_source_language() -> String {
+    "auto".to_string()
 }
 
 fn default_ai_polish_styles() -> Vec<String> {
@@ -195,6 +217,12 @@ pub struct AppConfig {
     pub ai_api_base_url: String,
     /// Default translation target language
     pub ai_translate_target_language: String,
+    /// Translation provider: openai, apple, local
+    pub ai_translation_provider: String,
+    /// Path to a local Marian/NLLB ONNX model directory
+    pub ai_translation_local_model_path: String,
+    /// Translation source language (auto for system detection)
+    pub ai_translate_source_language: String,
     /// Default polish styles
     pub ai_polish_style: Vec<String>,
     /// Enable CSpell integration
@@ -251,6 +279,12 @@ pub struct ConfigUpdates {
     pub ai_api_base_url: Option<String>,
     /// Default translation target language
     pub ai_translate_target_language: Option<String>,
+    /// Translation provider: openai, apple, local
+    pub ai_translation_provider: Option<String>,
+    /// Path to a local Marian/NLLB ONNX model directory
+    pub ai_translation_local_model_path: Option<String>,
+    /// Translation source language (auto for system detection)
+    pub ai_translate_source_language: Option<String>,
     /// Default polish styles
     pub ai_polish_style: Option<Vec<String>>,
     /// Enable CSpell integration
@@ -328,6 +362,9 @@ pub fn get_config(app: tauri::AppHandle) -> Result<AppConfig, Error> {
         ai_timeout_ms: app_settings.ai_timeout_ms,
         ai_api_base_url: app_settings.ai_api_base_url,
         ai_translate_target_language: app_settings.ai_translate_target_language,
+        ai_translation_provider: app_settings.ai_translation_provider,
+        ai_translation_local_model_path: app_settings.ai_translation_local_model_path,
+        ai_translate_source_language: app_settings.ai_translate_source_language,
         ai_polish_style: app_settings.ai_polish_style,
         cspell_enabled: app_settings.cspell_enabled,
         cspell_config_path: app_settings.cspell_config_path.clone(),
@@ -466,6 +503,7 @@ pub fn update_config(app: tauri::AppHandle, updates: ConfigUpdates) -> Result<()
     }
 
     if let Some(openai_api_key) = updates.openai_api_key {
+        save_keychain_openai_api_key(&openai_api_key)?;
         app_settings.openai_api_key = openai_api_key;
         app_settings_changed = true;
     }
@@ -492,6 +530,21 @@ pub fn update_config(app: tauri::AppHandle, updates: ConfigUpdates) -> Result<()
 
     if let Some(ai_translate_target_language) = updates.ai_translate_target_language {
         app_settings.ai_translate_target_language = ai_translate_target_language;
+        app_settings_changed = true;
+    }
+
+    if let Some(ai_translation_provider) = updates.ai_translation_provider {
+        app_settings.ai_translation_provider = ai_translation_provider;
+        app_settings_changed = true;
+    }
+
+    if let Some(ai_translation_local_model_path) = updates.ai_translation_local_model_path {
+        app_settings.ai_translation_local_model_path = ai_translation_local_model_path;
+        app_settings_changed = true;
+    }
+
+    if let Some(ai_translate_source_language) = updates.ai_translate_source_language {
+        app_settings.ai_translate_source_language = ai_translate_source_language;
         app_settings_changed = true;
     }
 
@@ -588,6 +641,79 @@ fn get_user_config_path() -> PathBuf {
 
 const APP_SETTINGS_STORE_FILE: &str = "app-settings.json";
 const APP_SETTINGS_STORE_KEY: &str = "appSettings";
+const OPENAI_API_KEY_SERVICE: &str = "com.autocorrect.app";
+const OPENAI_API_KEY_ACCOUNT: &str = "openai-api-key";
+
+#[cfg(target_os = "macos")]
+fn get_keychain_openai_api_key() -> Option<String> {
+    security_framework::passwords::get_generic_password(
+        OPENAI_API_KEY_SERVICE,
+        OPENAI_API_KEY_ACCOUNT,
+    )
+    .ok()
+    .and_then(|bytes| String::from_utf8(bytes).ok())
+    .filter(|key| !key.trim().is_empty())
+}
+
+#[cfg(target_os = "macos")]
+fn save_keychain_openai_api_key(api_key: &str) -> Result<(), Error> {
+    use security_framework::passwords::{delete_generic_password, set_generic_password};
+
+    if api_key.trim().is_empty() {
+        // Deleting a missing item is fine for a user clearing the field.
+        let _ = delete_generic_password(OPENAI_API_KEY_SERVICE, OPENAI_API_KEY_ACCOUNT);
+        return Ok(());
+    }
+
+    set_generic_password(
+        OPENAI_API_KEY_SERVICE,
+        OPENAI_API_KEY_ACCOUNT,
+        api_key.trim().as_bytes(),
+    )
+    .map_err(|e| Error::Config(format!("Failed to save API key to keychain: {}", e)))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn get_keychain_openai_api_key() -> Option<String> {
+    None
+}
+
+#[cfg(not(target_os = "macos"))]
+fn save_keychain_openai_api_key(_api_key: &str) -> Result<(), Error> {
+    Ok(())
+}
+
+/// Move a legacy plaintext key from app settings into the OS keychain.
+/// Returns true when the in-memory settings changed and should be persisted.
+fn migrate_openai_api_key_to_keychain(settings: &mut AppSettings) -> bool {
+    if let Some(key) = get_keychain_openai_api_key() {
+        let changed = !settings.openai_api_key.is_empty();
+        settings.openai_api_key = key;
+        return changed;
+    }
+
+    if settings.openai_api_key.trim().is_empty() {
+        return false;
+    }
+
+    match save_keychain_openai_api_key(&settings.openai_api_key) {
+        Ok(()) => {
+            // Keep the migrated key available to this in-memory snapshot; it
+            // is skipped when serialized so the store is scrubbed on save.
+            true
+        }
+        Err(e) => {
+            log::warn!("Failed to migrate OpenAI API key to keychain: {}", e);
+            false
+        }
+    }
+}
+
+fn hydrate_openai_api_key(settings: &mut AppSettings) {
+    if let Some(key) = get_keychain_openai_api_key() {
+        settings.openai_api_key = key;
+    }
+}
 
 /// Get the path to the legacy app settings file.
 fn get_legacy_app_settings_path() -> PathBuf {
@@ -617,7 +743,8 @@ pub fn ensure_app_settings_initialized(app: &tauri::AppHandle) -> Result<(), Err
         return Ok(());
     }
 
-    let settings = read_legacy_app_settings().unwrap_or_default();
+    let mut settings = read_legacy_app_settings().unwrap_or_default();
+    migrate_openai_api_key_to_keychain(&mut settings);
     let value = serde_json::to_value(&settings)
         .map_err(|e| Error::Config(format!("Failed to serialize settings: {}", e)))?;
     store.set(APP_SETTINGS_STORE_KEY, value);
@@ -637,8 +764,13 @@ pub fn load_app_settings(app: &tauri::AppHandle) -> Result<AppSettings, Error> {
         .map_err(|e| Error::Config(format!("Failed to access settings store: {}", e)))?;
 
     if let Some(value) = store.get(APP_SETTINGS_STORE_KEY) {
-        serde_json::from_value(value)
-            .map_err(|e| Error::Config(format!("Failed to parse settings from store: {}", e)))
+        let mut settings: AppSettings = serde_json::from_value(value)
+            .map_err(|e| Error::Config(format!("Failed to parse settings from store: {}", e)))?;
+        if migrate_openai_api_key_to_keychain(&mut settings) {
+            save_app_settings(app, &settings)?;
+        }
+        hydrate_openai_api_key(&mut settings);
+        Ok(settings)
     } else {
         Ok(AppSettings::default())
     }

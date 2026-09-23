@@ -44,7 +44,22 @@ pub struct FocusedTextContext {
 #[link(name = "ApplicationServices", kind = "framework")]
 extern "C" {
     fn AXUIElementCreateSystemWide() -> Id;
+    fn AXUIElementSetMessagingTimeout(element: Id, timeout: f64) -> i32;
     fn AXIsProcessTrusted() -> bool;
+}
+
+/// Per-message timeout for AX calls. Without it, a hung target app (e.g. a
+/// busy Electron renderer mid-restart) can block an AXUIElement call — and
+/// with it the whole poll loop — indefinitely.
+const AX_MESSAGING_TIMEOUT_SECS: f64 = 1.5;
+
+/// Create the system-wide AX element with the messaging timeout applied.
+fn create_system_wide() -> Id {
+    unsafe {
+        let el = AXUIElementCreateSystemWide();
+        AXUIElementSetMessagingTimeout(el, AX_MESSAGING_TIMEOUT_SECS);
+        el
+    }
 }
 
 /// A handle to the focused AX element captured once per poll cycle.
@@ -69,7 +84,7 @@ impl AXPollSession {
             return None;
         }
         unsafe {
-            let system = AXUIElementCreateSystemWide();
+            let system = create_system_wide();
             let mut focused: Id = NIL;
             let err = AXUIElementCopyAttributeValue(
                 system,
@@ -80,7 +95,10 @@ impl AXPollSession {
                 return None;
             }
             let window_pos = ax_window_pos_for_element(focused);
-            Some(Self { focused, window_pos })
+            Some(Self {
+                focused,
+                window_pos,
+            })
         }
     }
 
@@ -93,7 +111,9 @@ impl AXPollSession {
     /// Get the bounds of a text range using the cached element and window position.
     #[cfg(target_os = "macos")]
     pub fn get_range_bounds(&self, range_start: usize, range_len: usize) -> Result<CGRect> {
-        unsafe { ax_range_bounds_for_element(self.focused, self.window_pos, range_start, range_len) }
+        unsafe {
+            ax_range_bounds_for_element(self.focused, self.window_pos, range_start, range_len)
+        }
     }
 
     /// Get the currently selected text using the cached element.
@@ -125,8 +145,6 @@ impl AXPollSession {
 /// Returns `None` if the window cannot be found within 10 levels.
 #[cfg(target_os = "macos")]
 unsafe fn ax_window_pos_for_element(focused: Id) -> Option<(f64, f64)> {
-    
-    
     type Id = *mut objc2::runtime::AnyObject;
     const NIL: Id = std::ptr::null_mut();
 
@@ -134,7 +152,11 @@ unsafe fn ax_window_pos_for_element(focused: Id) -> Option<(f64, f64)> {
     for _ in 0..10 {
         let mut role_value: Id = NIL;
         AXUIElementCopyAttributeValue(current, to_ax_string("AXRole"), &mut role_value);
-        let role = if !role_value.is_null() { from_ax_string(role_value) } else { String::new() };
+        let role = if !role_value.is_null() {
+            from_ax_string(role_value)
+        } else {
+            String::new()
+        };
 
         if role == "AXWindow" {
             let mut position_value: Id = NIL;
@@ -191,7 +213,11 @@ unsafe fn ax_text_context_for_element(focused_element: Id) -> Result<FocusedText
 
     let mut role_value: Id = NIL;
     AXUIElementCopyAttributeValue(focused_element, to_ax_string("AXRole"), &mut role_value);
-    let role = if !role_value.is_null() { from_ax_string(role_value) } else { String::new() };
+    let role = if !role_value.is_null() {
+        from_ax_string(role_value)
+    } else {
+        String::new()
+    };
 
     let mut editable_value: Id = NIL;
     AXUIElementCopyAttributeValue(
@@ -230,7 +256,10 @@ unsafe fn ax_text_context_for_element(focused_element: Id) -> Result<FocusedText
                     &mut selected_range_value,
                 );
 
-                let mut selected_range = CFRange { location: 0, length: 0 };
+                let mut selected_range = CFRange {
+                    location: 0,
+                    length: 0,
+                };
                 if !selected_range_value.is_null() {
                     let _ = AXValueGetValue(
                         selected_range_value,
@@ -323,7 +352,9 @@ unsafe fn ax_range_bounds_for_element(
     if err_bounds != 0 {
         log::debug!(
             "[AX] AXBoundsForRange err={} range={}-{}",
-            err_bounds, range_start, range_len
+            err_bounds,
+            range_start,
+            range_len
         );
     }
 
@@ -339,7 +370,8 @@ unsafe fn ax_range_bounds_for_element(
                 if is_window_relative_coords(rect, win_pos) {
                     log::debug!(
                         "[AX] window-relative coord fix: adding ({:.0},{:.0})",
-                        win_pos.0, win_pos.1
+                        win_pos.0,
+                        win_pos.1
                     );
                     final_rect.origin.x += win_pos.0;
                     final_rect.origin.y += win_pos.1;
@@ -387,7 +419,10 @@ unsafe fn ax_selected_text_bounds_for_element(
         return Err(AccessibilityError::NoTextSelected);
     }
 
-    let mut selected_range = CFRange { location: 0, length: 0 };
+    let mut selected_range = CFRange {
+        location: 0,
+        length: 0,
+    };
     if AXValueGetValue(
         selected_range_value,
         K_AXVALUE_CFRANGE_TYPE,
@@ -425,15 +460,147 @@ unsafe fn ax_selected_text_bounds_for_element(
                         final_rect.size.width as i32,
                         final_rect.size.height as i32,
                     ));
-                } else {
-                    // Fallback: mouse position
-                    let (mx, my) = get_cursor_position_nsevent();
-                    return Ok((mx, my, 100, 20));
                 }
             }
         }
     }
-    Err(AccessibilityError::NoTextSelected)
+    ax_selection_bounds_fallback(
+        focused_element,
+        window_pos,
+        selected_range.location,
+        selected_range.length,
+    )
+}
+
+/// Fallback chain for selection bounds when AXBoundsForRange fails for the
+/// whole selection — Electron/Chromium often return a 0x0 rect for
+/// multi-character ranges. Try the FIRST CHARACTER of the selection, then
+/// the focused element's own frame (so the AI icon lands at the input
+/// instead of chasing the mouse), and only then the pointer.
+#[cfg(target_os = "macos")]
+unsafe fn ax_selection_bounds_fallback(
+    focused_element: Id,
+    window_pos: Option<(f64, f64)>,
+    selection_start: i64,
+    selection_len: i64,
+) -> Result<(i32, i32, i32, i32)> {
+    // 1) Bounds of just the first character of the selection.
+    let char_range = CFRange {
+        location: selection_start,
+        length: 1,
+    };
+    let ax_range = AXValueCreate(
+        K_AXVALUE_CFRANGE_TYPE,
+        &char_range as *const _ as *const std::ffi::c_void,
+    );
+    let mut bounds_value: Id = NIL;
+    let err_bounds = AXUIElementCopyParameterizedAttributeValue(
+        focused_element,
+        to_ax_string("AXBoundsForRange"),
+        ax_range,
+        &mut bounds_value,
+    );
+    if err_bounds == 0 && !bounds_value.is_null() {
+        let mut rect = CGRect::default();
+        if AXValueGetValue(
+            bounds_value,
+            K_AXVALUE_CGRECT_TYPE,
+            &mut rect as *mut _ as *mut std::ffi::c_void,
+        ) && rect.size.width > 0.0
+            && rect.size.height > 0.0
+        {
+            let mut final_rect = rect;
+            if let Some(win_pos) = window_pos {
+                if is_window_relative_coords(rect, win_pos) {
+                    final_rect.origin.x += win_pos.0;
+                    final_rect.origin.y += win_pos.1;
+                }
+            }
+            log::info!(
+                "[DIAG] selection bounds via first char: ({:.0},{:.0},{:.0},{:.0})",
+                final_rect.origin.x,
+                final_rect.origin.y,
+                final_rect.size.width,
+                final_rect.size.height
+            );
+            return Ok((
+                final_rect.origin.x as i32,
+                final_rect.origin.y as i32,
+                final_rect.size.width as i32,
+                final_rect.size.height as i32,
+            ));
+        }
+    }
+
+    // 2) The focused element's own frame, with the selection's position
+    // ESTIMATED inside it. Returning the full frame would place the icon at
+    // the input's far right edge — over a thousand px away from a selection
+    // at the start of the text (observed on Slack's Electron composer).
+    if let Ok(frame) = ax_element_bounds_for_element(focused_element) {
+        if frame.size.width > 0.0 && frame.size.height > 0.0 {
+            let sel_x = estimate_selection_x_in_frame(
+                focused_element,
+                &frame,
+                selection_start,
+                selection_len,
+            );
+            log::info!(
+                "[DIAG] selection bounds via element frame: frame=({:.0},{:.0},{:.0},{:.0}) est_sel_x={:.0}",
+                frame.origin.x,
+                frame.origin.y,
+                frame.size.width,
+                frame.size.height,
+                sel_x
+            );
+            // Width is a small nominal value: callers anchor the icon at
+            // x + width, and the estimate is already where the selection
+            // ENDS visually.
+            return Ok((
+                sel_x as i32,
+                frame.origin.y as i32,
+                20,
+                frame.size.height as i32,
+            ));
+        }
+    }
+
+    // 3) Mouse as a last resort.
+    log::info!("[DIAG] selection bounds via mouse fallback");
+    let (mx, my) = get_cursor_position_nsevent();
+    Ok((mx, my, 100, 20))
+}
+
+/// Estimate the x position of the selection's END inside the input frame.
+/// Prefers the mouse pointer when it rests on the input's line (right after
+/// a drag/double-click selection the pointer sits at the selection's end);
+/// otherwise advances by rendered character width (~8px, matching the
+/// overlay's base_char_width) from the input's leading padding. A
+/// character-share-of-frame interpolation would assume the text fills the
+/// whole — often very wide — input and drift far to the right for short
+/// drafts.
+#[cfg(target_os = "macos")]
+unsafe fn estimate_selection_x_in_frame(
+    _focused_element: Id,
+    frame: &CGRect,
+    selection_start: i64,
+    selection_len: i64,
+) -> f64 {
+    let (mx, my) = get_cursor_position_nsevent();
+    let (mxf, myf) = (mx as f64, my as f64);
+    if mxf >= frame.origin.x
+        && mxf <= frame.origin.x + frame.size.width
+        && myf >= frame.origin.y - 40.0
+        && myf <= frame.origin.y + frame.size.height + 40.0
+    {
+        return mxf;
+    }
+
+    let pad = 16.0;
+    let avg_char_w = 8.0;
+    let end = (selection_start + selection_len).max(0) as f64;
+    (frame.origin.x + pad + end * avg_char_w)
+        .min(frame.origin.x + frame.size.width - pad)
+        .max(frame.origin.x + pad)
 }
 
 /// Core implementation: get element frame bounds.
@@ -463,7 +630,10 @@ unsafe fn ax_caret_bounds_for_element(focused_element: Id) -> Result<CGRect> {
         to_ax_string("AXSelectedTextRange"),
         &mut selected_range_value,
     );
-    let mut selected_range = CFRange { location: 0, length: 0 };
+    let mut selected_range = CFRange {
+        location: 0,
+        length: 0,
+    };
     if !selected_range_value.is_null() {
         let _ = AXValueGetValue(
             selected_range_value,
@@ -499,7 +669,7 @@ pub fn get_focused_element_data(range_start: usize, range_len: usize) -> Result<
     }
 
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
 
         // 1. 获取焦点元素
@@ -575,7 +745,7 @@ pub fn get_focused_text_context() -> Result<FocusedTextContext> {
         return Err(AccessibilityError::PermissionDenied);
     }
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
         let err = AXUIElementCopyAttributeValue(
             system_element,
@@ -599,7 +769,7 @@ pub fn get_focused_range_bounds(range_start: usize, range_len: usize) -> Result<
     }
 
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
         let err = AXUIElementCopyAttributeValue(
             system_element,
@@ -679,7 +849,7 @@ pub fn get_focused_caret_bounds() -> Result<CGRect> {
     }
 
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
         let err = AXUIElementCopyAttributeValue(
             system_element,
@@ -732,7 +902,7 @@ pub fn get_focused_element_bounds() -> Result<CGRect> {
     }
 
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
         let err = AXUIElementCopyAttributeValue(
             system_element,
@@ -776,7 +946,7 @@ pub fn get_selected_text() -> Result<String> {
     }
 
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
 
         let err = AXUIElementCopyAttributeValue(
@@ -818,7 +988,7 @@ pub fn get_selected_text_bounds() -> Result<(i32, i32, i32, i32)> {
     }
 
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
 
         let err = AXUIElementCopyAttributeValue(
@@ -919,11 +1089,14 @@ pub fn get_selected_text_bounds() -> Result<(i32, i32, i32, i32)> {
                         );
                         return Ok((sx, sy, sw, sh));
                     } else {
-                        // Bounds 无效，回退到使用鼠标位置
-                        log::info!("[DIAG] AXBoundsForRange returned invalid bounds, using mouse position fallback");
-                        let (mouse_x, mouse_y) = get_cursor_position_nsevent();
-                        // 返回鼠标位置作为近似选区位置，使用固定的小宽度
-                        return Ok((mouse_x as i32, mouse_y as i32, 100, 20));
+                        // Bounds 无效（Electron 常见）：逐级回退 —— 首字符 → 元素 frame → 鼠标
+                        let window_pos = get_focused_window_position().ok();
+                        return ax_selection_bounds_fallback(
+                            focused_element,
+                            window_pos,
+                            selected_range.location,
+                            selected_range.length,
+                        );
                     }
                 }
             }
@@ -942,7 +1115,7 @@ pub fn get_focused_window_position() -> Result<(f64, f64)> {
     }
 
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
 
         let err = AXUIElementCopyAttributeValue(
@@ -1125,7 +1298,11 @@ fn snap_utf16_to_word_start(s: &str, utf16_offset: usize) -> usize {
         u16_pos += ch.len_utf16();
     }
     // If no whitespace found before offset, return the original (best effort)
-    if snap_u16 == 0 { utf16_offset } else { snap_u16 }
+    if snap_u16 == 0 {
+        utf16_offset
+    } else {
+        snap_u16
+    }
 }
 
 /// Snap a UTF-16 offset **forward** to the nearest word boundary.
@@ -1196,7 +1373,7 @@ pub fn select_text_range(start: usize, length: usize) -> Result<()> {
     }
 
     unsafe {
-        let system_element = AXUIElementCreateSystemWide();
+        let system_element = create_system_wide();
         let mut focused_element: Id = NIL;
         let err = AXUIElementCopyAttributeValue(
             system_element,
@@ -1240,6 +1417,179 @@ pub fn update_mouse_position(_x: i32, _y: i32) {
     // No-op: we now fetch dynamically
 }
 
+/// Replace the currently selected text of the focused element by writing
+/// `AXSelectedText` directly. This is the primary replacement path: no
+/// clipboard roundtrip, no simulated keystrokes, nothing to restore.
+pub fn set_selected_text(text: &str) -> Result<()> {
+    if !unsafe { AXIsProcessTrusted() } {
+        return Err(AccessibilityError::PermissionDenied);
+    }
+
+    unsafe {
+        let system_element = create_system_wide();
+        let mut focused_element: Id = NIL;
+        let err = AXUIElementCopyAttributeValue(
+            system_element,
+            to_ax_string("AXFocusedUIElement"),
+            &mut focused_element,
+        );
+
+        if err != 0 || focused_element.is_null() {
+            return Err(AccessibilityError::NoFocusedElement);
+        }
+
+        let err_set = AXUIElementSetAttributeValue(
+            focused_element,
+            to_ax_string("AXSelectedText"),
+            to_ax_string(text),
+        );
+
+        if err_set != 0 {
+            log::warn!("[DIAG] set_selected_text failed with err={}", err_set);
+            return Err(AccessibilityError::ApiError(format!(
+                "Failed to set selected text: {}",
+                err_set
+            )));
+        }
+
+        Ok(())
+    }
+}
+
+/// Read the full text (AXValue) of the system-wide focused element.
+/// Used to verify whether an AX write actually landed — Electron/Chromium
+/// sometimes report kAXErrorSuccess for `AXSelectedText` writes it silently
+/// drops.
+pub fn get_focused_element_value() -> Result<String> {
+    if !unsafe { AXIsProcessTrusted() } {
+        return Err(AccessibilityError::PermissionDenied);
+    }
+
+    unsafe {
+        let system_element = create_system_wide();
+        let mut focused_element: Id = NIL;
+        let err = AXUIElementCopyAttributeValue(
+            system_element,
+            to_ax_string("AXFocusedUIElement"),
+            &mut focused_element,
+        );
+        if err != 0 || focused_element.is_null() {
+            return Err(AccessibilityError::NoFocusedElement);
+        }
+
+        let mut value: Id = NIL;
+        let err_val =
+            AXUIElementCopyAttributeValue(focused_element, to_ax_string("AXValue"), &mut value);
+        if err_val != 0 || value.is_null() {
+            return Err(AccessibilityError::ApiError(format!(
+                "AXValue read failed: {}",
+                err_val
+            )));
+        }
+        Ok(from_ax_string(value))
+    }
+}
+
+/// Replace the entire text (AXValue) of the system-wide focused element.
+/// Fallback path for apps that accept-but-ignore `AXSelectedText` writes;
+/// Chromium/Electron text fields honour AXValue writes.
+pub fn set_focused_element_value(text: &str) -> Result<()> {
+    if !unsafe { AXIsProcessTrusted() } {
+        return Err(AccessibilityError::PermissionDenied);
+    }
+
+    unsafe {
+        let system_element = create_system_wide();
+        let mut focused_element: Id = NIL;
+        let err = AXUIElementCopyAttributeValue(
+            system_element,
+            to_ax_string("AXFocusedUIElement"),
+            &mut focused_element,
+        );
+        if err != 0 || focused_element.is_null() {
+            return Err(AccessibilityError::NoFocusedElement);
+        }
+
+        let err_set = AXUIElementSetAttributeValue(
+            focused_element,
+            to_ax_string("AXValue"),
+            to_ax_string(text),
+        );
+        if err_set != 0 {
+            log::warn!(
+                "[DIAG] set_focused_element_value failed with err={}",
+                err_set
+            );
+            return Err(AccessibilityError::ApiError(format!(
+                "AXValue write failed: {}",
+                err_set
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Size of the main display in logical points, top-left origin space.
+/// Used to clamp popup positioning so windows never detach from the text
+/// they belong to by being shoved on-screen by the window server.
+pub fn main_display_size() -> (i32, i32) {
+    unsafe {
+        let id = core_graphics::display::CGMainDisplayID();
+        let bounds = core_graphics::display::CGDisplayBounds(id);
+        (bounds.size.width as i32, bounds.size.height as i32)
+    }
+}
+
+/// True when the system-wide focused AX element is available (non-null).
+fn focused_element_available() -> bool {
+    if !unsafe { AXIsProcessTrusted() } {
+        return false;
+    }
+
+    unsafe {
+        let system_element = create_system_wide();
+        let mut focused: Id = NIL;
+        let err = AXUIElementCopyAttributeValue(
+            system_element,
+            to_ax_string("AXFocusedUIElement"),
+            &mut focused,
+        );
+        err == 0 && !focused.is_null()
+    }
+}
+
+/// Poll until the system-wide focused AX element is available, up to
+/// `timeout_ms`. Replaces fixed settle sleeps after focus switches: we
+/// continue as soon as the AX state is actually ready instead of guessing.
+pub fn wait_focused_element_ready(timeout_ms: u128) -> bool {
+    let deadline = std::time::Instant::now();
+    loop {
+        if focused_element_available() {
+            return true;
+        }
+        if deadline.elapsed().as_millis() > timeout_ms {
+            log::warn!(
+                "[DIAG] wait_focused_element_ready timed out after {}ms",
+                timeout_ms
+            );
+            return false;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    }
+}
+
+/// The `changeCount` of the general pasteboard. Used to detect whether anyone
+/// else wrote the pasteboard between our write and a restore, so we never
+/// clobber a newer user copy.
+pub fn pasteboard_change_count() -> i64 {
+    unsafe {
+        let class = AnyClass::get("NSPasteboard").expect("NSPasteboard not found");
+        let board: Id = msg_send![class, generalPasteboard];
+        let count: i64 = msg_send![board, changeCount];
+        count
+    }
+}
+
 pub fn get_cursor_position_nsevent() -> (i32, i32) {
     #[cfg(target_os = "macos")]
     {
@@ -1262,7 +1612,12 @@ pub fn get_cursor_position_nsevent() -> (i32, i32) {
 pub fn seconds_since_last_keydown() -> f64 {
     const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
     const K_CG_EVENT_KEY_DOWN: u32 = 10;
-    unsafe { CGEventSourceSecondsSinceLastEventType(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE, K_CG_EVENT_KEY_DOWN) }
+    unsafe {
+        CGEventSourceSecondsSinceLastEventType(
+            K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE,
+            K_CG_EVENT_KEY_DOWN,
+        )
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1276,7 +1631,12 @@ pub fn seconds_since_last_keydown() -> f64 {
 pub fn seconds_since_last_mouse_down() -> f64 {
     const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
     const K_CG_EVENT_LEFT_MOUSE_DOWN: u32 = 1;
-    unsafe { CGEventSourceSecondsSinceLastEventType(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE, K_CG_EVENT_LEFT_MOUSE_DOWN) }
+    unsafe {
+        CGEventSourceSecondsSinceLastEventType(
+            K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE,
+            K_CG_EVENT_LEFT_MOUSE_DOWN,
+        )
+    }
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -1287,4 +1647,85 @@ pub fn seconds_since_last_mouse_down() -> f64 {
 #[link(name = "CoreGraphics", kind = "framework")]
 extern "C" {
     fn CGEventSourceSecondsSinceLastEventType(state_id: i32, event_type: u32) -> f64;
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod ax_probe_tests {
+    use super::*;
+
+    fn focused() -> Id {
+        unsafe {
+            let system_element = create_system_wide();
+            let mut focused_element: Id = NIL;
+            let err = AXUIElementCopyAttributeValue(
+                system_element,
+                to_ax_string("AXFocusedUIElement"),
+                &mut focused_element,
+            );
+            assert_eq!(err, 0, "AXFocusedUIElement copy failed");
+            focused_element
+        }
+    }
+
+    fn read_attr(element: Id, attr: &str) -> Option<String> {
+        unsafe {
+            let mut value: Id = NIL;
+            let err = AXUIElementCopyAttributeValue(element, to_ax_string(attr), &mut value);
+            if err != 0 || value.is_null() {
+                return None;
+            }
+            Some(from_ax_string(value))
+        }
+    }
+
+    /// Manual probe against the live focused element (run with a text field
+    /// focused, e.g. Slack draft): cargo test --lib probe_ax_writes -- --ignored --nocapture
+    #[test]
+    #[ignore]
+    fn probe_ax_writes() {
+        unsafe {
+            let el = focused();
+            println!("role  = {:?}", read_attr(el, "AXRole"));
+            println!("subrole = {:?}", read_attr(el, "AXSubrole"));
+            let value_before = read_attr(el, "AXValue").expect("focused element has no AXValue");
+            println!("value_before = {:?}", value_before);
+
+            // 1) Select the whole text via AXSelectedTextRange
+            let len = value_before.encode_utf16().count() as i64;
+            let range = CFRange {
+                location: 0,
+                length: len,
+            };
+            let ax_range = AXValueCreate(
+                K_AXVALUE_CFRANGE_TYPE,
+                &range as *const _ as *const std::ffi::c_void,
+            );
+            let err_sel =
+                AXUIElementSetAttributeValue(el, to_ax_string("AXSelectedTextRange"), ax_range);
+            println!("set AXSelectedTextRange(0,{len}) -> err={err_sel}");
+            println!(
+                "AXSelectedText after range set = {:?}",
+                read_attr(el, "AXSelectedText")
+            );
+
+            // 2) Replace the selection via AXSelectedText
+            let err_txt = AXUIElementSetAttributeValue(
+                el,
+                to_ax_string("AXSelectedText"),
+                to_ax_string("PROBE-REPLACED"),
+            );
+            println!("set AXSelectedText('PROBE-REPLACED') -> err={err_txt}");
+            let value_after = read_attr(el, "AXValue");
+            println!("value_after_selected_text_write = {:?}", value_after);
+
+            // 3) Try a full AXValue write (restore original text)
+            let err_val = AXUIElementSetAttributeValue(
+                el,
+                to_ax_string("AXValue"),
+                to_ax_string(&value_before),
+            );
+            println!("set AXValue(original) -> err={err_val}");
+            println!("value_after_axvalue_write = {:?}", read_attr(el, "AXValue"));
+        }
+    }
 }

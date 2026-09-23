@@ -14,6 +14,12 @@
   import { Textarea } from "$lib/components/ui/textarea";
   import { Check, RefreshCw, Copy } from "lucide-svelte";
   import { locale, t } from "$lib/i18n";
+  import {
+    disabledReason,
+    isCapHidden,
+    isCapDisabled,
+    type TranslationProviderId,
+  } from "$lib/ai-capabilities";
   import type { AppConfig, LineChange, TypoSuggestion, SpellCheckResult, AiTextTransformResponse, AiClarityCheckResponse, AiVocabularyEnhanceResponse } from "$lib/types/app";
 
   // Reactive translation helper
@@ -45,6 +51,11 @@
   let vocabularyResult: AiVocabularyEnhanceResponse | null = $state(null);
   let aiTargetLanguage = $state("English");
   let aiPolishStyles = $state<string[]>([]);
+  // Provider / API key are mirrored from `get_config` so the AI buttons
+  // can be disabled live when an Apple / Local translation provider is
+  // selected (those backends cannot do grammar / polish / clarity, etc).
+  let aiTranslationProvider = $state<TranslationProviderId>("openai");
+  let openaiApiKey = $state("");
   let unlistenChunk: (() => void) | null = null;
   let unlistenComplete: (() => void) | null = null;
   let unlistenError: (() => void) | null = null;
@@ -71,6 +82,13 @@
         : config.aiPolishStyles?.length
           ? config.aiPolishStyles
           : ["formal"];
+      const provider = (config.aiTranslationProvider ?? "openai")
+        .toString()
+        .trim()
+        .toLowerCase();
+      aiTranslationProvider =
+        provider === "apple" || provider === "local" ? provider : "openai";
+      openaiApiKey = config.openaiApiKey ?? "";
     } catch (error) {
       console.warn("Failed to load AI defaults:", error);
     }
@@ -439,60 +457,90 @@
           </select>
         </div>
         <div class="flex flex-wrap gap-2">
+          {#if !isCapHidden("grammar", aiTranslationProvider)}
           <Button
             onclick={() => runAiTransform("grammar")}
-            disabled={aiBusy || !currentText.trim()}
+            disabled={aiBusy || !currentText.trim() ||
+              isCapDisabled("grammar", aiTranslationProvider, openaiApiKey)}
+            title={disabledReason("grammar", aiTranslationProvider, openaiApiKey) ??
+              ""}
             variant="outline"
           >
             {aiRunningOperation === "grammar"
               ? tr("spell.running")
               : tr("spell.aiGrammar")}
           </Button>
+        {/if}
+        {#if !isCapHidden("translate", aiTranslationProvider)}
           <Button
             onclick={() => runAiTransform("translate")}
-            disabled={aiBusy || !currentText.trim()}
+            disabled={aiBusy || !currentText.trim() ||
+              isCapDisabled("translate", aiTranslationProvider, openaiApiKey)}
+            title={disabledReason("translate", aiTranslationProvider, openaiApiKey) ??
+              ""}
             variant="outline"
           >
             {aiRunningOperation === "translate"
               ? tr("spell.running")
               : tr("spell.aiTranslate")}
           </Button>
+        {/if}
+        {#if !isCapHidden("polish", aiTranslationProvider)}
           <Button
             onclick={() => runAiTransform("polish")}
-            disabled={aiBusy || !currentText.trim()}
+            disabled={aiBusy || !currentText.trim() ||
+              isCapDisabled("polish", aiTranslationProvider, openaiApiKey)}
+            title={disabledReason("polish", aiTranslationProvider, openaiApiKey) ??
+              ""}
             variant="outline"
           >
             {aiRunningOperation === "polish"
               ? tr("spell.running")
               : tr("spell.aiPolish")}
           </Button>
+        {/if}
+        {#if !isCapHidden("simplify", aiTranslationProvider)}
           <Button
             onclick={() => runAiTransform("summarize")}
-            disabled={aiBusy || !currentText.trim()}
+            disabled={aiBusy || !currentText.trim() ||
+              isCapDisabled("simplify", aiTranslationProvider, openaiApiKey)}
+            title={disabledReason("simplify", aiTranslationProvider, openaiApiKey) ??
+              ""}
             variant="outline"
           >
             {aiRunningOperation === "summarize"
               ? tr("spell.running")
               : tr("spell.aiSummarize")}
           </Button>
+        {/if}
+        {#if !isCapHidden("clarity", aiTranslationProvider)}
           <Button
             onclick={runAiClarityCheck}
-            disabled={aiBusy || !currentText.trim()}
+            disabled={aiBusy || !currentText.trim() ||
+              isCapDisabled("clarity", aiTranslationProvider, openaiApiKey)}
+            title={disabledReason("clarity", aiTranslationProvider, openaiApiKey) ??
+              ""}
             variant="outline"
           >
             {aiRunningOperation === "clarity"
               ? tr("spell.running")
               : tr("spell.aiClarity")}
           </Button>
+        {/if}
+        {#if !isCapHidden("vocabulary", aiTranslationProvider)}
           <Button
             onclick={runAiVocabularyEnhance}
-            disabled={aiBusy || !currentText.trim()}
+            disabled={aiBusy || !currentText.trim() ||
+              isCapDisabled("vocabulary", aiTranslationProvider, openaiApiKey)}
+            title={disabledReason("vocabulary", aiTranslationProvider, openaiApiKey) ??
+              ""}
             variant="outline"
           >
             {aiRunningOperation === "vocabulary"
               ? tr("spell.running")
               : tr("spell.aiVocabulary")}
           </Button>
+        {/if}
         </div>
         {#if aiError}
           <div

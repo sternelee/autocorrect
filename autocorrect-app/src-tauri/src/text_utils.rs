@@ -9,10 +9,7 @@ pub fn byte_offset_to_utf16_offset(text: &str, byte_offset: usize) -> usize {
 /// Convert multiple byte offsets to UTF-16 offsets in a single O(text_len) scan.
 /// `offsets` must produce values in **ascending** order (guaranteed by caller).
 /// Returns a Vec in the same order as the input offsets.
-pub fn batch_byte_to_utf16_offsets(
-    text: &str,
-    offsets: impl Iterator<Item = usize>,
-) -> Vec<usize> {
+pub fn batch_byte_to_utf16_offsets(text: &str, offsets: impl Iterator<Item = usize>) -> Vec<usize> {
     let offsets: Vec<usize> = offsets.collect();
     let mut result = vec![0usize; offsets.len()];
     if offsets.is_empty() {

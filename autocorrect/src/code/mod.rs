@@ -144,7 +144,9 @@ pub fn lint_for(raw: &str, filename_or_ext: &str) -> LintResult {
 /// autocorrect::format_for(raw, "index.html");
 /// ```
 pub fn format_for(raw: &str, filename_or_ext: &str) -> FormatResult {
-    let result = match types::match_filename(filename_or_ext).as_str() {
+    
+
+    match types::match_filename(filename_or_ext).as_str() {
         "html" => format_html(raw),
         "yaml" => format_yaml(raw),
         "sql" => format_sql(raw),
@@ -181,7 +183,5 @@ pub fn format_for(raw: &str, filename_or_ext: &str) -> FormatResult {
             result.out = String::from(raw);
             result
         }
-    };
-
-    result
+    }
 }

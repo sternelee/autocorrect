@@ -13,7 +13,7 @@ impl Ignorer {
         P: AsRef<Path>,
     {
         let work_dir = work_dir.as_ref();
-        let mut builder = ignore::gitignore::GitignoreBuilder::new(&work_dir);
+        let mut builder = ignore::gitignore::GitignoreBuilder::new(work_dir);
         builder.add(work_dir.join(AUTOCORRECTIGNORE));
         builder.add(work_dir.join(GITIGNORE));
         let ignorer = builder.build().expect("failed to build ignorer");

@@ -235,8 +235,55 @@ impl HotkeyConfig {
 /// This is the preferred way to create a hotkey listener as it provides
 /// a proper receiver channel for the main thread.
 ///
+/// Shared, mutable `HotkeyConfig` used by the running rdev listener.
+///
+/// The listener clones the currently bound key/modifiers on every event
+/// so that updates through `HotkeyConfigCell` (e.g. from
+/// `update_hotkey_config`) take effect without restarting the listener
+/// thread. Manage a `HotkeyConfigCell` in Tauri App state so commands
+/// can write through to it.
+pub type SharedHotkeyConfig = std::sync::Arc<std::sync::Mutex<HotkeyConfig>>;
+
+pub struct HotkeyConfigCell(pub SharedHotkeyConfig);
+
+/// Convenience constructor for the shared hotkey config.
+pub fn shared_hotkey_config(config: HotkeyConfig) -> SharedHotkeyConfig {
+    std::sync::Arc::new(std::sync::Mutex::new(config))
+}
+
+/// Calibrate the tracked modifier state from the actual CGEventSource flags
+/// so hotkey decisions use the real current keyboard state.
+///
+/// Press/release counting desyncs when events are dropped (focus switches,
+/// event-tap hiccups), leaving "sticky" modifiers that block or mis-trigger
+/// the hotkey. Querying the HID flags on every event makes the state
+/// self-healing.
+#[cfg(target_os = "macos")]
+fn calibrate_modifiers_from_cg(modifiers: &mut Modifiers) {
+    #[link(name = "CoreGraphics", kind = "framework")]
+    extern "C" {
+        fn CGEventSourceFlagsState(state_id: i32) -> u64;
+    }
+
+    // kCGEventSourceStateHIDSystemState
+    const K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE: i32 = 1;
+    // NX_* masks from IOKit hidsystem/IOLLEvent.h (match kCGEventFlagMask*).
+    const NX_SHIFTMASK: u64 = 0x0002_0000;
+    const NX_CONTROLMASK: u64 = 0x0004_0000;
+    const NX_ALTERNATEMASK: u64 = 0x0008_0000;
+    const NX_COMMANDMASK: u64 = 0x0010_0000;
+
+    let flags = unsafe { CGEventSourceFlagsState(K_CG_EVENT_SOURCE_STATE_HID_SYSTEM_STATE) };
+    modifiers.shift = flags & NX_SHIFTMASK != 0;
+    modifiers.ctrl = flags & NX_CONTROLMASK != 0;
+    modifiers.alt = flags & NX_ALTERNATEMASK != 0;
+    modifiers.meta = flags & NX_COMMANDMASK != 0;
+}
+
 /// # Arguments
-/// * `config` - Hotkey configuration specifying the key combination to listen for
+/// * `config_cell` - Shared, mutable hotkey configuration. The listener
+///   reads from it on every key event so updates take effect without a
+///   restart.
 ///
 /// # Returns
 /// A tuple containing:
@@ -245,84 +292,139 @@ impl HotkeyConfig {
 ///
 /// # Example
 /// ```ignore
-/// use autocorrect_app_lib::hotkey::{create_hotkey_channel, HotkeyConfig};
+/// use autocorrect_app_lib::hotkey::{create_hotkey_channel, shared_hotkey_config, HotkeyConfig};
 /// use rdev::Key;
 ///
-/// let config = HotkeyConfig {
+/// let shared = shared_hotkey_config(HotkeyConfig {
 ///     key: Key::KeyA,
 ///     ..Default::default()
-/// };
-///
-/// let (rx, handle) = create_hotkey_channel(config);
+/// });
+/// let (rx, handle) = create_hotkey_channel(shared);
 /// ```
-pub fn create_hotkey_channel(config: HotkeyConfig) -> (Receiver<HotkeyEvent>, HotkeyHandle) {
+pub fn create_hotkey_channel(
+    config_cell: SharedHotkeyConfig,
+) -> (Receiver<HotkeyEvent>, HotkeyHandle) {
     let (tx, rx) = mpsc::channel();
     let running = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
     let running_clone = running.clone();
 
-    // Wrap modifiers in a Mutex to allow safe mutable access across callback invocations
-    let modifiers = std::sync::Arc::new(Mutex::new(Modifiers::default()));
-    let modifiers_clone = modifiers.clone();
-
+    let config_clone = config_cell.clone();
     let handle = thread::spawn(move || {
-        log::info!("Hotkey listener started with config: {:?}", config);
+        log::info!(
+            "Hotkey listener started with config: {}",
+            config_clone
+                .lock()
+                .map(|c| c.to_display_string())
+                .unwrap_or_else(|_| "<poisoned>".to_string())
+        );
 
         #[cfg(target_os = "macos")]
         use crate::macos_text::update_mouse_position;
 
-        let callback = move |event: Event| {
+        // rdev::listen blocks; it returns when the CGEventTap is disabled
+        // (e.g. a timeout, or a temporary Accessibility permission hiccup).
+        // Rebuild the listener instead of letting the hotkey die silently.
+        loop {
             if !running_clone.load(std::sync::atomic::Ordering::Relaxed) {
-                return;
+                break;
             }
 
-            // Track mouse position on mouse move events
-            #[cfg(target_os = "macos")]
-            {
-                if let EventType::MouseMove { x, y, .. } = event.event_type {
-                    update_mouse_position(x as i32, y as i32);
+            // Fresh state per (re)start; CG flag calibration below fixes any
+            // drift, so resetting the tally on restart is harmless.
+            // Wrap modifiers in a Mutex for safe access across callbacks.
+            let modifiers = std::sync::Arc::new(Mutex::new(Modifiers::default()));
+            let modifiers_clone = modifiers.clone();
+            let tx = tx.clone();
+            let running_cb = running_clone.clone();
+            let config_cb = config_clone.clone();
+
+            let callback = move |event: Event| {
+                if !running_cb.load(std::sync::atomic::Ordering::Relaxed) {
+                    return;
                 }
-            }
 
-            // Lock the mutex to safely modify the modifiers state
-            if let Ok(mut modifiers_guard) = modifiers_clone.lock() {
-                match event.event_type {
-                    EventType::KeyPress(key) => {
-                        // Update modifier state on key press
-                        match key {
-                            Key::ShiftLeft | Key::ShiftRight => modifiers_guard.shift = true,
-                            Key::ControlLeft | Key::ControlRight => modifiers_guard.ctrl = true,
-                            Key::MetaLeft | Key::MetaRight => modifiers_guard.meta = true,
-                            Key::Alt => modifiers_guard.alt = true,
-                            _ => {
-                                // Check if this is our hotkey combination
-                                if key == config.key
-                                    && modifiers_guard.has_required(&config.modifiers)
-                                {
-                                    log::debug!("Hotkey triggered: {:?}", key);
-                                    let _ = tx.send(HotkeyEvent::SpellCheckTriggered);
+                // Track mouse position on mouse move events
+                #[cfg(target_os = "macos")]
+                {
+                    if let EventType::MouseMove { x, y, .. } = event.event_type {
+                        update_mouse_position(x as i32, y as i32);
+                    }
+                }
+
+                // Snapshot the currently active hotkey binding before matching.
+                // This makes config swaps from `update_hotkey_config` visible
+                // without restarting the listener thread.
+                let (cfg_key, cfg_modifiers) = match config_cb.lock() {
+                    Ok(guard) => (guard.key, guard.modifiers.clone()),
+                    Err(poisoned) => {
+                        log::error!("Hotkey config lock poisoned; recovering");
+                        let guard = poisoned.into_inner();
+                        (guard.key, guard.modifiers.clone())
+                    }
+                };
+
+                // Lock the mutex to safely modify the modifiers state
+                if let Ok(mut modifiers_guard) = modifiers_clone.lock() {
+                    // Trust the real keyboard state over our press/release
+                    // tally, which desyncs when events are dropped (focus
+                    // switches, event-tap hiccups). This runs on every
+                    // event, so stale "sticky modifier" states self-heal.
+                    #[cfg(target_os = "macos")]
+                    calibrate_modifiers_from_cg(&mut modifiers_guard);
+
+                    match event.event_type {
+                        EventType::KeyPress(key) => {
+                            // Update modifier state on key press
+                            match key {
+                                Key::ShiftLeft | Key::ShiftRight => modifiers_guard.shift = true,
+                                Key::ControlLeft | Key::ControlRight => modifiers_guard.ctrl = true,
+                                Key::MetaLeft | Key::MetaRight => modifiers_guard.meta = true,
+                                // On macOS the rdev fork (fufesou/rdev) maps the
+                                // left Option to `Key::Alt` and the right Option
+                                // to `Key::AltGr`. Treat both as the Alt modifier
+                                // so users pressing either Option key trigger
+                                // the configured hotkey.
+                                Key::Alt | Key::AltGr => modifiers_guard.alt = true,
+                                _ => {
+                                    // Check if this is our hotkey combination
+                                    if key == cfg_key
+                                        && modifiers_guard.has_required(&cfg_modifiers)
+                                    {
+                                        log::debug!("Hotkey triggered: {:?}", key);
+                                        let _ = tx.send(HotkeyEvent::SpellCheckTriggered);
+                                    }
                                 }
                             }
                         }
-                    }
-                    EventType::KeyRelease(key) => {
-                        // Update modifier state on key release
-                        match key {
-                            Key::ShiftLeft | Key::ShiftRight => modifiers_guard.shift = false,
-                            Key::ControlLeft | Key::ControlRight => modifiers_guard.ctrl = false,
-                            Key::MetaLeft | Key::MetaRight => modifiers_guard.meta = false,
-                            Key::Alt => modifiers_guard.alt = false,
-                            _ => {}
+                        EventType::KeyRelease(key) => {
+                            // Update modifier state on key release
+                            match key {
+                                Key::ShiftLeft | Key::ShiftRight => modifiers_guard.shift = false,
+                                Key::ControlLeft | Key::ControlRight => {
+                                    modifiers_guard.ctrl = false
+                                }
+                                Key::MetaLeft | Key::MetaRight => modifiers_guard.meta = false,
+                                Key::Alt | Key::AltGr => modifiers_guard.alt = false,
+                                _ => {}
+                            }
                         }
+                        _ => {}
                     }
-                    _ => {}
+                }
+            };
+
+            // Start listening for events
+            // Note: rdev::listen blocks until an error occurs or the process exits
+            match rdev::listen(callback) {
+                Err(e) => {
+                    log::error!("Hotkey listener error: {:?}; restarting in 1s", e);
+                    thread::sleep(std::time::Duration::from_secs(1));
+                }
+                Ok(()) => {
+                    log::info!("Hotkey listener stopped cleanly");
+                    break;
                 }
             }
-        };
-
-        // Start listening for events
-        // Note: rdev::listen blocks until an error occurs or the process exits
-        if let Err(e) = rdev::listen(callback) {
-            log::error!("Hotkey listener error: {:?}", e);
         }
     });
 
@@ -341,6 +443,11 @@ pub struct HotkeyHandle {
 }
 
 impl HotkeyHandle {
+    /// Whether the listener loop is still marked active.
+    pub fn is_running(&self) -> bool {
+        self.running.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     /// Stop the hotkey listener
     ///
     /// This sets the running flag to false and waits for the listener thread to finish.

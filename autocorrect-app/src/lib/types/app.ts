@@ -1,6 +1,22 @@
 // Shared frontend types that mirror Tauri IPC return shapes.
 // Keep this file in sync with the Rust command return types.
 
+export interface SystemHealth {
+  accessibilityGranted: boolean;
+  hotkeyRunning: boolean;
+  hotkeyBinding: string;
+  overlayReady: boolean;
+  overlayMarkerCount: number;
+  clipboardMonitorRunning: boolean;
+  platform: string;
+}
+
+export interface ClipboardChangedEvent {
+  text: string;
+  has_cjk?: boolean;
+  hasCjk?: boolean;
+}
+
 export interface AppConfig {
   rules?: Record<string, number>;
   textRules?: Record<string, number>;
@@ -16,6 +32,9 @@ export interface AppConfig {
   aiTimeoutMs?: number;
   aiApiBaseUrl?: string;
   aiTranslateTargetLanguage?: string;
+  aiTranslationProvider?: string;
+  aiTranslationLocalModelPath?: string;
+  aiTranslateSourceLanguage?: string;
   aiPolishStyle?: string[];
   aiPolishStyles?: string[];
   cspellEnabled?: boolean;
@@ -114,4 +133,36 @@ export interface AiVocabSuggestion {
 
 export interface AiVocabularyEnhanceResponse {
   suggestions: AiVocabSuggestion[];
+}
+
+export interface TranslationProviderInfo {
+  id: string;
+  name: string;
+  available: boolean;
+  error?: string | null;
+}
+
+export interface TranslateResponse {
+  translatedText: string;
+  providerUsed: string;
+  fallbackUsed: boolean;
+}
+
+export interface DownloadableTranslationModel {
+  id: string;
+  name: string;
+  sourceLang: string;
+  targetLang: string;
+}
+
+export interface TranslationModelStatus {
+  ready: boolean;
+  path: string;
+  filesPresent: string[];
+  filesMissing: string[];
+}
+
+export interface DownloadTranslationModelRequest {
+  modelId: string;
+  targetDir: string;
 }

@@ -390,6 +390,20 @@ fn load_custom_corrections() -> HashMap<String, String> {
 static POLICY: LazyLock<typos_cli::policy::Policy> =
     LazyLock::new(typos_cli::policy::Policy::default);
 
+// Common English words (google-10000-english) used to verify doubled-letter
+// fold candidates. The typos dictionary only maps wrong→correct spellings,
+// so it cannot tell a valid word from an unknown one at runtime.
+static COMMON_ENGLISH_WORDS: LazyLock<HashSet<&'static str>> = LazyLock::new(|| {
+    let content = include_str!("../dictionaries/english-common.txt");
+    let words: HashSet<&'static str> = content
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect();
+    log::info!("Loaded {} common English words", words.len());
+    words
+});
+
 // Use RwLock to allow reloading custom corrections at runtime.
 static CUSTOM_CORRECTIONS: LazyLock<RwLock<HashMap<String, String>>> =
     LazyLock::new(|| RwLock::new(load_custom_corrections()));
@@ -418,7 +432,7 @@ pub fn check_typos(text: &str) -> Vec<TypoError> {
     let mut typos_errors: Vec<TypoError> = Vec::new();
 
     // Pass 1: collect all typos from the typos library (byte offsets only, line/col deferred)
-    let results = typos::check_str(text, &POLICY.tokenizer, POLICY.dict);
+    let results = typos::check_str(text, POLICY.tokenizer, POLICY.dict);
 
     for typo in results {
         if let Status::Corrections(corrections) = typo.corrections {
@@ -441,6 +455,39 @@ pub fn check_typos(text: &str) -> Vec<TypoError> {
                 line: 0, // filled in batch below
                 col: 0,
             });
+        }
+    }
+
+    // Pass 1.5: the pre-generated typos dictionary has no letter-repetition
+    // variants, so doubled-letter typos like "helloo"/"worldd" pass through
+    // as unknown words. Fold repeated runs ourselves and keep the fold that
+    // yields exactly one common English word.
+    for ident in POLICY.tokenizer.parse_str(text) {
+        for word in ident.split() {
+            let token = word.token();
+            if !token.bytes().all(|b| b.is_ascii_alphabetic()) {
+                continue;
+            }
+            match POLICY.dict.correct_word(word) {
+                Some(Status::Valid) | Some(Status::Corrections(_)) => continue,
+                _ => {}
+            }
+            if is_bundled_word(token)
+                || COMMON_ENGLISH_WORDS.contains(token.to_lowercase().as_str())
+            {
+                continue;
+            }
+            if let Some(correction) = fold_repeats_to_valid(token) {
+                if !typos_errors.iter().any(|e| e.byte_offset == word.offset()) {
+                    typos_errors.push(TypoError {
+                        typo: token.to_string(),
+                        suggestions: vec![correction],
+                        byte_offset: word.offset(),
+                        line: 0, // filled in batch below
+                        col: 0,
+                    });
+                }
+            }
         }
     }
 
@@ -522,6 +569,78 @@ pub fn check_typos(text: &str) -> Vec<TypoError> {
     }
 
     typos_errors
+}
+
+/// Try to correct a doubled-letter typo (e.g. "helloo" → "hello").
+///
+/// The upstream dictionary has no variants for inserted repeated letters, so
+/// we fold each run of a repeated character down to 1 or 2 copies and keep
+/// the fold only when it maps to exactly one common English word. Returns
+/// None when the word has no runs, or the fold is ambiguous.
+fn fold_repeats_to_valid(word: &str) -> Option<String> {
+    let bytes = word.as_bytes();
+
+    // Byte ranges [start, end) of runs holding the same char 2+ times.
+    let runs: Vec<(usize, usize)> = {
+        let mut runs = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            let mut j = i + 1;
+            while j < bytes.len() && bytes[j] == bytes[i] {
+                j += 1;
+            }
+            if j - i >= 2 {
+                runs.push((i, j));
+            }
+            i = j;
+        }
+        runs
+    };
+    if runs.is_empty() {
+        return None;
+    }
+
+    // Candidate folded lengths per run: 1, or 2 (which also covers "keep
+    // as-is" for a run of exactly 2, e.g. the "ll" in "helloo").
+    let choices: Vec<Vec<usize>> = runs.iter().map(|_| vec![1usize, 2usize]).collect();
+
+    let mut valid: Option<String> = None;
+    let mut counters = vec![0usize; choices.len()];
+    loop {
+        let mut folded = String::with_capacity(word.len());
+        let mut pos = 0usize;
+        for (i, &(start, end)) in runs.iter().enumerate() {
+            folded.push_str(&word[pos..start]);
+            let ch = word[start..]
+                .chars()
+                .next()
+                .expect("run start is char boundary");
+            for _ in 0..choices[i][counters[i]] {
+                folded.push(ch);
+            }
+            pos = end;
+        }
+        folded.push_str(&word[pos..]);
+
+        if COMMON_ENGLISH_WORDS.contains(folded.to_lowercase().as_str()) {
+            if valid.as_deref().is_some_and(|v| v != folded) {
+                return None; // ambiguous fold — don't guess
+            }
+            valid = Some(folded);
+        }
+
+        // Mixed-radix increment over the choice counters; all wrapped = done.
+        for idx in (0..counters.len()).rev() {
+            counters[idx] += 1;
+            if counters[idx] < choices[idx].len() {
+                break;
+            }
+            counters[idx] = 0;
+            if idx == 0 {
+                return valid;
+            }
+        }
+    }
 }
 
 /// Apply custom / CSpell flagWord corrections and/or unknown-word detection to a
@@ -628,6 +747,43 @@ mod tests {
 
         assert_eq!(typos[1].typo, "soure");
         assert_eq!(typos[1].line, 2);
+    }
+
+    #[test]
+    fn test_doubled_letter_typos() {
+        // The upstream typos dictionary has no letter-repetition variants;
+        // these are caught by our fold_repeats_to_valid pass.
+        let cases = vec![
+            ("helloo world", "helloo", "hello"),
+            ("helloo", "helloo", "hello"),
+            ("hellooo", "hellooo", "hello"),
+            ("helllo", "helllo", "hello"),
+            ("worldd", "worldd", "world"),
+            ("Helloo world", "Helloo", "Hello"),
+        ];
+        for (text, expected_typo, expected_fix) in cases {
+            let typos = check_typos(text);
+            let found = typos
+                .iter()
+                .find(|t| t.typo.eq_ignore_ascii_case(expected_typo));
+            assert!(
+                found.is_some(),
+                "Expected typo '{expected_typo}' in '{text}', got {:?}",
+                typos
+            );
+            assert_eq!(
+                found.unwrap().suggestions,
+                vec![expected_fix.to_string()],
+                "case '{text}'"
+            );
+        }
+    }
+
+    #[test]
+    fn test_doubled_letter_no_false_positives() {
+        // Valid words with double letters must not be flagged.
+        let text = "book keep took shall success feeling";
+        assert_eq!(check_typos(text).len(), 0);
     }
 
     #[test]

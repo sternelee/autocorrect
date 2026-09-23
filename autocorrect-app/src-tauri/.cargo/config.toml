@@ -1,0 +1,14 @@
+# Pin the host C compiler to Apple clang.
+#
+# The ort-sys build script runs `$CC --print-search-dirs` and adds the printed
+# resource dir plus `-lclang_rt.osx` to the link line. When the Android NDK is
+# in PATH, `clang` resolves to the NDK cross-compiler and the emitted path
+# (`.../ndk/.../lib/clang/<v>/lib/darwin`) does not exist for host builds,
+# breaking the final link with: "ld: library 'clang_rt.osx' not found".
+#
+# Android cross-builds are unaffected: target linking goes through
+# CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER and target C compilation through
+# CC_aarch64_linux_android / CXX_aarch64_linux_android.
+[env]
+CC = "/usr/bin/clang"
+CXX = "/usr/bin/clang++"

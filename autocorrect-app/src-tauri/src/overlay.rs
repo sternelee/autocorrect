@@ -9,7 +9,6 @@ use tauri::AppHandle;
 #[cfg(target_os = "macos")]
 use crate::macos_geom::*;
 
-
 #[derive(Debug, Serialize, Clone)]
 pub struct TypoMarker {
     pub id: String,
@@ -33,8 +32,7 @@ pub struct OverlayManager {
 static LAST_MARKER_COUNT: AtomicUsize = AtomicUsize::new(usize::MAX);
 /// Hash of the last rendered markers (id + position fingerprint).
 /// If unchanged, skip the full NSView teardown-rebuild cycle.
-static LAST_MARKERS_HASH: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
+static LAST_MARKERS_HASH: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[inline]
 fn hash_markers(markers: &[TypoMarker]) -> u64 {

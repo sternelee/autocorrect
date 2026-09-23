@@ -7,13 +7,13 @@ use typos::Status;
 use crate::DIAGNOSTIC_SOURCE_TYPO;
 
 static POLICY: LazyLock<typos_cli::policy::Policy> = LazyLock::new(|| {
-    let policy = typos_cli::policy::Policy::new();
-    policy
+    
+    typos_cli::policy::Policy::new()
 });
 
 pub(crate) fn check_typos(text: &str) -> Vec<Diagnostic> {
     let rope = Rope::from_str(text);
-    let results = typos::check_str(text, &POLICY.tokenizer, POLICY.dict);
+    let results = typos::check_str(text, POLICY.tokenizer, POLICY.dict);
 
     let mut diagnostics = Vec::new();
     for typo in results {
@@ -35,36 +35,33 @@ pub(crate) fn check_typos(text: &str) -> Vec<Diagnostic> {
             end: end_pos,
         };
 
-        match typo.corrections {
-            Status::Corrections(corrections) => {
-                let data = corrections
-                    .iter()
-                    .map(|s| s.to_string())
-                    .collect::<Vec<String>>();
+        if let Status::Corrections(corrections) = typo.corrections {
+            let data = corrections
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<String>>();
 
-                let diagnostic = Diagnostic {
-                    range,
-                    severity: Some(lsp_types::DiagnosticSeverity::INFORMATION),
-                    code: None,
-                    code_description: None,
-                    source: Some(DIAGNOSTIC_SOURCE_TYPO.to_string()),
-                    message: format!(
-                        "`{}` should be {}",
-                        typo.typo,
-                        corrections
-                            .into_iter()
-                            .map(|correct| format!("`{}`", correct))
-                            .collect::<Vec<String>>()
-                            .join(", ")
-                    ),
-                    related_information: None,
-                    tags: None,
-                    data: Some(serde_json::json!(data)),
-                };
+            let diagnostic = Diagnostic {
+                range,
+                severity: Some(lsp_types::DiagnosticSeverity::INFORMATION),
+                code: None,
+                code_description: None,
+                source: Some(DIAGNOSTIC_SOURCE_TYPO.to_string()),
+                message: format!(
+                    "`{}` should be {}",
+                    typo.typo,
+                    corrections
+                        .into_iter()
+                        .map(|correct| format!("`{}`", correct))
+                        .collect::<Vec<String>>()
+                        .join(", ")
+                ),
+                related_information: None,
+                tags: None,
+                data: Some(serde_json::json!(data)),
+            };
 
-                diagnostics.push(diagnostic);
-            }
-            _ => {}
+            diagnostics.push(diagnostic);
         }
     }
 
