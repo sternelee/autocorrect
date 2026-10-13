@@ -481,6 +481,7 @@ dependencies = [
  "dirs 5.0.1",
  "enigo",
  "futures-util",
+ "languagetool-rust",
  "log",
  "ndarray",
  "objc2 0.5.2",
@@ -3559,6 +3560,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "languagetool-rust"
+version = "3.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83ab1e380facbcc4984d77e840ab6f0432808281d80ea866a2fe78edc1b5b5c1"
+dependencies = [
+ "lifetime",
+ "reqwest 0.12.20",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.12",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3629,6 +3643,36 @@ dependencies = [
  "bitflags 2.13.1",
  "libc",
  "redox_syscall",
+]
+
+[[package]]
+name = "lifetime"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b9ac39b3413a5c091fc208f8eb84d9bdb35b6ef8c84570bc2f6fa47a3ba948e"
+dependencies = [
+ "lifetime_proc_macros",
+]
+
+[[package]]
+name = "lifetime_proc_macros"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb3008bffdf1aaae933e04c9019963a422d495bd0e3913db40eb7078883df30a"
+dependencies = [
+ "lifetime_proc_macros_impl",
+ "syn 1.0.109",
+]
+
+[[package]]
+name = "lifetime_proc_macros_impl"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1d9b75338d55f6248964c017967525a03d48d3f3092701c2ec3c027f3c60514b"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
 ]
 
 [[package]]

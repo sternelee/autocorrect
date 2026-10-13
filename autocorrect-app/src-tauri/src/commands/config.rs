@@ -42,6 +42,10 @@ pub struct AppSettings {
     pub autostart_enabled: bool,
     #[serde(default = "default_typo_checking")]
     pub typo_checking_enabled: bool,
+    #[serde(default = "default_grammar_engine_enabled")]
+    pub grammar_engine_enabled: bool,
+    #[serde(default = "default_languagetool_endpoint")]
+    pub languagetool_endpoint: String,
     #[serde(default)]
     pub ai_grammar_enabled: bool,
     #[cfg_attr(target_os = "macos", serde(default, skip_serializing))]
@@ -89,6 +93,8 @@ impl Default for AppSettings {
         Self {
             autostart_enabled: default_autostart_enabled(),
             typo_checking_enabled: default_typo_checking(),
+            grammar_engine_enabled: default_grammar_engine_enabled(),
+            languagetool_endpoint: default_languagetool_endpoint(),
             ai_grammar_enabled: false,
             openai_api_key: String::new(),
             openai_model: default_openai_model(),
@@ -117,6 +123,14 @@ fn default_autostart_enabled() -> bool {
 
 fn default_typo_checking() -> bool {
     true
+}
+
+fn default_grammar_engine_enabled() -> bool {
+    true
+}
+
+fn default_languagetool_endpoint() -> String {
+    "http://127.0.0.1:8081".to_string()
 }
 
 fn default_openai_model() -> String {
@@ -203,6 +217,10 @@ pub struct AppConfig {
     pub config_path: String,
     /// Enable/disable typo checking
     pub typo_checking_enabled: bool,
+    /// Enable/disable the LanguageTool grammar engine
+    pub grammar_engine_enabled: bool,
+    /// Base URL of the LanguageTool server (local by default)
+    pub languagetool_endpoint: String,
     /// Enable/disable AI grammar check
     pub ai_grammar_enabled: bool,
     /// OpenAI API key
@@ -265,6 +283,10 @@ pub struct ConfigUpdates {
     pub spellcheck_words: Option<Vec<String>>,
     /// Enable/disable typo checking
     pub typo_checking_enabled: Option<bool>,
+    /// Enable/disable the LanguageTool grammar engine
+    pub grammar_engine_enabled: Option<bool>,
+    /// Base URL of the LanguageTool server
+    pub languagetool_endpoint: Option<String>,
     /// Enable/disable AI grammar check
     pub ai_grammar_enabled: Option<bool>,
     /// OpenAI API key
@@ -355,6 +377,8 @@ pub fn get_config(app: tauri::AppHandle) -> Result<AppConfig, Error> {
         context,
         config_path: config_path.to_string_lossy().to_string(),
         typo_checking_enabled: app_settings.typo_checking_enabled,
+        grammar_engine_enabled: app_settings.grammar_engine_enabled,
+        languagetool_endpoint: app_settings.languagetool_endpoint,
         ai_grammar_enabled: app_settings.ai_grammar_enabled,
         openai_api_key: app_settings.openai_api_key,
         openai_model: app_settings.openai_model,
@@ -494,6 +518,16 @@ pub fn update_config(app: tauri::AppHandle, updates: ConfigUpdates) -> Result<()
 
     if let Some(typo_enabled) = updates.typo_checking_enabled {
         app_settings.typo_checking_enabled = typo_enabled;
+        app_settings_changed = true;
+    }
+
+    if let Some(grammar_enabled) = updates.grammar_engine_enabled {
+        app_settings.grammar_engine_enabled = grammar_enabled;
+        app_settings_changed = true;
+    }
+
+    if let Some(endpoint) = updates.languagetool_endpoint {
+        app_settings.languagetool_endpoint = endpoint.trim().trim_end_matches('/').to_string();
         app_settings_changed = true;
     }
 
